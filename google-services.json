@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "1048785476289",
+    "firebase_url": "https://authenticator-15fb7-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "authenticator-15fb7",
+    "storage_bucket": "authenticator-15fb7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1048785476289:android:98f51c86d70589b350d240",
+        "android_client_info": {
+          "package_name": "com.digitalpapyrus.authenticator"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDyH4CtNwtW10ZUkoxWBa-LWsCifVueDKU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

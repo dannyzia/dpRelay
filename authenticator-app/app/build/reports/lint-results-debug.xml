@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.1.0">
+
+    <issue
+        id="UnspecifiedRegisterReceiverFlag"
+        severity="Warning"
+        message="`sentBroadcastReceiver` \&#xA;is missing `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` flag for unprotected \&#xA;broadcasts registered for com.digitalpapyrus.authenticator.SMS_SENT"
+        category="Security"
+        priority="5"
+        summary="Missing `registerReceiver()` exported flag"
+        explanation="A future platform release will require all receivers registering for non-system broadcasts to include a flag indicating the receiver&apos;s exported state. Apps registering for non-system broadcasts should use the `ContextCompat#registerReceiver` APIs with flags set to either `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED`.&#xA;&#xA;If you are not expecting broadcasts from other apps on the device, register your receiver with `RECEIVER_NOT_EXPORTED` to protect your receiver on all platform releases."
+        url="https://developer.android.com/reference/androidx/core/content/ContextCompat#registerReceiver(android.content.Context,android.content.BroadcastReceiver,android.content.IntentFilter,int)"
+        urls="https://developer.android.com/reference/androidx/core/content/ContextCompat#registerReceiver(android.content.Context,android.content.BroadcastReceiver,android.content.IntentFilter,int)"
+        errorLine1="        context.registerReceiver(sentBroadcastReceiver, IntentFilter(ACTION_SMS_SENT))"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/home/zia/Documents/My Projects/Authenticator/authenticator-app/app/src/main/java/com/digitalpapyrus/authenticator/PendingSmsListener.kt"
+            line="102"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="UnspecifiedRegisterReceiverFlag"
+        severity="Warning"
+        message="`deliveredBroadcastReceiver` \&#xA;is missing `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` flag for unprotected \&#xA;broadcasts registered for com.digitalpapyrus.authenticator.SMS_DELIVERED"
+        category="Security"
+        priority="5"
+        summary="Missing `registerReceiver()` exported flag"
+        explanation="A future platform release will require all receivers registering for non-system broadcasts to include a flag indicating the receiver&apos;s exported state. Apps registering for non-system broadcasts should use the `ContextCompat#registerReceiver` APIs with flags set to either `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED`.&#xA;&#xA;If you are not expecting broadcasts from other apps on the device, register your receiver with `RECEIVER_NOT_EXPORTED` to protect your receiver on all platform releases."
+        url="https://developer.android.com/reference/androidx/core/content/ContextCompat#registerReceiver(android.content.Context,android.content.BroadcastReceiver,android.content.IntentFilter,int)"
+        urls="https://developer.android.com/reference/androidx/core/content/ContextCompat#registerReceiver(android.content.Context,android.content.BroadcastReceiver,android.content.IntentFilter,int)"
+        errorLine1="        context.registerReceiver(deliveredBroadcastReceiver, IntentFilter(ACTION_SMS_DELIVERED))"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/home/zia/Documents/My Projects/Authenticator/authenticator-app/app/src/main/java/com/digitalpapyrus/authenticator/PendingSmsListener.kt"
+            line="103"
+            column="9"/>
+    </issue>
+
+</issues>

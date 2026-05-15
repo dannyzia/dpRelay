@@ -1,0 +1,59 @@
+name: Production Deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger option
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Test Coverage
+        working-directory: authenticator-app
+        run: |
+          COVERAGE=$(./gradlew jacocoTestReport | grep -oP 'Total.*?\K[0-9]+' | head -1)
+          if [ "$COVERAGE" -lt 80 ]; then
+            echo "Coverage $COVERAGE% is below 80% threshold"
+            exit 1
+          fi
+      - name: Check Secrets Not in Code
+        run: |
+          if git log --all --full-history -- '*.kt' '*.js' | grep -i "shared.*secret\|password"; then
+            echo "Potential secret found in git history!"
+            exit 1
+          fi
+
+  deploy-functions:
+    needs: quality-gates
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+      - name: Deploy to Production
+        working-directory: functions
+        run: firebase deploy --only functions --project authenticator-15fb7
+        env:
+          VERIFICATION_SIGNING_SECRET: ${{ secrets.VERIFICATION_SIGNING_SECRET }}
+          AUTHENTICATOR_ENROLLMENT_SECRET: ${{ secrets.AUTHENTICATOR_ENROLLMENT_SECRET }}
+          HEALTH_ADMIN_SECRET: ${{ secrets.HEALTH_ADMIN_SECRET }}
+          ACTIVE_DEDICATED_NUMBER: ${{ secrets.ACTIVE_DEDICATED_NUMBER }}
+      - name: Deploy RTDB Rules
+        working-directory: functions
+        run: firebase deploy --only database --project authenticator-15fb7
+      - name: Verify Deploy
+        run: |
+          sleep 30
+          curl -H "Authorization: Bearer ${{ secrets.PRODUCTION_SECRET }}" \
+            https://asia-southeast1-authenticator-15fb7.cloudfunctions.net/health
+      - name: Notify Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Production deploy ${{ job.status }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

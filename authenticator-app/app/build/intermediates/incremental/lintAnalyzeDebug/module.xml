@@ -1,0 +1,19 @@
+<lint-module
+    format="1"
+    dir="/home/zia/Documents/My Projects/Authenticator/authenticator-app/app"
+    name=":app"
+    type="APP"
+    maven="Authenticator:app:"
+    agpVersion="8.1.0"
+    buildFolder="build"
+    bootClassPath="/home/zia/android-sdk/platforms/android-34/android.jar:/home/zia/android-sdk/build-tools/33.0.1/core-lambda-stubs.jar"
+    javaSourceLevel="17"
+    compileTarget="android-34"
+    neverShrinking="true">
+  <lintOptions
+      abortOnError="true"
+      absolutePaths="true"
+      checkReleaseBuilds="true"
+      explainIssues="true"/>
+  <variant name="debug"/>
+</lint-module>

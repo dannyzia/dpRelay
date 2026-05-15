@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launcher icon background (required by manifest) -->
+    <color name="ic_launcher_background">#3DDC84</color>
+    
+    <!-- Basic colors used by Android system -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

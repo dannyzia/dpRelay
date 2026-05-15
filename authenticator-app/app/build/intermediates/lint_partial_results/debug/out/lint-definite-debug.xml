@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<incidents format="6" by="lint 8.1.0" type="incidents">
+
+    <incident
+        id="UnspecifiedRegisterReceiverFlag"
+        severity="warning"
+        message="`sentBroadcastReceiver` \&#xA;is missing `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` flag for unprotected \&#xA;broadcasts registered for com.digitalpapyrus.authenticator.SMS_SENT">
+        <location
+            file="${:app*debug*sourceProvider*0*javaDir*0}/com/digitalpapyrus/authenticator/PendingSmsListener.kt"
+            line="102"
+            column="9"
+            startOffset="4244"
+            endLine="102"
+            endColumn="87"
+            endOffset="4322"/>
+    </incident>
+
+    <incident
+        id="UnspecifiedRegisterReceiverFlag"
+        severity="warning"
+        message="`deliveredBroadcastReceiver` \&#xA;is missing `RECEIVER_EXPORTED` or `RECEIVER_NOT_EXPORTED` flag for unprotected \&#xA;broadcasts registered for com.digitalpapyrus.authenticator.SMS_DELIVERED">
+        <location
+            file="${:app*debug*sourceProvider*0*javaDir*0}/com/digitalpapyrus/authenticator/PendingSmsListener.kt"
+            line="103"
+            column="9"
+            startOffset="4331"
+            endLine="103"
+            endColumn="97"
+            endOffset="4419"/>
+    </incident>
+
+</incidents>

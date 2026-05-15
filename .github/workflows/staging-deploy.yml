@@ -1,0 +1,32 @@
+name: Staging Deploy
+on:
+  push:
+    branches: [develop]
+
+jobs:
+  deploy-functions:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+      - name: Deploy to Staging
+        working-directory: functions
+        run: firebase deploy --only functions --project authenticator-15fb7
+        env:
+          VERIFICATION_SIGNING_SECRET: ${{ secrets.VERIFICATION_SIGNING_SECRET }}
+          AUTHENTICATOR_ENROLLMENT_SECRET: ${{ secrets.AUTHENTICATOR_ENROLLMENT_SECRET }}
+          HEALTH_ADMIN_SECRET: ${{ secrets.HEALTH_ADMIN_SECRET }}
+          ACTIVE_DEDICATED_NUMBER: ${{ secrets.ACTIVE_DEDICATED_NUMBER }}
+      - name: Deploy RTDB Rules
+        working-directory: functions
+        run: firebase deploy --only database --project authenticator-15fb7
+      - name: Verify Deploy
+        run: |
+          sleep 30
+          curl -H "Authorization: Bearer ${{ secrets.STAGING_SECRET }}" \
+            https://asia-southeast1-authenticator-15fb7.cloudfunctions.net/health

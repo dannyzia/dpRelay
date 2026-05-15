@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.digitalpapyrus.authenticator.SmsReceiverTest" tests="20" skipped="0" failures="0" errors="0" timestamp="2026-05-15T03:39:42" hostname="zia-ChromeBox" time="0.151">
+  <properties/>
+  <testcase name="normalizeToE164 handles 12-digit country code format" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.143"/>
+  <testcase name="normalizeToE164 returns as-is for unrecognizable format" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 returns unchanged for E164 format with plus" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.001"/>
+  <testcase name="normalizeToE164 handles empty string" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles 015 prefix" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.001"/>
+  <testcase name="normalizeToE164 uses custom country code when provided" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 adds plus to country code format" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.001"/>
+  <testcase name="normalizeToE164 handles 013 prefix" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles whitespace in input" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles 018 prefix" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.001"/>
+  <testcase name="normalizeToE164 adds country code to local format" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles 11-digit local format" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles 016 prefix" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles 13-digit E164 format" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles 014 prefix" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles 019 prefix" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.001"/>
+  <testcase name="normalizeToE164 preserves original for malformed numbers" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 handles hyphen in input" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.001"/>
+  <testcase name="normalizeToE164 returns as-is for international format without plus" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.0"/>
+  <testcase name="normalizeToE164 is case-sensitive for country code" classname="com.digitalpapyrus.authenticator.SmsReceiverTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[java.lang.instrument.IllegalClassFormatException: Error while instrumenting com/digitalpapyrus/authenticator/SmsReceiver with JaCoCo 0.8.8.202204050719/5dcf34a.
+	at org.jacoco.agent.rt.internal_b6258fc.CoverageTransformer.transform(CoverageTransformer.java:94)
+	at java.instrument/java.lang.instrument.ClassFileTransformer.transform(ClassFileTransformer.java:244)
+	at java.instrument/sun.instrument.TransformerManager.transform(TransformerManager.java:188)
+	at java.instrument/sun.instrument.InstrumentationImpl.transform(InstrumentationImpl.java:541)
+	at java.base/java.lang.ClassLoader.defineClass1(Native Method)
+	at java.base/java.lang.ClassLoader.defineClass(ClassLoader.java:1017)
+	at java.base/java.security.SecureClassLoader.defineClass(SecureClassLoader.java:150)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.defineClass(BuiltinClassLoader.java:862)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.findClassOnClassPathOrNull(BuiltinClassLoader.java:760)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.loadClassOrNull(BuiltinClassLoader.java:681)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.loadClass(BuiltinClassLoader.java:639)
+	at java.base/jdk.internal.loader.ClassLoaders$AppClassLoader.loadClass(ClassLoaders.java:188)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:525)
+	at java.base/java.lang.Class.getDeclaredFields0(Native Method)
+	at java.base/java.lang.Class.privateGetDeclaredFields(Class.java:3299)
+	at java.base/java.lang.Class.getDeclaredFields(Class.java:2373)
+	at org.junit.runners.model.TestClass.getSortedDeclaredFields(TestClass.java:77)
+	at org.junit.runners.model.TestClass.scanAnnotatedMembers(TestClass.java:70)
+	at org.junit.runners.model.TestClass.<init>(TestClass.java:57)
+	at org.junit.runners.JUnit4.<init>(JUnit4.java:23)
+	at org.junit.internal.builders.JUnit4Builder.runnerForClass(JUnit4Builder.java:10)
+	at org.junit.runners.model.RunnerBuilder.safeRunnerForClass(RunnerBuilder.java:70)
+	at org.junit.internal.builders.AllDefaultPossibilitiesBuilder.runnerForClass(AllDefaultPossibilitiesBuilder.java:37)
+	at org.junit.runners.model.RunnerBuilder.safeRunnerForClass(RunnerBuilder.java:70)
+	at org.junit.internal.requests.ClassRequest.createRunner(ClassRequest.java:28)
+	at org.junit.internal.requests.MemoizingRequest.getRunner(MemoizingRequest.java:19)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runTestClass(JUnitTestClassExecutor.java:77)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:58)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:40)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:60)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:52)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:36)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:24)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:94)
+	at jdk.proxy2/jdk.proxy2.$Proxy5.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:176)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:129)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:100)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:60)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:113)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:65)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+Caused by: java.io.IOException: Error while instrumenting com/digitalpapyrus/authenticator/SmsReceiver with JaCoCo 0.8.8.202204050719/5dcf34a.
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrumentError(Instrumenter.java:161)
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrument(Instrumenter.java:111)
+	at org.jacoco.agent.rt.internal_b6258fc.CoverageTransformer.transform(CoverageTransformer.java:92)
+	... 48 more
+Caused by: java.lang.IllegalStateException: Cannot process instrumented class com/digitalpapyrus/authenticator/SmsReceiver. Please supply original non-instrumented classes.
+	at org.jacoco.agent.rt.internal_b6258fc.core.internal.instr.InstrSupport.assertNotInstrumented(InstrSupport.java:238)
+	at org.jacoco.agent.rt.internal_b6258fc.core.internal.instr.ClassInstrumenter.visitMethod(ClassInstrumenter.java:65)
+	at org.jacoco.agent.rt.internal_b6258fc.core.internal.flow.ClassProbesAdapter.visitMethod(ClassProbesAdapter.java:66)
+	at org.jacoco.agent.rt.internal_b6258fc.asm.ClassReader.readMethod(ClassReader.java:1353)
+	at org.jacoco.agent.rt.internal_b6258fc.asm.ClassReader.accept(ClassReader.java:744)
+	at org.jacoco.agent.rt.internal_b6258fc.asm.ClassReader.accept(ClassReader.java:424)
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrument(Instrumenter.java:91)
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrument(Instrumenter.java:109)
+	... 49 more
+java.lang.instrument.IllegalClassFormatException: Error while instrumenting com/digitalpapyrus/authenticator/SmsReceiver$Companion with JaCoCo 0.8.8.202204050719/5dcf34a.
+	at org.jacoco.agent.rt.internal_b6258fc.CoverageTransformer.transform(CoverageTransformer.java:94)
+	at java.instrument/java.lang.instrument.ClassFileTransformer.transform(ClassFileTransformer.java:244)
+	at java.instrument/sun.instrument.TransformerManager.transform(TransformerManager.java:188)
+	at java.instrument/sun.instrument.InstrumentationImpl.transform(InstrumentationImpl.java:541)
+	at java.base/java.lang.ClassLoader.defineClass1(Native Method)
+	at java.base/java.lang.ClassLoader.defineClass(ClassLoader.java:1017)
+	at java.base/java.security.SecureClassLoader.defineClass(SecureClassLoader.java:150)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.defineClass(BuiltinClassLoader.java:862)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.findClassOnClassPathOrNull(BuiltinClassLoader.java:760)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.loadClassOrNull(BuiltinClassLoader.java:681)
+	at java.base/jdk.internal.loader.BuiltinClassLoader.loadClass(BuiltinClassLoader.java:639)
+	at java.base/jdk.internal.loader.ClassLoaders$AppClassLoader.loadClass(ClassLoaders.java:188)
+	at java.base/java.lang.ClassLoader.loadClass(ClassLoader.java:525)
+	at com.digitalpapyrus.authenticator.SmsReceiver.<clinit>(SmsReceiver.kt)
+	at com.digitalpapyrus.authenticator.SmsReceiverTest.<init>(SmsReceiverTest.kt:17)
+	at java.base/jdk.internal.reflect.NativeConstructorAccessorImpl.newInstance0(Native Method)
+	at java.base/jdk.internal.reflect.NativeConstructorAccessorImpl.newInstance(NativeConstructorAccessorImpl.java:77)
+	at java.base/jdk.internal.reflect.DelegatingConstructorAccessorImpl.newInstance(DelegatingConstructorAccessorImpl.java:45)
+	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Constructor.java:500)
+	at java.base/java.lang.reflect.Constructor.newInstance(Constructor.java:481)
+	at org.junit.runners.BlockJUnit4ClassRunner.createTest(BlockJUnit4ClassRunner.java:250)
+	at org.junit.runners.BlockJUnit4ClassRunner.createTest(BlockJUnit4ClassRunner.java:260)
+	at org.junit.runners.BlockJUnit4ClassRunner$2.runReflectiveCall(BlockJUnit4ClassRunner.java:309)
+	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+	at org.junit.runners.BlockJUnit4ClassRunner.methodBlock(BlockJUnit4ClassRunner.java:306)
+	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.runTestClass(JUnitTestClassExecutor.java:108)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:58)
+	at org.gradle.api.internal.tasks.testing.junit.JUnitTestClassExecutor.execute(JUnitTestClassExecutor.java:40)
+	at org.gradle.api.internal.tasks.testing.junit.AbstractJUnitTestClassProcessor.processTestClass(AbstractJUnitTestClassProcessor.java:60)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.processTestClass(SuiteTestClassProcessor.java:52)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:569)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:36)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:24)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:94)
+	at jdk.proxy2/jdk.proxy2.$Proxy5.processTestClass(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$2.run(TestWorker.java:176)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:129)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:100)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:60)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:113)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:65)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+Caused by: java.io.IOException: Error while instrumenting com/digitalpapyrus/authenticator/SmsReceiver$Companion with JaCoCo 0.8.8.202204050719/5dcf34a.
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrumentError(Instrumenter.java:161)
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrument(Instrumenter.java:111)
+	at org.jacoco.agent.rt.internal_b6258fc.CoverageTransformer.transform(CoverageTransformer.java:92)
+	... 58 more
+Caused by: java.lang.IllegalStateException: Cannot process instrumented class com/digitalpapyrus/authenticator/SmsReceiver$Companion. Please supply original non-instrumented classes.
+	at org.jacoco.agent.rt.internal_b6258fc.core.internal.instr.InstrSupport.assertNotInstrumented(InstrSupport.java:238)
+	at org.jacoco.agent.rt.internal_b6258fc.core.internal.instr.ClassInstrumenter.visitMethod(ClassInstrumenter.java:65)
+	at org.jacoco.agent.rt.internal_b6258fc.core.internal.flow.ClassProbesAdapter.visitMethod(ClassProbesAdapter.java:66)
+	at org.jacoco.agent.rt.internal_b6258fc.asm.ClassReader.readMethod(ClassReader.java:1353)
+	at org.jacoco.agent.rt.internal_b6258fc.asm.ClassReader.accept(ClassReader.java:744)
+	at org.jacoco.agent.rt.internal_b6258fc.asm.ClassReader.accept(ClassReader.java:424)
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrument(Instrumenter.java:91)
+	at org.jacoco.agent.rt.internal_b6258fc.core.instr.Instrumenter.instrument(Instrumenter.java:109)
+	... 59 more
+]]></system-err>
+</testsuite>

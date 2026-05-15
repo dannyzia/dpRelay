@@ -1,0 +1,57 @@
+{
+  "rules": {
+    "verification_requests": {
+      "$sessionCode": {
+        ".read": "auth != null && auth.token.role == 'authenticator'",
+        ".write": "auth != null && auth.token.role == 'authenticator'",
+        ".validate": "newData.hasChildren(['userPhone', 'createdAt', 'expiresAt', 'challengeToken'])",
+        "userPhone": {
+          ".validate": "newData.isString() && newData.val().matches(/^\\+[1-9]\\d{1,14}$/)"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "expiresAt": {
+          ".validate": "newData.isNumber() && newData.val() > now"
+        },
+        "challengeToken": {
+          ".validate": "newData.isString() && newData.val().length >= 10"
+        },
+        "receipt": {
+          ".write": "auth != null && auth.token.role == 'authenticator'",
+          ".validate": "newData.hasChildren(['receivedAt', 'sender', 'challengeToken'])",
+          "receivedAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "sender": {
+            ".validate": "newData.isString()"
+          },
+          "challengeToken": {
+            ".validate": "newData.isString() && newData.val().length >= 10"
+          },
+          "device": {
+            ".validate": "newData.isString()"
+          }
+        }
+      },
+      ".indexOn": ["createdAt"]
+    },
+    "health": {
+      "$androidId": {
+        ".read": "auth != null && auth.token.role == 'authenticator'",
+        ".write": "auth != null && auth.token.role == 'authenticator'",
+        ".validate": "newData.hasChildren(['lastPing', 'battery', 'device'])",
+        "lastPing": {
+          ".validate": "newData.isNumber()"
+        },
+        "battery": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+        },
+        "device": {
+          ".validate": "newData.isString()"
+        }
+      },
+      ".indexOn": ["lastPing"]
+    }
+  }
+}

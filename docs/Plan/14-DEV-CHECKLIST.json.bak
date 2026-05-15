@@ -1,0 +1,144 @@
+{
+  "task_id": "14-DEV-CHECKLIST",
+  "priority": "high",
+  "dependencies": [
+    "01-PRD.md",
+    "05-DATA-MODEL.md",
+    "06-API.md",
+    "07-USER-FLOWS.md",
+    "08-UI-SPEC.md",
+    "09-UX-SPEC.md"
+  ],
+  "objective": "Verify every requirement, cryptographic implementation, Android service, Cloud Function, and test is complete before a verification feature is considered done.",
+  "inputs": [
+    "01-PRD.md — requirements read, acceptance criteria understood",
+    "05-DATA-MODEL.md — Firebase RTDB schema confirmed",
+    "06-API.md — Cloud Function contract verified",
+    "07-USER-FLOWS.md — verification flow and error states reviewed",
+    "08-UI-SPEC.md — authenticator and client screens reviewed",
+    "09-UX-SPEC.md — UX rules reviewed"
+  ],
+  "constraints": [
+    "SHARED_SECRET must be identical across authenticator app, client app, and Cloud Function",
+    "AuthCrypto.kt must be byte-identical between authenticator and client app",
+    "HMAC comparison must use constant-time algorithm (no === for secrets)",
+    "Cloud Function must accept POST only — never return secrets in URL",
+    "RTDB writes must use sessionCode as key — never push()",
+    "All SMS without AUTH: prefix must be silently ignored — never logged",
+    "No SMS body text stored in database — only timestamp, sender, sig, device"
+  ],
+  "deliverables": [
+    {
+      "category": "cryptography",
+      "items": [
+        "AuthCrypto.kt implemented with HMAC-SHA256 generation",
+        "AuthCrypto.kt has constant-time comparison (no === for signatures)",
+        "AuthCrypto.kt is byte-identical in authenticator and client apps",
+        "Cloud Function uses crypto.timingSafeEqual() for HMAC comparison",
+        "SecureRandom used for session code generation (not UUID)",
+        "Clock skew tolerance is 120 seconds (2 minutes) in all three apps"
+      ]
+    },
+    {
+      "category": "android_service",
+      "items": [
+        "Foreground service with remoteMessaging type implemented",
+        "FOREGROUND_SERVICE_REMOTE_MESSAGING permission in manifest",
+        "SCHEDULE_EXACT_ALARM and USE_EXACT_ALARM permissions in manifest",
+        "WAKE_LOCK permission in manifest",
+        "Exact alarm keep-alive (5 min) implemented in AlarmKeepAlive.kt",
+        "WorkManager keep-alive (15 min) implemented in ServiceKeepAliveWorker.kt",
+        "FCM service (AuthFcmService.kt) reports health to RTDB",
+        "Boot receiver restarts service on BOOT_COMPLETED",
+        "Firebase anonymous auth with retry on failure",
+        "Battery optimization dialog with explanation",
+        "Auto-start button for Chinese ROMs"
+      ]
+    },
+    {
+      "category": "cloud_functions",
+      "items": [
+        "checkAuth validates HMAC before any DB read",
+        "checkAuth uses POST only (405 on GET)",
+        "checkAuth rate-limits by IP (30/min)",
+        "checkAuth performs O(1) lookup by sessionCode key",
+        "checkAuth verifies signature chain (DB sig matches computed)",
+        "checkAuth checks sender == userPhone",
+        "checkAuth atomically deletes entry on success",
+        "health endpoint returns device liveness and queue depth",
+        "cleanupOldMessages scheduled every 24 hours",
+        "AUTH_SHARED_SECRET loaded from Firebase Secrets Manager",
+        "config.js centralizes all constants"
+      ]
+    },
+    {
+      "category": "client_integration",
+      "items": [
+        "PhoneAuthHelper uses POST with JSON body",
+        "PhoneAuthHelper uses HttpsURLConnection (not HttpURLConnection)",
+        "PhoneAuthHelper handles SecurityException, NullPointerException on SMS send",
+        "Manual code entry fallback offered on SMS failure",
+        "Specific error handling for 429, 403, 400 responses",
+        "Polling interval 2s, timeout 30s"
+      ]
+    },
+    {
+      "category": "firebase_rules",
+      "items": [
+        "RTDB rules require auth != null",
+        "RTDB rules validate hasChildren(['timestamp', 'sender', 'sig'])",
+        "RTDB rules have .indexOn: ['timestamp']",
+        "RTDB rules have $other: false (no extra fields)",
+        "Anonymous auth enabled in Firebase Console"
+      ]
+    },
+    {
+      "category": "tests",
+      "items": [
+        "Unit test: valid HMAC accepted by authenticator",
+        "Unit test: invalid HMAC rejected by authenticator",
+        "Unit test: non-AUTH prefix SMS ignored",
+        "Unit test: clock skew > 2 min rejected",
+        "Unit test: Cloud Function rate limiting works",
+        "Unit test: signature chain mismatch returns 500",
+        "Integration test: full verification flow end-to-end",
+        "Integration test: manual fallback flow"
+      ]
+    },
+    {
+      "category": "documentation",
+      "items": [
+        "11-ENV-VARS.md lists all config values",
+        "12-FOLDER-STRUCTURE.md matches actual project layout",
+        "03-Firebase-Setup.md rules match deployed rules",
+        "06-API.md matches actual Cloud Function responses"
+      ]
+    }
+  ],
+  "definition_of_done": [
+    "Linter passes with zero warnings",
+    "Kotlin compiler passes with zero errors",
+    "All tests pass",
+    "SHARED_SECRET consistent across all three apps",
+    "AuthCrypto.kt identical in authenticator and client",
+    "Health endpoint returns healthy after deployment"
+  ],
+  "validation_steps": [
+    "Run Android Lint: ./gradlew lint",
+    "Run ktlint: ./gradlew ktlintCheck",
+    "Run all tests: ./gradlew test",
+    "Deploy functions and verify: firebase deploy --only functions",
+    "Check health endpoint: curl -H 'Authorization: Bearer SECRET' /health",
+    "Send test SMS and verify rejection (invalid HMAC)",
+    "Run full verification from client app"
+  ],
+  "failure_conditions": [
+    "SHARED_SECRET mismatch between apps",
+    "HMAC comparison uses === instead of constant-time",
+    "Cloud Function accepts GET requests",
+    "SMS body stored in database",
+    "Authenticator logs personal (non-AUTH) SMS",
+    "Rate limiting not implemented",
+    "Atomic delete not implemented (replay possible)"
+  ]
+}

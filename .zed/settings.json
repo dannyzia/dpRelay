@@ -1,0 +1,9 @@
+{
+  "assistant": {
+    "version": "2",
+    "default_model": {
+      "provider": "openrouter",
+      "model": "UNKNOWN"
+    }
+  }
+}

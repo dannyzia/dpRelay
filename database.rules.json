@@ -1,0 +1,148 @@
+{
+  "rules": {
+    "verification_requests": {
+      "$sessionCode": {
+        ".read": "auth != null && auth.token.role == 'authenticator'",
+        ".write": "auth != null && auth.token.role == 'authenticator'",
+        ".validate": "newData.hasChildren(['userPhone', 'createdAt', 'expiresAt', 'challengeToken'])",
+        "userPhone": {
+          ".validate": "newData.isString() && newData.val().matches(/^\\+[1-9]\\d{1,14}$/)"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "expiresAt": {
+          ".validate": "newData.isNumber() && newData.val() > now"
+        },
+        "challengeToken": {
+          ".validate": "newData.isString() && newData.val().length >= 10"
+        },
+        "receipt": {
+          ".write": "auth != null && auth.token.role == 'authenticator'",
+          ".validate": "newData.hasChildren(['receivedAt', 'sender', 'challengeToken'])",
+          "receivedAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "sender": {
+            ".validate": "newData.isString()"
+          },
+          "challengeToken": {
+            ".validate": "newData.isString() && newData.val().length >= 10"
+          },
+          "device": {
+            ".validate": "newData.isString()"
+          }
+        }
+      },
+      ".indexOn": ["createdAt"]
+    },
+    "health": {
+      "$androidId": {
+        ".read": "auth != null && auth.token.role == 'authenticator'",
+        ".write": "auth != null && auth.token.role == 'authenticator'",
+        ".validate": "newData.hasChildren(['lastPing', 'device', 'battery'])",
+        "lastPing": {
+          ".validate": "newData.isNumber()"
+        },
+        "device": {
+          ".validate": "newData.isString()"
+        },
+        "battery": {
+          ".validate": "newData.isNumber()"
+        }
+      },
+      ".indexOn": ["lastPing"]
+    },
+    "registered_apps": {
+      "$appId": {
+        ".read": "auth != null && auth.token.role == 'authenticator'",
+        ".write": false,
+        ".validate": "newData.hasChildren(['name', 'apiKeyHash', 'active', 'createdAt'])",
+        "name": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "apiKeyHash": {
+          ".validate": "newData.isString() && newData.val().length >= 32"
+        },
+        "smsTemplate": {
+          ".validate": "!newData.exists() || (newData.isString() && newData.val().length > 0)"
+        },
+        "rateLimit": {
+          ".validate": "!newData.exists() || (newData.hasChildren(['maxPerPhone', 'windowMs']) && newData.child('maxPerPhone').isNumber() && newData.child('windowMs').isNumber())"
+        },
+        "active": {
+          ".validate": "newData.isBoolean()"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        }
+      },
+      ".indexOn": ["createdAt"]
+    },
+    "pending_sms": {
+      "$sessionId": {
+        ".read": "auth != null && auth.token.role == 'authenticator'",
+        ".write": false,
+        ".validate": "newData.hasChildren(['appId', 'to', 'message', 'status', 'createdAt'])",
+        "appId": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "to": {
+          ".validate": "newData.isString() && newData.val().matches(/^\\+[1-9]\\d{1,14}$/)"
+        },
+        "message": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "status": {
+          ".validate": "newData.isString() && (newData.val() === 'pending' || newData.val() === 'sent')"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "error": {
+          ".write": "auth != null && auth.token.role == 'authenticator'",
+          ".validate": "newData.hasChildren(['error', 'errorCode', 'failedAt'])",
+          "error": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "errorCode": {
+            ".validate": "newData.isNumber()"
+          },
+          "failedAt": {
+            ".validate": "newData.isNumber()"
+          }
+        }
+      },
+      ".indexOn": ["createdAt"]
+    },
+    "otp_requests": {
+      "$sessionId": {
+        ".read": false,
+        ".write": false,
+        ".validate": "newData.hasChildren(['appId', 'phoneNumber', 'hashedOtp', 'createdAt', 'expiresAt', 'attempts', 'locked'])",
+        "appId": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "phoneNumber": {
+          ".validate": "newData.isString() && newData.val().matches(/^\\+[1-9]\\d{1,14}$/)"
+        },
+        "hashedOtp": {
+          ".validate": "newData.isString() && newData.val().length >= 32"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber()"
+        },
+        "expiresAt": {
+          ".validate": "newData.isNumber() && newData.val() > now"
+        },
+        "attempts": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        "locked": {
+          ".validate": "newData.isBoolean()"
+        }
+      },
+      ".indexOn": ["createdAt", "expiresAt"]
+    }
+  }
+}

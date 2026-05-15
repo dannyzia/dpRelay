@@ -1,0 +1,1061 @@
+# Development Checklist - canonical machine-readable source for AI agents.
+# Format: YAML 1.2
+# Companion file: docs/Plan/14-DEV-CHECKLIST.md (human-readable review copy)
+# AI Instructions:
+# - Parse this file at the start of implementation sessions.
+# - Use it as the checklist source of truth for task sequencing, blocking rules, and failure conditions.
+# - Track completion state in your agent or session tooling when supported.
+# - Prefer the markdown file only for human review, walkthroughs, and code review.
+
+version: "1.2"
+project: Authenticator
+total_phases: 13
+critical_path:
+  - phase: 1
+    must_complete_before: [2, 3]
+  - phase: 2
+    must_complete_before: [4]
+  - phase: 3
+    must_complete_before: [5, 6]
+  - phase: 9
+    must_complete_before: [10]
+  - phase: 10
+    must_complete_before: [11, 12]
+  - phase: 11
+    must_complete_before: [8]
+  - phase: 12
+    must_complete_before: [8]
+  - phase: 13
+    must_complete_before: [8]
+
+phases:
+  - id: 1
+    name: "Cryptography & Security"
+    blocking: true # Cannot skip to next phase if incomplete
+    items:
+      - id: C1
+        task: "Implement AuthCrypto.kt with HMAC-SHA256"
+        files_to_create: ["app/src/main/java/.../AuthCrypto.kt"]
+        test_files: ["app/src/test/java/.../AuthCryptoTest.kt"]
+        verification:
+          - type: file_exists
+            path: "app/src/main/java/.../AuthCrypto.kt"
+          - type: test_coverage
+            target: 100%
+          - type: unit_test_passes
+            test: "generateHmac produces consistent signature"
+        depends_on: []
+        priority: critical
+
+      - id: C2
+        task: "Implement constant-time comparison"
+        files_to_modify: ["app/src/main/java/.../AuthCrypto.kt"]
+        verification:
+          - type: code_review
+            pattern: "constantTimeEquals"
+            anti_pattern: "===.*signature|==.*sig"
+          - type: timing_test
+            max_variance_ms: 10
+        depends_on: [C1]
+        priority: critical
+
+      - id: C3
+        task: "Use SecureRandom for session codes (not UUID)"
+        files_to_modify: ["app/src/main/java/.../AuthCrypto.kt"]
+        verification:
+          - type: import_check
+            required: "java.security.SecureRandom"
+            forbidden: "java.util.UUID"
+          - type: regex_check
+            pattern: "SecureRandom|generateSessionCode"
+        depends_on: [C1]
+        priority: critical
+
+      - id: C4
+        task: "Set clock skew tolerance to 300 seconds"
+        files_to_modify:
+          - "app/src/main/java/.../AuthCrypto.kt"
+          - "functions/index.js"
+        verification:
+          - type: constant_check
+            value: 300000 # 300 seconds in ms
+            locations:
+              - kt: "CLOCK_SKEW_MS"
+              - js: "CLOCK_SKEW_MS"
+        depends_on: []
+        priority: critical
+
+      - id: C5
+        task: "Configure v4 verification secrets and client URL"
+        files_to_modify:
+          - "app/build.gradle"
+          - "functions/index.js"
+          - "client/PhoneAuthHelper.kt"
+        verification:
+          - type: secret_length_check
+            min_length: 32
+          - type: contains
+            pattern: "VERIFICATION_SIGNING_SECRET|AUTHENTICATOR_ENROLLMENT_SECRET|CF_URL"
+        depends_on: []
+        priority: critical
+        notes: "Use openssl rand -base64 32"
+
+  - id: 2
+    name: "Android Service Implementation"
+    blocking: true
+    items:
+      - id: S1
+        task: "Create foreground service AuthenticatorService.kt"
+        files_to_create: ["app/src/main/java/.../AuthenticatorService.kt"]
+        verification:
+          - type: file_exists
+          - type: contains
+            pattern: "ServiceCompat.startForeground"
+        depends_on: []
+        priority: critical
+
+      - id: S2
+        task: "Implement triple keep-alive (Alarm + WorkManager + FCM)"
+        files_to_create:
+          - "app/src/main/java/.../AlarmKeepAlive.kt"
+          - "app/src/main/java/.../ServiceKeepAliveWorker.kt"
+          - "app/src/main/java/.../AuthFcmService.kt"
+        verification:
+          - type: file_exists
+            all: true
+          - type: manifest_check
+            permissions:
+              - "SCHEDULE_EXACT_ALARM"
+              - "USE_EXACT_ALARM"
+              - "WAKE_LOCK"
+        depends_on: [S1]
+        priority: high
+
+      - id: S3
+        task: "Implement SMS receiver with AUTH: prefix filter"
+        files_to_create: ["app/src/main/java/.../SmsReceiver.kt"]
+        verification:
+          - type: contains
+            pattern: 'startsWith("AUTH:")|startsWith("auth:")'
+          - type: anti_pattern_check
+            forbidden: "Log.d.*messageBody|println.*sms"
+        depends_on: [S1, C1]
+        priority: critical
+
+      - id: S4
+        task: "Implement SmsReceiver.normalizeToE164() (ADR-015)"
+        files_to_modify: ["app/src/main/java/.../SmsReceiver.kt"]
+        verification:
+          - type: contains
+            pattern: "normalizeToE164"
+          - type: test_coverage
+            target: 100%
+            test_file: "app/src/test/java/.../SmsReceiverTest.kt"
+          - type: test_exists
+            names:
+              - "normalizeToE164 returns unchanged for +8801XXXXXXXXX"
+              - "normalizeToE164 prefixes + for 8801XXXXXXXXX"
+              - "normalizeToE164 prefixes +880 for 01XXXXXXXXX"
+              - "normalizeToE164 returns raw string for unrecognised format"
+        depends_on: [S3]
+        priority: critical
+
+      - id: S5
+        task: "Integrate Firebase Crashlytics in authenticator app"
+        files_to_modify:
+          - "app/build.gradle"
+          - "app/src/main/java/.../AuthenticatorService.kt"
+        verification:
+          - type: gradle_dependency
+            contains: "com.google.firebase:firebase-crashlytics"
+          - type: contains
+            pattern: "FirebaseCrashlytics.getInstance()"
+        depends_on: [S1]
+        priority: critical
+
+  - id: 3
+    name: "Cloud Functions Implementation"
+    blocking: true
+    items:
+      - id: F1
+        task: "Implement checkAuth function (POST only)"
+        files_to_create: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.checkAuth.*onRequest"
+          - type: contains
+            pattern: "req.method.*POST"
+          - type: contains
+            pattern: "timingSafeEqual"
+        depends_on: [C4]
+        priority: critical
+
+      - id: F2
+        task: "Implement health endpoint with authentication"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.health"
+          - type: contains
+            pattern: "Authorization.*Bearer"
+        depends_on: [F1]
+        priority: high
+
+      - id: F3
+        task: "Implement rate limiting (30 req/min)"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: constant_check
+            value: 30
+            variable: "RATE_LIMIT_MAX"
+          - type: contains
+            pattern: "429.*rate_limited"
+        depends_on: [F1]
+        priority: high
+
+      - id: F4
+        task: "Implement cleanupOldRequests scheduled function"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.cleanupOldRequests.*onSchedule"
+          - type: contains
+            pattern: "24.*hour|1.*day"
+        depends_on: [F1]
+        priority: medium
+
+  - id: 4
+    name: "Client Integration"
+    blocking: true
+    items:
+      - id: CL1
+        task: "Implement PhoneAuthHelper.kt with POST requests"
+        files_to_create: ["client/PhoneAuthHelper.kt"]
+        verification:
+          - type: contains
+            pattern: "HttpsURLConnection|POST"
+          - type: anti_pattern_check
+            forbidden: 'HttpURLConnection.*GET|url.*\?.*sessionCode'
+        depends_on: [C1, C5]
+        priority: critical
+
+      - id: CL2
+        task: "Implement SMS failure retry guidance"
+        files_to_modify: ["client/PhoneAuthHelper.kt"]
+        verification:
+          - type: contains
+            pattern: "retry guidance|sendSms returns false"
+        depends_on: [CL1]
+        priority: medium
+
+  - id: 5
+    name: "Firebase Configuration"
+    blocking: true
+    items:
+      - id: FB1
+        task: "Configure RTDB security rules for all paths"
+        files_to_create: ["database.rules.json"]
+        verification:
+          - type: contains
+            pattern: 'role == ''authenticator''|role == "authenticator"'
+          - type: contains
+            pattern: "hasChildren.*receivedAt.*sender.*challengeToken"
+          - type: contains
+            pattern: ".indexOn.*createdAt"
+          - type: contains
+            pattern: "registered_apps"
+          - type: contains
+            pattern: "pending_sms"
+          - type: contains
+            pattern: "otp_requests"
+        depends_on: [AR2]
+        priority: critical
+        notes: >
+          /registered_apps: write by admin SDK only; read by authenticator role (smsTemplate lookup).
+          /pending_sms: write by admin SDK; read+delete by authenticator role only; no public access.
+          /otp_requests: admin SDK only — zero client or authenticator access.
+          $other: { ".validate": false } must be present on all new paths to block extra fields.
+
+      - id: FB2
+        task: "Verify authenticator custom auth flow in Firebase"
+        verification:
+          - type: manual_check
+            description: "Verify authenticator devices can obtain a Firebase custom token and write with role=authenticator"
+        depends_on: []
+        priority: critical
+
+  - id: 6
+    name: "Testing"
+    blocking: false # Can work in parallel
+    items:
+      - id: T1
+        task: "Write AuthCrypto unit tests"
+        files_to_create: ["app/src/test/java/.../AuthCryptoTest.kt"]
+        verification:
+          - type: test_coverage
+            target: 100%
+          - type: test_passes
+        depends_on: [C1]
+        priority: high
+
+      - id: T2
+        task: "Write Cloud Function tests"
+        files_to_create: ["functions/test/checkAuth.test.js"]
+        verification:
+          - type: test_passes
+            command: "cd functions && npm test"
+        depends_on: [F1]
+        priority: high
+
+      - id: T3
+        task: "Verify security tests (replay, timing, brute force)"
+        verification:
+          - type: test_exists
+            name: "replay_attack_test"
+          - type: test_exists
+            name: "timing_attack_test"
+          - type: test_exists
+            name: "brute_force_test"
+        depends_on: [T1, T2]
+        priority: critical
+
+  - id: 7
+    name: "Code Quality"
+    blocking: false
+    items:
+      - id: Q1
+        task: "Run Android Lint with zero warnings"
+        verification:
+          - type: command
+            run: "./gradlew lint"
+            expect_exit: 0
+        depends_on: []
+        priority: medium
+
+      - id: Q2
+        task: "Run ktlint with zero issues"
+        verification:
+          - type: command
+            run: "./gradlew ktlintCheck"
+            expect_exit: 0
+        depends_on: []
+        priority: medium
+
+      - id: Q3
+        task: "Remove all debug logging from production code"
+        verification:
+          - type: anti_pattern_check
+            scope: "app/src/main"
+            forbidden: "Log.d|Log.v|System.out.print"
+            exceptions: "Log.e"
+        depends_on: []
+        priority: high
+
+  - id: 8
+    name: "Pre-Deployment Verification"
+    blocking: true
+    items:
+      - id: D1
+        task: "Verify v4 secret boundaries"
+        verification:
+          - type: anti_pattern_check
+            scope: "client"
+            forbidden: "VERIFICATION_SIGNING_SECRET|AUTH_SHARED_SECRET|SHARED_SECRET"
+          - type: contains
+            pattern: "AUTHENTICATOR_ENROLLMENT_SECRET|VERIFICATION_SIGNING_SECRET"
+          - type: anti_pattern_check
+            scope: "app/build.gradle"
+            forbidden: "buildConfigField.*AUTHENTICATOR_ENROLLMENT_SECRET"
+            description: "Enrollment secret must not be compiled into the APK (ADR-016 / T-09)"
+        depends_on: [C5, Q1, Q2]
+        priority: critical
+
+      - id: D2
+        task: "Test staging environment"
+        verification:
+          - type: command
+            run: "curl -H 'Authorization: Bearer {SECRET}' {STAGING_URL}/health"
+            expect_contains: "healthy"
+        depends_on: [D1, F2]
+        priority: critical
+
+      - id: D3
+        task: "Verify end-to-end verification flow"
+        verification:
+          - type: integration_test_passes
+            flow: "full_verification"
+        depends_on: [D2, CL1, S3]
+        priority: critical
+
+  # ==================================================================
+  # ARCHITECTURE NOTE — Phases 1–8 vs Phases 9–13
+  # ==================================================================
+  # Phases 1–8 describe the OLD flow (user sends AUTH: SMS to dedicated device).
+  # That flow is fully built and working.
+  #
+  # Phase 9 is the multi-tenant App Registry — all apps using this OTP service
+  # must be registered here. No app name, template, or rate limit is hardcoded.
+  # Adding a new app requires only a POST to registerApp — zero code changes.
+  #
+  # Phases 10–13 describe the NEW OTP flow (dedicated device sends OTP SMS to user).
+  # This is the production architecture going forward.
+  #
+  # The old SmsReceiver.kt (Phase 2, S3) listens for INCOMING AUTH: SMS.
+  # The new PendingSmsListener.kt (Phase 11, OA3) sends OUTGOING OTP SMS.
+  # They are COMPLEMENTARY — not conflicting. The old receiver can be kept
+  # as a fallback or deprecated once the new flow is proven in production.
+  # ==================================================================
+
+  - id: 9
+    name: "App Registry — Multi-Tenant Foundation"
+    blocking: true
+    notes: >
+      Every client app (HaatBazar, future apps) is a first-class entity in RTDB.
+      NO app names, templates, or rate limits are hardcoded in Cloud Functions.
+      Adding a new app requires only a POST to registerApp — zero code changes.
+      APP_MASTER_SECRET is the sole root of trust; guard it like a production DB password.
+    items:
+      - id: AR1
+        task: "Implement registerApp Cloud Function (POST, gated by APP_MASTER_SECRET)"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.registerApp.*onRequest"
+          - type: contains
+            pattern: "APP_MASTER_SECRET"
+          - type: contains
+            pattern: "registered_apps"
+          - type: contains
+            pattern: "timingSafeEqual"
+          - type: anti_pattern_check
+            forbidden: "appSecret.*set\\(|setValue.*appSecret"
+            description: "appSecret must be stored as HMAC hash, never the raw value"
+        depends_on: [F1, F3]
+        priority: critical
+        notes: >
+          Request: { masterSecret, appName, smsTemplate?, rateLimit? }.
+          Validates masterSecret with timingSafeEqual against APP_MASTER_SECRET env var.
+          Generates cryptographically random appId (UUID v4) and appSecret (32 bytes, crypto.randomBytes).
+          Stores { name, apiKeyHash: HMAC(APP_MASTER_SECRET, appId+appSecret), smsTemplate, rateLimit, active: true, createdAt } in /registered_apps/{appId}.
+          smsTemplate defaults to "Your {appName} code: {otp}. Valid {ttl} minutes. Do not share." if not provided.
+          rateLimit defaults to { maxPerPhone: 3, windowMs: 600000 } if not provided.
+          Returns { appId, appSecret } — appSecret shown ONCE, never stored raw. Caller must save it immediately.
+
+      - id: AR2
+        task: "Implement revokeApp Cloud Function (POST, gated by APP_MASTER_SECRET)"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.revokeApp.*onRequest"
+          - type: contains
+            pattern: "active.*false"
+          - type: contains
+            pattern: "registered_apps"
+        depends_on: [AR1]
+        priority: critical
+        notes: >
+          Request: { masterSecret, appId }.
+          Sets /registered_apps/{appId}/active = false (soft delete — preserves audit trail).
+          All subsequent sendOtp calls for that appId are rejected with 403 app_revoked.
+          Does NOT delete /otp_requests or /pending_sms in flight — those expire naturally.
+
+      - id: AR3
+        task: "Add APP_MASTER_SECRET to Firebase Secrets Manager and .env.example"
+        files_to_modify: [".env.example", "docs/Plan/11-ENV-VARS.md"]
+        verification:
+          - type: contains
+            pattern: "APP_MASTER_SECRET"
+          - type: anti_pattern_check
+            forbidden: "APP_MASTER_SECRET=."
+            description: "APP_MASTER_SECRET must never have a non-empty default value in .env.example"
+        depends_on: []
+        priority: critical
+        notes: >
+          Generate with: openssl rand -base64 48
+          Min 32 characters.
+          Store in Firebase Secrets Manager (same pattern as VERIFICATION_SIGNING_SECRET).
+          .env.example entry: APP_MASTER_SECRET=   # root-of-trust for registerApp/revokeApp — generate with: openssl rand -base64 48
+
+      - id: AR4
+        task: "Add RTDB security rules for /registered_apps"
+        files_to_modify: ["database.rules.json"]
+        verification:
+          - type: contains
+            pattern: "registered_apps"
+          - type: contains
+            pattern: "role == 'authenticator'"
+        depends_on: [AR1]
+        priority: critical
+        notes: >
+          Write: admin SDK only (registerApp / revokeApp Cloud Functions).
+          Read: authenticator role only (needed to look up smsTemplate at SMS send time).
+          No public read or write under any circumstance.
+          Validate required fields: name, apiKeyHash, active, createdAt.
+
+      - id: AR5
+        task: "Write unit tests for registerApp and revokeApp"
+        files_to_modify: ["functions/index.test.js"]
+        verification:
+          - type: test_exists
+            names:
+              - "registerApp returns appId and appSecret for valid masterSecret"
+              - "registerApp rejects invalid masterSecret with 403"
+              - "registerApp stores HMAC hash not raw appSecret in RTDB"
+              - "revokeApp sets active=false for valid appId"
+              - "sendOtp rejects app with active=false"
+        depends_on: [AR1, AR2]
+        priority: critical
+
+  - id: 10
+    name: "Outbound OTP — Cloud Functions"
+    blocking: true
+    notes: >
+      New architecture: dedicated device sends OTP SMS to user's phone.
+      All functions are multi-tenant: each caller must identify itself with appId + appSecret.
+      NO rate limits, templates, or TTLs are hardcoded — all read from /registered_apps/{appId} at runtime.
+      See session decision log — agreed 2025-05. Multi-tenant decision — agreed 2025-06.
+    items:
+      - id: OF1
+        task: "Implement sendOtp Cloud Function (POST)"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.sendOtp.*onRequest"
+          - type: contains
+            pattern: "req.method.*POST"
+          - type: contains
+            pattern: "otp_requests"
+          - type: contains
+            pattern: "registered_apps"
+          - type: contains
+            pattern: "apiKeyHash"
+          - type: anti_pattern_check
+            forbidden: "RATE_LIMIT_SEND_OTP.*=.*[0-9]"
+            description: "sendOtp must read rate limits from /registered_apps, not a hardcoded constant"
+        depends_on: [AR1, AR4, F1, F3]
+        priority: critical
+        notes: >
+          Request: { appId, appSecret, phoneNumber }.
+          Step 1: Read /registered_apps/{appId}. If missing or active=false → 403 app_not_found / app_revoked.
+          Step 2: Validate appSecret using timingSafeEqual(HMAC(APP_MASTER_SECRET, appId+appSecret), stored apiKeyHash) → 403 on mismatch.
+          Step 3: Read rateLimit from /registered_apps/{appId}/rateLimit (fallback: { maxPerPhone:3, windowMs:600000 }).
+          Step 4: Enforce per-phone rate limit using app-scoped key (appId+phoneNumber) and app's rateLimit values.
+          Step 5: Generate 6-digit OTP with crypto.randomInt(100000, 999999).
+          Step 6: Compute hashedOtp = HMAC(VERIFICATION_SIGNING_SECRET, sessionId+otp).
+          Step 7: Compute expiresAt = Date.now() + (app's ttlMs or 600000 for 10 min default).
+          Step 8: Write /otp_requests/{sessionId} = { appId, phoneNumber, hashedOtp, createdAt, expiresAt, attempts:0, locked:false }.
+          Step 9: Read smsTemplate from /registered_apps/{appId}/smsTemplate, render {otp}, {ttl} placeholders.
+          Step 10: Write /pending_sms/{sessionId} = { appId, to: phoneNumber, message: <rendered>, status: 'pending', createdAt }.
+          Returns { sessionId, expiresAt }.
+          NEVER returns the OTP or the rendered SMS message to the caller.
+
+      - id: OF2
+        task: "Implement verifyOtp Cloud Function (POST)"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.verifyOtp.*onRequest"
+          - type: contains
+            pattern: "attempts"
+          - type: contains
+            pattern: "timingSafeEqual"
+          - type: contains
+            pattern: "remove.*otp_requests"
+          - type: contains
+            pattern: "appId.*session|session.*appId"
+        depends_on: [OF1]
+        priority: critical
+        notes: >
+          Request: { appId, sessionId, otp }.
+          Step 1: Read /otp_requests/{sessionId}. If missing → 404 not_found.
+          Step 2: Validate session.appId === req.appId → 403 app_mismatch (prevents cross-app replay).
+          Step 3: Check locked=true → 423 locked.
+          Step 4: Check Date.now() > expiresAt → 410 expired.
+          Step 5: Atomically increment attempts.
+          Step 6: If attempts >= 3 set locked=true → 423 locked.
+          Step 7: Compute HMAC(VERIFICATION_SIGNING_SECRET, sessionId+otp), timingSafeEqual against hashedOtp.
+          IMPORTANT: The OTP was stored HASHED in /otp_requests by sendOtp.
+          This function must hash the incoming otp using the same algorithm (HMAC)
+          before comparing. NEVER compare the raw OTP string — it must be hashed first.
+          Step 8: On success: atomically delete /otp_requests/{sessionId} and /pending_sms/{sessionId}.
+          Returns { verified: true, phoneNumber } on success.
+          Returns { verified: false, reason: "mismatch|locked|expired|not_found|app_mismatch" } on failure.
+
+      - id: OF3
+        task: "Enforce per-app, per-phone rate limiting on sendOtp"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "registered_apps.*rateLimit|rateLimit.*registered_apps"
+          - type: contains
+            pattern: "429.*rate_limited"
+          - type: anti_pattern_check
+            forbidden: "RATE_LIMIT_SEND_OTP"
+            description: "Rate limit constants must not be hardcoded; read from app registry at runtime"
+        depends_on: [OF1, AR1]
+        priority: critical
+        notes: >
+          Rate limit key: appId + "+" + phoneNumber (prevents cross-app counter sharing).
+          Rate limit values: read from /registered_apps/{appId}/rateLimit.maxPerPhone and .windowMs.
+          If /registered_apps/{appId}/rateLimit is absent, use defaults: maxPerPhone=3, windowMs=600000.
+          This means different apps can have different limits without any code change.
+
+      - id: OF4
+        task: "Consolidate RTDB security rules for /registered_apps, /pending_sms, /otp_requests"
+        files_to_modify: ["database.rules.json"]
+        verification:
+          - type: contains
+            pattern: "registered_apps"
+          - type: contains
+            pattern: "pending_sms"
+          - type: contains
+            pattern: "otp_requests"
+          - type: contains
+            pattern: "role == 'authenticator'"
+        depends_on: [AR4, FB1]
+        priority: critical
+        notes: >
+          This is a consolidation check — the individual rules are created in AR4 (registered_apps) and FB1 (pending_sms, otp_requests).
+          This item verifies that all three paths are present and correct in the final deployed rules file.
+          /registered_apps: admin-write, authenticator-read.
+          /pending_sms: admin-write, authenticator-read+delete.
+          /pending_sms/{sessionId}/error: authenticator write allowed (OA6 writes failure status here).
+          /otp_requests: admin-only (no client or authenticator access).
+
+      - id: OF5
+        task: "Extend cleanupOldRequests to purge expired OTP entries"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "otp_requests.*expiresAt|expiresAt.*otp_requests"
+        depends_on: [OF1, F4]
+        priority: medium
+        notes: "Reuse existing cleanup scheduler. Add /otp_requests sweep alongside /verification_requests."
+
+      - id: OF6
+        task: "Implement otpStatus Cloud Function — check delivery status + resend"
+        files_to_modify: ["functions/index.js"]
+        verification:
+          - type: contains
+            pattern: "exports.otpStatus.*onRequest"
+          - type: contains
+            pattern: "req.method.*POST"
+          - type: contains
+            pattern: "pending_sms.*error|error.*pending_sms"
+          - type: contains
+            pattern: "sent|failed|pending"
+          - type: contains
+            pattern: "appId"
+        depends_on: [OF1, OF3]
+        priority: high
+        notes: >
+          POST-only endpoint. Accepts { appId, sessionId, resend } in body.
+          Step 1: Read /otp_requests/{sessionId}. If missing → { status: "not_found" }.
+          Step 2: Validate session.appId === req.appId → 403 app_mismatch (consistent with verifyOtp).
+          Reads /otp_requests/{sessionId} and /pending_sms/{sessionId} to determine status.
+          Returns one of:
+            - { status: "pending" } — OTP generated, waiting for device to send SMS
+            - { status: "sent" } — /pending_sms entry deleted by device (SMS sent successfully)
+            - { status: "failed", error: "..." } — device wrote error to /pending_sms/{sessionId}/error
+            - { status: "expired" } — past expiresAt
+            - { status: "not_found" } — sessionId unknown (already verified or never created)
+          If status is "failed" AND resend=true is provided:
+            - Apply the SAME per-phone-number rate limit as OF3 (reads from /registered_apps/{appId}/rateLimit).
+              Reject with 429 if limit exceeded — prevents bypassing OF3 via repeated resend calls.
+            - Re-generate a new OTP (crypto.randomInt, hashed before storing).
+            - Update /otp_requests/{sessionId} with new otp hash, new expiresAt, reset attempts to 0.
+            - Re-write /pending_sms/{sessionId} with new { to, message, sessionId }.
+            - Return { status: "pending", sessionId, expiresAt }.
+          Note: the "failed" status only appears once OA6 is implemented on the device.
+          Before OA6 is deployed, this endpoint still works for pending/sent/expired/not_found.
+
+  - id: 11
+    name: "Outbound OTP — Authenticator App (SMS Sender)"
+    blocking: true
+    notes: >
+      The dedicated device watches Firebase for pending outbound SMS jobs,
+      sends them using SmsManager, and reports delivery status back.
+    items:
+      - id: OA1
+        task: "Add SEND_SMS permission to AndroidManifest"
+        files_to_modify: ["app/src/main/AndroidManifest.xml"]
+        verification:
+          - type: manifest_check
+            permissions:
+              - "android.permission.SEND_SMS"
+        depends_on: []
+        priority: critical
+        notes: >
+          This is acceptable because the Authenticator is a DEDICATED server device,
+          not a user-installed app. SEND_SMS on a dedicated device is the intended use.
+
+      - id: OA2
+        task: "Request SEND_SMS permission at runtime in MainActivity"
+        files_to_modify: ["app/src/main/java/.../MainActivity.kt"]
+        verification:
+          - type: contains
+            pattern: "SEND_SMS"
+          - type: contains
+            pattern: "checkSelfPermission.*SEND_SMS"
+        depends_on: [OA1]
+        priority: critical
+
+      - id: OA3
+        task: "Implement PendingSmsListener — RTDB watcher for /pending_sms"
+        files_to_create: ["app/src/main/java/.../PendingSmsListener.kt"]
+        verification:
+          - type: file_exists
+          - type: contains
+            pattern: "pending_sms"
+          - type: contains
+            pattern: "addChildEventListener|ValueEventListener"
+          - type: contains
+            pattern: "SmsManager"
+        depends_on: [OA1, OA2, S1]
+        priority: critical
+        notes: >
+          On new child at /pending_sms/{sessionId}:
+            1. Read { to, message, sessionId }.
+            2. Send SMS via SmsManager.sendTextMessage().
+            3. On sent broadcast (SentIntent): delete /pending_sms/{sessionId}.
+            4. On failure broadcast: write { error, failedAt } to /pending_sms/{sessionId}/error so Cloud Function can report back.
+          Listener must be started inside AuthenticatorService, not standalone.
+
+      - id: OA4
+        task: "Handle SEND_SMS delivery receipts (SentIntent + DeliveredIntent)"
+        files_to_modify: ["app/src/main/java/.../PendingSmsListener.kt"]
+        verification:
+          - type: contains
+            pattern: "SentIntent|Activity.RESULT_OK"
+          - type: contains
+            pattern: "DeliveredIntent"
+          - type: anti_pattern_check
+            forbidden: "sendTextMessage.*null.*null"
+            description: "SentIntent must never be null — we need delivery confirmation"
+        depends_on: [OA3]
+        priority: high
+        notes: >
+          Register two PendingIntents: one for sent, one for delivered.
+          On RESULT_OK (sent): log success, delete /pending_sms entry.
+          On error codes (RESULT_ERROR_*): log error, write failure status to RTDB.
+
+      - id: OA5
+        task: "Integrate PendingSmsListener lifecycle into AuthenticatorService"
+        files_to_modify: ["app/src/main/java/.../AuthenticatorService.kt"]
+        verification:
+          - type: contains
+            pattern: "PendingSmsListener"
+          - type: contains
+            pattern: "startListening|stopListening"
+        depends_on: [OA3, S1]
+        priority: critical
+        notes: >
+          Start listener after Firebase sign-in succeeds (inside authenticateWithFirebase, after startHealthPingLoop).
+          Stop listener in stopService().
+          Listener must only run when Firebase auth is active.
+
+      - id: OA6
+        task: "Handle SMS send failure — write error to RTDB with timeout"
+        files_to_modify: ["app/src/main/java/.../PendingSmsListener.kt"]
+        verification:
+          - type: contains
+            pattern: "RESULT_ERROR"
+          - type: contains
+            pattern: "pending_sms.*error|error.*pending_sms"
+          - type: contains
+            pattern: "failedAt"
+        depends_on: [OA3, OA4]
+        priority: high
+        notes: >
+          When SmsManager.sendTextMessage() fails (SentIntent returns RESULT_ERROR_GENERIC
+          or any RESULT_ERROR_* code):
+            1. Write { error: "SEND_FAILED", errorCode: <code>, failedAt: ServerValue.TIMESTAMP }
+               to /pending_sms/{sessionId}/error.
+            2. Do NOT delete the /pending_sms/{sessionId} entry — leave it so otpStatus can report the failure.
+            3. Log the error with tag and errorCode for Crashlytics.
+          Also implement a client-side timeout: if /pending_sms/{sessionId} is not deleted within
+          60 seconds of being picked up, treat it as a send failure and write the error status.
+          This covers the case where SentIntent broadcast is never received (device lost signal mid-send).
+          The otpStatus Cloud Function (OF6) reads this error status to inform HaatBazar.
+
+  - id: 12
+    name: "HaatBazar Client SDK"
+    blocking: true
+    notes: >
+      Client SDK lives in the HaatBazar repository — NOT in this repo.
+      This phase is tracked here for dependency ordering only.
+      For v1, HaatBazar will copy the PhoneAuthHelper; a published artifact can follow later.
+      Every call to sendOtp must pass appId + appSecret from the server side (backend — never the mobile app).
+    items:
+      - id: OC1
+        task: "Add sendOtp(appId, appSecret, phoneNumber) to PhoneAuthHelper.kt"
+        files_to_modify: ["client/PhoneAuthHelper.kt"]
+        verification:
+          - type: contains
+            pattern: "fun sendOtp"
+          - type: contains
+            pattern: "CF_SEND_OTP_URL"
+          - type: contains
+            pattern: "sessionId"
+          - type: contains
+            pattern: "appId"
+        depends_on: [OF1, CL1]
+        priority: critical
+        notes: >
+          POST to CF_SEND_OTP_URL with { appId, appSecret, phoneNumber }.
+          appId and appSecret come from the server-side environment (e.g., HaatBazar backend).
+          NEVER embed appSecret in the Android/iOS mobile app — route through HaatBazar's own backend.
+          Returns OtpSession(sessionId, expiresAt).
+          Caller stores sessionId to pass to verifyOtp and checkOtpStatus.
+
+      - id: OC2
+        task: "Add verifyOtp(appId, sessionId, otp) to PhoneAuthHelper.kt"
+        files_to_modify: ["client/PhoneAuthHelper.kt"]
+        verification:
+          - type: contains
+            pattern: "fun verifyOtp"
+          - type: contains
+            pattern: "CF_VERIFY_OTP_URL"
+          - type: contains
+            pattern: "locked|expired|mismatch|app_mismatch"
+          - type: contains
+            pattern: "appId"
+        depends_on: [OF2, OC1]
+        priority: critical
+        notes: >
+          POST to CF_VERIFY_OTP_URL with { appId, sessionId, otp }.
+          Returns OtpVerifyResult(verified, reason, phoneNumber).
+          Caller handles: verified / expired / locked / mismatch / app_mismatch.
+
+      - id: OC3
+        task: "Add CF_SEND_OTP_URL, CF_VERIFY_OTP_URL, CF_OTP_STATUS_URL to BuildConfig / .env"
+        files_to_modify:
+          - "app/build.gradle"
+          - ".env.example"
+        verification:
+          - type: contains
+            pattern: "CF_SEND_OTP_URL"
+          - type: contains
+            pattern: "CF_VERIFY_OTP_URL"
+          - type: contains
+            pattern: "CF_OTP_STATUS_URL"
+        depends_on: [OF1, OF2, OF6]
+        priority: critical
+
+      - id: OC4
+        task: "Write integration test for full sendOtp → verifyOtp flow"
+        files_to_create: ["client/test/OtpFlowTest.kt"]
+        verification:
+          - type: test_passes
+          - type: test_exists
+            names:
+              - "sendOtp returns sessionId for valid appId+appSecret+phoneNumber"
+              - "sendOtp returns 403 for revoked appId"
+              - "sendOtp returns 403 for invalid appSecret"
+              - "verifyOtp returns verified=true for correct OTP"
+              - "verifyOtp returns 410 expired after 10 minutes"
+              - "verifyOtp returns locked after 3 wrong attempts"
+              - "verifyOtp returns 403 app_mismatch for wrong appId"
+              - "checkOtpStatus returns pending before device sends SMS"
+              - "checkOtpStatus returns sent after device sends SMS"
+              - "checkOtpStatus returns failed when device writes error"
+              - "checkOtpStatus with resend=true re-generates OTP and returns pending"
+              - "checkOtpStatus resend rate limited after per-app maxPerPhone threshold"
+        depends_on: [OC1, OC2, OC5]
+        priority: critical
+
+      - id: OC5
+        task: "Add checkOtpStatus(sessionId, resend) to PhoneAuthHelper.kt"
+        files_to_modify: ["client/PhoneAuthHelper.kt"]
+        verification:
+          - type: contains
+            pattern: "fun checkOtpStatus"
+          - type: contains
+            pattern: "CF_OTP_STATUS_URL"
+          - type: contains
+            pattern: "pending|sent|failed|expired"
+        depends_on: [OF6, OC1]
+        priority: high
+        notes: >
+          POST to CF_OTP_STATUS_URL with { sessionId, resend: false }.
+          Returns OtpStatusResult(status, error?, sessionId?, expiresAt?).
+          HaatBazar calls this after sendOtp to poll whether SMS was delivered.
+          Polling strategy: call every 3 seconds for up to 30 seconds.
+          If status is "failed", HaatBazar shows "Resend code" button.
+          Tapping "Resend" calls checkOtpStatus again with { sessionId, resend: true }.
+
+  - id: 13
+    name: "UX Hardening — One-Time Permission Dialogs"
+    blocking: false
+    notes: >
+      Not blocking current operation. Required before production deployment.
+      Logged from session 2025-05 — every app restart currently forces the user
+      through all permission and settings dialogs even when already configured.
+    items:
+      - id: UX1
+        task: "Skip SMS/notification permission dialog if already granted"
+        files_to_modify: ["app/src/main/java/.../MainActivity.kt"]
+        verification:
+          - type: contains
+            pattern: "checkSelfPermission.*RECEIVE_SMS"
+          - type: contains
+            pattern: "PERMISSION_GRANTED"
+          - type: behavior_check
+            description: "Restarting the app must NOT show permission dialog if permissions are already granted"
+        depends_on: []
+        priority: high
+        notes: >
+          Call checkSelfPermission for each permission before requestPermissions.
+          If all already granted, call onPermissionsGranted() directly — skip the system dialog entirely.
+
+      - id: UX2
+        task: "Skip battery optimization dialog if already exempted"
+        files_to_modify: ["app/src/main/java/.../MainActivity.kt"]
+        verification:
+          - type: contains
+            pattern: "isIgnoringBatteryOptimizations"
+          - type: behavior_check
+            description: "Restarting the app must NOT show battery optimization dialog if already exempt"
+        depends_on: []
+        priority: high
+        notes: >
+          Use PowerManager.isIgnoringBatteryOptimizations(packageName) to check before showing dialog.
+          If already exempt, call onBatteryOptimizationComplete() directly.
+
+      - id: UX3
+        task: "Show auto-start dialog only once (SharedPreferences flag)"
+        files_to_modify: ["app/src/main/java/.../MainActivity.kt"]
+        verification:
+          - type: contains
+            pattern: "autostart_prompted"
+          - type: contains
+            pattern: "getSharedPreferences"
+          - type: behavior_check
+            description: "Auto-start dialog must NOT appear on second and subsequent app launches"
+        depends_on: []
+        priority: high
+        notes: >
+          No Android API exists to check auto-start status on MIUI.
+          Store a boolean flag autostart_prompted=true in plain SharedPreferences after the user
+          dismisses the dialog (either button). Never show it again once flagged.
+          Plain SharedPreferences (not encrypted) is fine — this is not sensitive data.
+
+# Failure Conditions - If any are true, deployment is blocked
+failure_conditions:
+  - condition: "Public client contains server-only verification secret"
+    check: 'grep -r "VERIFICATION_SIGNING_SECRET\|AUTH_SHARED_SECRET\|SHARED_SECRET" client --include="*.kt" --include="*.js"'
+    action: "BLOCK_DEPLOY"
+
+  - condition: "HMAC comparison uses === instead of constant-time"
+    check: "grep -r '===.*signature|==.*sig' --include='*.kt' --include='*.js'"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Cloud Function accepts GET requests"
+    check: "!contains(functions/index.js, 'req.method.*POST')"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "SMS body stored in database"
+    check: "grep -r 'messageBody|smsBody|body' --include='*.kt' functions/"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Rate limiting not implemented"
+    check: "!contains(functions/index.js, 'rateLimit|429')"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Atomic delete not implemented"
+    check: "!contains(functions/index.js, 'remove.*sessionCode|delete.*entry')"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Secrets found in source control"
+    check: "git log --all -p | grep -i 'shared.*secret' | grep -v 'defineSecret|BuildConfig'"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "No unit tests for crypto logic"
+    check: "!exists(app/src/test/**/AuthCryptoTest.kt)"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "AUTHENTICATOR_ENROLLMENT_SECRET compiled into APK (T-09)"
+    check: "grep -r 'buildConfigField.*AUTHENTICATOR_ENROLLMENT_SECRET' app/build.gradle"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "sendOtp returns the OTP value to the caller"
+    check: 'grep -r "otp.*response\|response.*otp\|return.*otp" functions/index.js'
+    action: "BLOCK_DEPLOY"
+
+  - condition: "verifyOtp does not delete the OTP record on success"
+    check: "!contains(functions/index.js, 'remove.*otp_requests')"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "verifyOtp has no attempt counter (brute force unguarded)"
+    check: "!contains(functions/index.js, 'attempts')"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "sendOtp does not validate appId+appSecret against /registered_apps registry"
+    check: "!contains(functions/index.js, 'registered_apps')"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "sendOtp reads rate limits from a hardcoded constant instead of /registered_apps"
+    check: "grep -n 'RATE_LIMIT_SEND_OTP' functions/index.js"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "appSecret stored in plaintext in /registered_apps (must store HMAC hash only)"
+    check: 'grep -r "registered_apps.*appSecret\|appSecret.*setValue" functions/index.js'
+    action: "BLOCK_DEPLOY"
+
+  - condition: "verifyOtp does not validate appId against session appId (cross-app replay possible)"
+    check: "!contains(functions/index.js, 'app_mismatch')"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "APP_MASTER_SECRET not present in .env.example or Firebase Secrets Manager"
+    check: "!grep -q 'APP_MASTER_SECRET' .env.example"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Client app (mobile) embeds appSecret directly (must be server-side only)"
+    check: 'grep -r "appSecret" client/src --include="*.kt" --include="*.swift" --include="*.dart"'
+    action: "BLOCK_DEPLOY"
+
+  - condition: "PendingSmsListener uses null SentIntent (no delivery confirmation)"
+    check: "grep -r 'sendTextMessage.*null.*null' app/src/main"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "OTP stored in plaintext instead of hashed"
+    check: 'grep -r "otp.*set\|set.*otp" functions/index.js | grep -v "hash\|sha\|createHash"'
+    action: "BLOCK_DEPLOY"
+
+  - condition: "No SMS send timeout — /pending_sms entry left indefinitely if device loses signal"
+    check: '!contains(app/src/main/**/PendingSmsListener.kt, "timeout.*pending_sms|failedAt")'
+    action: "WARN_OPERATOR"
+
+  - condition: "SmsReceiver writes raw originatingAddress without E.164 normalisation (T-10)"
+    check: "!exists(app/src/main/**/SmsReceiver.kt) || !grep -q 'normalizeToE164' app/src/main/**/SmsReceiver.kt"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Rogue device enrolled without deliberate second-phone addition (T-11)"
+    check: "firebase database:get /health --project PhoneAuthService | jq 'keys | length > 1'"
+    action: "WARN_OPERATOR"
+
+  - condition: "Panic button procedure never tested on staging (T-11)"
+    check: "manual — verify firebase auth:delete was executed at least once on staging with a test UID"
+    action: "WARN_OPERATOR"
+
+# AI Tracking State (updated by AI during session)
+ai_tracking:
+  session_start: null
+  current_phase: null
+  completed_items: []
+  blocked_items: []
+  last_updated: "2025-06-multi-tenant-v1.2"
+
+# Validation Commands (run these to verify completion)
+validation_commands:
+  lint: "./gradlew lint"
+  test: "./gradlew test"
+  security_scan: 'git log --all --full-history -- "*.kt" "*.js" | grep -i "secret\|password"'
+  health_check: 'curl -H "Authorization: Bearer $SECRET" $CF_URL/health'
+
+# Cross-references to other documents
+references:
+  PRD: "docs/Plan/01-PRD.md"
+  threat_model: "docs/Plan/22-THREAT-MODEL.md"
+  test_plan: "docs/Plan/20-TEST-PLAN.md"
+  ci_cd: "docs/Plan/21-CI-CD.md"
