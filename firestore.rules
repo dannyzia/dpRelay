@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Packages collection - credit packages for purchase
+    // Public read (pricing page is unauthenticated); only Cloud Functions (Admin SDK) can write
+    match /packages/{packageId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // App credits collection - per-app balance and expiry
+    // Owner (matched by ownerUid) or admin can read; Cloud Functions only for writes
+    match /app_credits/{appId} {
+      allow read: if request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.uid == resource.data.ownerUid
+      );
+      allow write: if false;
+
+      // Usage sub-collection - audit log for credit usage
+      // Admin-only reads; Cloud Functions only for writes
+      match /usage/{usageId} {
+        allow read: if request.auth != null && request.auth.token.admin == true;
+        allow write: if false;
+      }
+
+      // Bulk usage audit sub-collection - admin-only reads
+      match /bulk_usage/{usageId} {
+        allow read: if request.auth != null && request.auth.token.admin == true;
+        allow write: if false;
+      }
+    }
+
+    // Bulk campaigns collection - campaign metadata
+    // Admin can read all; owner can read own campaigns; Cloud Functions only write
+    match /bulk_campaigns/{campaignId} {
+      allow read: if request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.uid == resource.data.ownerUid
+      );
+      allow write: if false;
+
+      // Recipients sub-collection - owner can read via parent campaign ownership
+      match /recipients/{recipientId} {
+        allow read: if request.auth != null && (
+          request.auth.token.admin == true ||
+          request.auth.uid == get(/databases/$(database)/documents/bulk_campaigns/$(campaignId)).data.ownerUid
+        );
+        allow write: if false;
+      }
+    }
+
+    // Transactions collection - credit purchase requests
+    // Admin can read any; owner can read own transactions (matched by ownerUid field)
+    // Cloud Functions (Admin SDK) bypasses rules for all writes
+    match /transactions/{transactionId} {
+      allow read: if request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.uid == resource.data.ownerUid
+      );
+      allow write: if false;
+    }
+
+    // Contact groups - owner-scoped (Modification 4)
+    match /contactGroups/{groupId} {
+      allow read, delete: if request.auth != null
+                         && request.auth.uid == resource.data.uid;
+      allow create: if false;
+      allow update: if false;
+
+      match /phones/{phoneId} {
+        allow read: if request.auth != null
+                    && request.auth.uid == get(/databases/$(database)/documents/contactGroups/$(groupId)).data.uid;
+        allow write: if false;
+      }
+    }
+
+    // Message templates - owner-scoped (Modification 4)
+    match /messageTemplates/{templateId} {
+      allow read, delete: if request.auth != null
+                         && request.auth.uid == resource.data.uid;
+      allow create, update: if false;
+    }
+  }
+}

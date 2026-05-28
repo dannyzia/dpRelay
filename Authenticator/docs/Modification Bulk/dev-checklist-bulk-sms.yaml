@@ -1,0 +1,2219 @@
+# Development Checklist – Authenticator Service: Bulk SMS Extension
+# Format: YAML 1.2
+# AI Instructions:
+# - This checklist EXTENDS docs/Modification 3/dev-checklist.yaml. The base system is assumed complete.
+# - Parse this file at the start of each bulk SMS implementation session.
+# - Do NOT begin Phase B2 until Phase B1 is fully complete.
+# - Do NOT begin Phase B3 until BCF-01 through BCF-03 (B2) are deployed to emulators.
+# - The existing OTP flow (sendOtp, verifyOtp, otpStatus) must remain UNTOUCHED
+#   unless a task explicitly states a modification. Any accidental regression is BLOCK_DEPLOY.
+# - Track completion state in your agent or session tooling.
+
+version: "1.1"
+project: "AuthenticatorService — Bulk SMS Extension"
+total_phases: 6
+extends: "docs/Modification 3/dev-checklist.yaml"
+
+non_regression_constraint: >
+  The existing sendOtp → /pending_sms → Android SmsDispatchService → status flow
+  must remain fully operational throughout all phases. No existing Cloud Function,
+  RTDB node, Firestore collection, or Android class may be removed or renamed.
+  All changes are strictly additive unless a task explicitly states otherwise.
+  Before merging any PR that touches functions/index.js or SmsDispatchService.kt,
+  BTST-01 (OTP regression test suite) must pass with 0 failures.
+
+architecture_decisions:
+  recipient_storage: >
+    Phone numbers from the uploaded CSV are chunked into batches of 100 and stored
+    as Firestore sub-collection documents under bulk_campaigns/{campaignId}/recipient_batches/.
+    This yields at most 100 Firestore documents for a 10,000-recipient campaign, enabling
+    cheap cursor-based pagination by the dispatcher without downloading a full CSV from Storage.
+    The raw CSV is also retained in Firebase Storage for audit/re-processing purposes.
+  job_queue: >
+    RTDB /bulk_sms_queue/{jobId} serves as the transient job queue consumed by the
+    Android device — identical in spirit to /pending_sms but separate to prevent
+    any coupling with the OTP flow. Jobs are written by the dispatchBulkJobs scheduler
+    and deleted by the BCF-07 RTDB trigger after final status resolution.
+  rate_limiting: >
+    Two independent layers enforce carrier-safe send rates:
+    (1) Cloud Functions layer — dispatchBulkJobs pushes at most BULK_DISPATCH_BATCH_SIZE
+        jobs per minute to RTDB (default 30).
+    (2) Android layer — MIN_INTERVAL_MS (2000 ms) enforces a minimum 2-second gap between
+        any two SMS sends across both OTP and bulk queues combined.
+    Both layers must always be active. Neither alone is sufficient.
+  counter_updates: >
+    The Android app NEVER writes to Firestore. It only updates the RTDB job status field
+    (pending → sent | failed). A Cloud Functions RTDB onUpdate trigger (BCF-07) reacts to
+    those status changes and atomically increments sentCount/failedCount in the Firestore
+    bulk_campaigns document. This keeps Firestore business logic server-side and the
+    Android app simple.
+  bulk_credits: >
+    Bulk SMS credits are kept in a separate Firestore collection (bulk_credits) that is
+    entirely independent of app_credits (OTP credits). This allows different pricing,
+    independent quota management, and zero risk of OTP and bulk credit pools interfering.
+  deterministic_job_ids: >
+    Each RTDB job node is keyed as "{campaignId}:{recipientIndex}" (e.g.
+    "abc123:0042"). This makes the dispatch operation idempotent: if dispatchBulkJobs
+    fires twice in the same minute, the second run overwrites RTDB nodes with identical
+    data — no duplicate sends result.
+
+critical_path:
+  - phase: B1
+    name: "Firestore Schema, RTDB Rules & Firebase Storage Setup"
+    must_complete_before: [B2, B3, B4]
+    reason: >
+      All Cloud Functions (B2), Android code (B3), and React UI (B4) depend on the
+      Firestore collection schemas, RTDB rules for /bulk_sms_queue, Firebase Storage
+      rules for CSV uploads, composite Firestore indexes, and environment variables
+      defined in this phase.
+  - phase: B2
+    name: "Cloud Functions for Bulk SMS"
+    must_complete_before: [B3, B4, B5]
+    reason: >
+      The Android app requires BCF-07 (RTDB trigger) and BCF-09 (index.js registration)
+      to be deployed before end-to-end counter tracking can be verified. The React UI
+      requires BCF-01 (createBulkCampaign), BCF-03 (getCampaignStatus), BCF-04/05
+      (pause/cancel) deployed to emulators before UI integration tests can pass.
+  - phase: B3
+    name: "Android App Modifications"
+    must_complete_before: [B5]
+    reason: >
+      The rate limiter (BAN-01) and /bulk_sms_queue listener (BAN-02) must be present
+      in the APK before any end-to-end or manual tests in Phase B5 can run against
+      a real device.
+  - phase: B4
+    name: "Web UI (React) Additions"
+    must_complete_before: [B5]
+    reason: >
+      The dashboard pages (BulkCampaignsPage, CreateCampaignPage, CampaignDetailPage)
+      are required for the manual verification steps in BTST-05.
+  - phase: B5
+    name: "Testing & Monitoring"
+    must_complete_before: [B6]
+    reason: "B6 documentation and runbook must be written against the deployed, verified system."
+  - phase: B6
+    name: "Documentation, Environment Variables & Runbook"
+    must_complete_before: []
+    reason: "Final sign-off gate. BDOC-02 (runbook) must be complete before BTST-07 (production deploy) is signed off."
+
+phases:
+  # ─────────────────────────────────────────────────────────────────────────────
+  - id: B1
+    name: "Firestore Schema, RTDB Rules & Firebase Storage Setup"
+    blocking: true
+    description: >
+      Establish every data-layer artefact the bulk SMS feature depends on.
+      Covers: three new top-level Firestore collections (bulk_campaigns, bulk_credits,
+      bulk_transactions) plus one new collection (bulk_packages) and one sub-collection
+      (recipient_batches under bulk_campaigns); RTDB security rules for /bulk_sms_queue;
+      Firebase Storage security rules for CSV uploads; Firestore composite indexes; and
+      new environment variables in .env.example files. No existing Firestore collections,
+      RTDB nodes, security rules, or env vars may be modified in this phase.
+    items:
+      - id: BCFS-01
+        status: "todo"
+        task: "Author bulk SMS data model documentation and define `bulk_campaigns` collection schema"
+        files_to_create:
+          - "docs/Modification Bulk/data-model-bulk.md"
+        schema:
+          collection: "bulk_campaigns"
+          document_id: "auto-generated via crypto.randomUUID() at campaign creation time"
+          fields:
+            campaignId: "string — mirrors the document ID for convenient client-side access"
+            ownerUid: "string — Firebase Auth UID of the creating user"
+            appId: "string — must reference an active entry in RTDB /registered_apps/{appId}"
+            name: "string — human-readable label (max 100 chars, required)"
+            message: "string — SMS body text (1–459 chars; 160 = 1 SMS, 306 = 2, 459 = 3)"
+            status: "string enum: 'pending' | 'sending' | 'paused' | 'completed' | 'cancelled' | 'failed'"
+            totalCount: "number — total valid recipients parsed from the uploaded CSV"
+            sentCount: "number — atomically incremented by BCF-07 when a job transitions to 'sent'"
+            failedCount: "number — atomically incremented by BCF-07 when a job permanently fails (attempts >= maxRetries)"
+            dispatchCursor: "number — zero-based index of the next recipient_batches document to dispatch"
+            createdAt: "Firestore Timestamp"
+            startedAt: "Firestore Timestamp | null — set on first dispatch by dispatchBulkJobs"
+            completedAt: "Firestore Timestamp | null — set by BCF-07 when sentCount + failedCount == totalCount"
+            estimatedFinishAt: "Firestore Timestamp | null — recalculated each dispatch tick"
+            csvStoragePath: "string — Firebase Storage path: bulk_campaigns/{campaignId}/recipients.csv"
+            rateLimit: "number — max SMS per minute for this campaign (1–60, default from BULK_SMS_RATE_LIMIT_PER_MINUTE env var)"
+            maxRetries: "number — max retry attempts per failed job (1–5, default BULK_SMS_MAX_RETRIES)"
+            maxSmsPerCampaign: "number — hard cap enforced at createBulkCampaign time (default BULK_SMS_MAX_PER_CAMPAIGN)"
+            bulkCreditTxId: "string | null — references bulk_transactions/{txId} that funded this campaign"
+            pausedAt: "Firestore Timestamp | null — set by pauseCampaign CF when status transitions to 'paused'"
+            cancelledAt: "Firestore Timestamp | null — set by cancelCampaign CF; null for non-cancelled campaigns"
+            updatedAt: "Firestore Timestamp — updated on every status transition; enables admin list ordering"
+            totalBatches: "number — ceil(totalCount / 100); total number of recipient_batches documents"
+            segmentsPerMessage: "number — 1, 2, or 3 (message.length ≤160=1, ≤306=2, ≤459=3). Snapshotted at creation so billing is stable."
+            totalCost: "number — totalCount × segmentsPerMessage. Bulk credits atomically deducted at campaign creation via runTransaction."
+          sub_collections:
+            - name: "recipient_batches"
+              document_id: "zero-padded batch index, e.g. '0000', '0001', …, '0099'"
+              fields:
+                batchIndex: "number — same as document ID parsed to integer"
+                phones: "array<string> — up to 100 E.164 phone numbers per document"
+                dispatched: "boolean — set to true by dispatchBulkJobs after all phones in this batch are queued"
+            - name: "failed_jobs"
+              document_id: "jobId — deterministic {campaignId}:{recipientIndex} matching the RTDB key"
+              fields:
+                jobId: "string — mirrors document ID"
+                phoneHash: "string — SHA-256 hex hash of the E.164 phone number. NEVER store raw phone PII."
+                error: "string — final error code from SmsManager mapping or 'send_timeout'"
+                attempts: "number — total attempt count when permanently failed"
+                failedAt: "Firestore Timestamp"
+                recipientIndex: "number — zero-based index into the total recipient list"
+        verification:
+          - type: file_exists
+            path: "docs/Modification Bulk/data-model-bulk.md"
+          - type: contains
+            file: "docs/Modification Bulk/data-model-bulk.md"
+            patterns:
+              - "bulk_campaigns"
+              - "dispatchCursor"
+              - "recipient_batches"
+              - "sentCount"
+              - "failedCount"
+              - "pausedAt"
+              - "cancelledAt"
+              - "totalCost"
+              - "segmentsPerMessage"
+              - "failed_jobs"
+              - "phoneHash"
+        depends_on: []
+        priority: critical
+        notes: >
+          The dispatchCursor points to the next recipient_batches document index, not a raw
+          phone-number index. Each batch holds up to 100 phones, so a 10,000-recipient campaign
+          produces exactly 100 batch documents and a cursor range of 0–99.
+          Storing phones in batches (rather than individual Firestore documents per phone) keeps
+          the sub-collection at ≤100 documents for the maximum campaign size, making reads cheap.
+
+      - id: BCFS-02
+        status: "todo"
+        task: "Define `bulk_credits`, `bulk_transactions`, and `bulk_packages` collection schemas"
+        files_to_modify:
+          - "docs/Modification Bulk/data-model-bulk.md"
+        schema:
+          - collection: "bulk_credits"
+            document_id: "appId — one document per registered app"
+            fields:
+              appId: "string"
+              balance: "number — current bulk SMS credits available"
+              lifetimePurchased: "number — total credits ever purchased (audit trail)"
+              updatedAt: "Firestore Timestamp"
+              lastTransactionId: "string | null — references most recent approved bulk_transactions doc"
+              ownerUid: "string — Firebase Auth UID of the app owner. Populated by approveBulkCredit on first approval; used by Firestore security rules for non-admin read access. CRITICAL: appId ≠ auth.uid — they are different identifiers."
+          - collection: "bulk_transactions"
+            document_id: "auto-generated UUID (crypto.randomUUID)"
+            fields:
+              txId: "string — mirrors document ID"
+              appId: "string"
+              packageId: "string — references bulk_packages/{packageId} at time of purchase"
+              smsQuota: "number — credits to be added on approval (snapshotted from package)"
+              amountBdt: "number — price in BDT (snapshotted from package)"
+              trxId: "string | null — bKash TrxID submitted by client via submitBulkTrxId"
+              status: "string enum: 'pending' | 'approved' | 'rejected'"
+              requestedAt: "Firestore Timestamp"
+              approvedAt: "Firestore Timestamp | null"
+              adminUid: "string | null"
+              adminNotes: "string | null"
+          - collection: "bulk_packages"
+            document_id: "auto-generated UUID"
+            fields:
+              packageId: "string — mirrors document ID"
+              name: "string (e.g. 'Bulk Starter — 500 SMS')"
+              smsQuota: "number — bulk credits granted on approval"
+              priceBdt: "number — price in BDT"
+              isActive: "boolean"
+              createdAt: "Firestore Timestamp"
+        verification:
+          - type: contains
+            file: "docs/Modification Bulk/data-model-bulk.md"
+            patterns:
+              - "bulk_credits"
+              - "bulk_transactions"
+              - "bulk_packages"
+              - "balance"
+              - "smsQuota"
+              - "already intentionally separate from app_credits"
+        depends_on: [BCFS-01]
+        priority: critical
+        notes: >
+          bulk_credits is intentionally separate from app_credits (OTP credits) to allow
+          independent pricing, quota management, and auditing for bulk vs. OTP workloads.
+          The billing flow mirrors the existing OTP billing pattern (BK-00 through BK-03)
+          but targets a completely different Firestore collection hierarchy.
+
+      - id: BCFS-03
+        status: "todo"
+        task: "Add Firestore security rules for all four new bulk collections"
+        files_to_modify:
+          - "firestore.rules"
+        rules:
+          bulk_campaigns:
+            read: "request.auth != null && (request.auth.token.admin == true || resource.data.ownerUid == request.auth.uid)"
+            write: "false  # Cloud Functions Admin SDK only"
+            sub_collection_recipient_batches:
+              read: "request.auth != null && (request.auth.token.admin == true || get(/databases/$(database)/documents/bulk_campaigns/$(campaignId)).data.ownerUid == request.auth.uid)"
+              write: "false  # Cloud Functions Admin SDK only"
+          bulk_credits:
+            read: "request.auth != null && (request.auth.token.admin == true || resource.data.ownerUid == request.auth.uid)"
+            write: "false  # Cloud Functions Admin SDK only"
+          bulk_transactions:
+            read: "request.auth != null && (request.auth.token.admin == true || resource.data.appId == request.auth.uid)"
+            write: "false  # Cloud Functions Admin SDK only"
+          bulk_packages:
+            read: "request.auth != null"
+            write: "false  # upsertBulkPackage CF (Admin SDK) only"
+        verification:
+          - type: file_exists
+            path: "firestore.rules"
+          - type: contains
+            file: "firestore.rules"
+            patterns:
+              - "bulk_campaigns"
+              - "bulk_credits"
+              - "bulk_transactions"
+              - "bulk_packages"
+              - "ownerUid"
+          - type: anti_pattern_check
+            file: "firestore.rules"
+            forbidden: "bulk_campaigns.*write.*true"
+            description: "bulk_campaigns must never allow direct client writes"
+        depends_on: [BCFS-01, BCFS-02]
+        priority: critical
+        security_notes:
+          - "Client SDK can only read its own campaigns (ownerUid guard). Cross-tenant reads are impossible."
+          - "All writes go through Cloud Functions using Admin SDK — rules are defence-in-depth only."
+          - "recipient_batches inherits parent campaign ownership via Firestore get() call to prevent phone number enumeration by other tenants."
+          - "CRITICAL BUG FIX: bulk_credits rule uses resource.data.ownerUid (not resource.data.appId) for non-admin reads. appId is the app registration ID and is NOT the same as the Firebase Auth UID. The original appId == auth.uid comparison would deny ALL non-admin reads, making the balance unreadable by the app owner. ownerUid is populated by approveBulkCredit on first credit approval."
+
+      - id: BCFS-04
+        status: "todo"
+        task: "Add RTDB security rules and `.indexOn` config for the new `/bulk_sms_queue` node"
+        files_to_modify:
+          - "database.rules.json"
+        rules:
+          "/bulk_sms_queue/{jobId}":
+            read: "auth != null && (auth.token.admin == true || auth.token.role == 'authenticator')"
+            write: "false  # Cloud Functions Admin SDK only"
+            ".indexOn": ["campaignId", "status"]
+        verification:
+          - type: contains
+            file: "database.rules.json"
+            patterns:
+              - "bulk_sms_queue"
+              - "authenticator"
+              - "indexOn"
+          - type: anti_pattern_check
+            file: "database.rules.json"
+            forbidden: "pending_sms.*bulk_sms_queue\\|bulk_sms_queue.*pending_sms"
+            description: "The two queue nodes must have independent rule blocks — never merge them"
+        depends_on: [BCFS-01]
+        priority: critical
+        security_notes:
+          - "The Android Authenticator app reads /bulk_sms_queue using the 'authenticator' custom RTDB claim, consistent with the existing /pending_sms pattern."
+          - "Write is false for all non-Admin SDK callers — only Cloud Functions may create or update job entries."
+          - ".indexOn [campaignId, status] is required for cancelCampaign (BCF-05) to efficiently query and delete all pending jobs belonging to a campaign."
+
+      - id: BCFS-05
+        status: "todo"
+        task: "Add Firebase Storage security rules for CSV bulk recipient uploads"
+        files_to_modify:
+          - "storage.rules"
+        rules:
+          "bulk_campaigns/{campaignId}/recipients.csv":
+            read: >
+              request.auth != null &&
+              (request.auth.token.admin == true ||
+               firestore.get(/databases/(default)/documents/bulk_campaigns/$(campaignId)).data.ownerUid == request.auth.uid)
+            write: >
+              request.auth != null &&
+              request.resource.size < 5 * 1024 * 1024 &&
+              request.resource.contentType.matches('text/.*')
+        verification:
+          - type: file_exists
+            path: "storage.rules"
+          - type: contains
+            file: "storage.rules"
+            patterns:
+              - "bulk_campaigns"
+              - "5 * 1024 * 1024"
+              - "text/"
+              - "ownerUid"
+        depends_on: [BCFS-01]
+        priority: critical
+        security_notes:
+          - "5 MB size limit is enforced at the Storage rule level (~100,000 rows). The 10,000-row campaign cap is enforced separately in createBulkCampaign (BCF-01)."
+          - "Content-type check (text/*) prevents upload of binary files or executables masquerading as CSVs."
+          - "The Firestore cross-service read is supported in Firebase Security Rules language v2."
+
+      - id: BCFS-06
+        status: "todo"
+        task: "Create Firestore composite indexes for bulk collections"
+        files_to_modify:
+          - "firestore.indexes.json"
+        indexes:
+          - collection: "bulk_campaigns"
+            fields: ["ownerUid ASC", "createdAt DESC"]
+            description: "Powers BulkCampaignsPage list: campaigns for a given user, newest first"
+          - collection: "bulk_campaigns"
+            fields: ["appId ASC", "status ASC", "createdAt DESC"]
+            description: "Powers admin campaign list and dispatchBulkJobs query for sending-status campaigns"
+          - collection: "bulk_campaigns"
+            fields: ["status ASC", "dispatchCursor ASC"]
+            description: "Powers dispatchBulkJobs: efficient scan for campaigns in 'sending' state with pending batches"
+          - collection: "bulk_transactions"
+            fields: ["appId ASC", "status ASC", "requestedAt DESC"]
+            description: "Powers admin bulk transaction approval list"
+          - collection: "bulk_campaigns"
+            fields: ["cancelledAt DESC"]
+            description: "Admin queries to list recently cancelled campaigns for audit"
+          - collection: "bulk_campaigns"
+            fields: ["ownerUid ASC", "updatedAt DESC"]
+            description: "Admin and owner queries ordered by last status update"
+          - collection: "bulk_campaigns" # collection group index for failed_jobs
+            collectionGroup: "failed_jobs"
+            fields: ["failedAt DESC"]
+            description: "Admin collection group query to find recently failed jobs across all campaigns"
+        verification:
+          - type: file_exists
+            path: "firestore.indexes.json"
+          - type: contains
+            file: "firestore.indexes.json"
+            patterns:
+              - "bulk_campaigns"
+              - "ownerUid"
+              - "dispatchCursor"
+              - "bulk_transactions"
+        depends_on: [BCFS-01, BCFS-02]
+        priority: high
+        notes: >
+          Deploy indexes before running end-to-end tests: firebase deploy --only firestore:indexes
+          In production, indexes take 1–10 minutes to build. Queries against unbuilt indexes
+          return an error — plan deployment at least 15 minutes before live testing.
+
+      - id: BCFS-07
+        status: "todo"
+        task: "Update `.env.example` files with all new bulk SMS environment variables"
+        files_to_modify:
+          - "functions/.env.example"
+          - "web/.env.example"
+        new_vars:
+          functions:
+            - "BULK_SMS_RATE_LIMIT_PER_MINUTE=   # Default SMS/min per campaign. Carrier-safe default: 30. Max: 60."
+            - "BULK_SMS_MAX_PER_CAMPAIGN=         # Hard cap on recipients per campaign. Default: 10000."
+            - "BULK_SMS_MAX_RETRIES=              # Max retry attempts per failed job. Default: 3."
+            - "BULK_SMS_DISPATCH_BATCH_SIZE=      # Jobs pushed to RTDB per scheduler tick. Default: 30."
+            - "BULK_SMS_JOB_TTL_HOURS=            # Hours before orphaned bulk jobs are purged. Default: 48."
+          web:
+            - "VITE_BULK_SMS_ENABLED=             # Set to 'true' to show Bulk SMS UI. Default: false."
+            - "VITE_BULK_SMS_MAX_CSV_ROWS=        # Max rows the CSV preview validates client-side. Default: 10000."
+        verification:
+          - type: contains
+            file: "functions/.env.example"
+            patterns:
+              - "BULK_SMS_RATE_LIMIT_PER_MINUTE"
+              - "BULK_SMS_MAX_PER_CAMPAIGN"
+              - "BULK_SMS_DISPATCH_BATCH_SIZE"
+          - type: anti_pattern_check
+            file: "functions/.env.example"
+            forbidden: "BULK_SMS_RATE_LIMIT_PER_MINUTE=\\s*[0-9]"
+            description: ".env.example must contain empty placeholders — not literal integer defaults that could be cargo-culted into production"
+          - type: contains
+            file: "web/.env.example"
+            patterns:
+              - "VITE_BULK_SMS_ENABLED"
+              - "VITE_BULK_SMS_MAX_CSV_ROWS"
+        depends_on: [BCFS-01]
+        priority: critical
+        notes: >
+          Actual in-code defaults (e.g. BULK_RATE_LIMIT_DEFAULT = 30) are defined in
+          functions/src/bulk/constants.js (BCF-00) and read from process.env at runtime
+          with fallback to those constants. The .env.example values are documentation-only.
+
+      - id: BCFS-08
+        status: "todo"
+        task: "Document and enforce the credits-per-segment billing rule across all layers"
+        files_to_modify:
+          - "docs/Modification Bulk/data-model-bulk.md"
+          - "functions/src/bulk/constants.js"
+        rules:
+          credit_billing_model: >
+            Credits are charged per SMS SEGMENT, not per message.
+            1 segment  = message.length <= 160 chars = 1 credit
+            2 segments = message.length <= 306 chars = 2 credits
+            3 segments = message.length <= 459 chars = 3 credits
+            This rule must be applied consistently in:
+            (1) BCF-01 createBulkCampaign when computing totalCost,
+            (2) BUI-02 CreateCampaignPage character counter UI,
+            (3) BUI-05 BulkCreditsWidget insufficient-balance warning,
+            (4) any admin reporting or billing reconciliation.
+        verification:
+          - type: contains
+            file: "functions/src/bulk/constants.js"
+            patterns:
+              - "SEGMENT_1_MAX_CHARS\\s*=\\s*160\\|160.*segment"
+              - "SEGMENT_2_MAX_CHARS\\s*=\\s*306\\|306.*segment"
+              - "SEGMENT_3_MAX_CHARS\\s*=\\s*459\\|459.*segment"
+              - "segmentsPerMessage\\|calcSegments"
+          - type: contains
+            file: "docs/Modification Bulk/data-model-bulk.md"
+            patterns:
+              - "credits.*segment\\|segment.*credit"
+              - "160.*1.*credit\\|1.*credit.*160"
+        depends_on: [BCFS-01, BCF-00]
+        priority: critical
+        notes: >
+          This rule must be implemented as a shared utility function in constants.js:
+            export function calcSegmentsPerMessage(messageText) {
+              if (messageText.length <= 160) return 1;
+              if (messageText.length <= 306) return 2;
+              return 3;
+            }
+          Both BCF-01 (backend) and BUI-02 (frontend) must call equivalent logic.
+          The frontend PapaParse-based preview must show: '1 credit/recipient (1 segment)'
+          or '2 credits/recipient (2 segments)' based on the message textarea content.
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  - id: B2
+    name: "Cloud Functions for Bulk SMS"
+    blocking: true
+    description: >
+      Implement all server-side business logic for bulk SMS as new Cloud Functions.
+      No existing Cloud Functions (sendOtp, verifyOtp, otpStatus, registerApp,
+      revokeApp, requestCredit, approveCredit, etc.) may be modified except where
+      a task explicitly states otherwise. All new functions follow the same auth
+      patterns as existing functions: admin operations require a Firebase Auth ID
+      token with admin custom claim; client operations require appId + appSecret
+      validation against /registered_apps in RTDB.
+    items:
+      - id: BCF-00
+        status: "todo"
+        task: "Create shared bulk SMS constants module and CSV/phone validator utilities"
+        files_to_create:
+          - "functions/src/bulk/constants.js"
+          - "functions/src/bulk/validators.js"
+        behaviour:
+          - "constants.js: export BULK_RATE_LIMIT_DEFAULT, BULK_MAX_PER_CAMPAIGN, BULK_MAX_RETRIES, BULK_DISPATCH_BATCH_SIZE, BULK_JOB_TTL_HOURS, BULK_MAX_MESSAGE_CHARS (459), BULK_MIN_MESSAGE_CHARS (1), BULK_PHONE_REGEX (/^\\+[1-9]\\d{6,14}$/)."
+          - "Each constant reads from process.env first, falls back to the hardcoded safe default. Never throw on missing env var — use fallback."
+          - "validators.js: export validateE164(phone: string): boolean."
+          - "validators.js: export validateMessage(msg: string): { valid: boolean, error: string | null }."
+          - "validators.js: export parseCsvBuffer(buffer: Buffer, maxRows: number): { phones: string[], errors: Array<{line: number, value: string, reason: string}> }."
+          - "parseCsvBuffer must: strip UTF-8 BOM, normalise CRLF to LF, skip blank lines, trim whitespace per cell, validate E.164 format, deduplicate phone numbers, and return structured errors with 1-based line numbers."
+          - "parseCsvBuffer accepts single-column CSVs (phone number only) or two-column CSVs where the first column is the phone. Any additional columns are silently ignored."
+        verification:
+          - type: file_exists
+            paths:
+              - "functions/src/bulk/constants.js"
+              - "functions/src/bulk/validators.js"
+          - type: contains
+            file: "functions/src/bulk/constants.js"
+            patterns:
+              - "BULK_RATE_LIMIT_DEFAULT"
+              - "process\\.env"
+              - "BULK_PHONE_REGEX"
+              - "BULK_MAX_PER_CAMPAIGN"
+          - type: contains
+            file: "functions/src/bulk/validators.js"
+            patterns:
+              - "validateE164"
+              - "parseCsvBuffer"
+              - "\\+\\[1-9\\]"
+          - type: anti_pattern_check
+            file: "functions/src/bulk/constants.js"
+            forbidden: "BULK_RATE_LIMIT_DEFAULT\\s*=\\s*0"
+            description: "Rate limit default must never be 0 — would cause infinite dispatch loop"
+        depends_on: [BCFS-07]
+        priority: critical
+        notes: >
+          All other bulk Cloud Functions import from this module. The E.164 regex and
+          rate-limit constants must not be duplicated across files. Any change to the
+          regex or limits is made here and propagates automatically.
+
+      - id: BCF-01
+        status: "todo"
+        task: "Implement `createBulkCampaign` Cloud Function (HTTPS POST, multipart/form-data)"
+        files_to_create:
+          - "functions/src/bulk/createBulkCampaign.js"
+        behaviour:
+          - "Authentication: validate appId + appSecret against RTDB /registered_apps/{appId} (same timingSafeEqual pattern as sendOtp). App must be active."
+          - "Accept: multipart/form-data with fields { appId, appSecret, name, message, rateLimit?, idempotencyKey? } and file upload csvFile."
+          - "Idempotency: if idempotencyKey is provided, check Firestore bulk_campaigns for an existing doc with the same appId + idempotencyKey. If found, return 200 with the existing campaignId (do not create a duplicate campaign)."
+          - "Step 1: Validate appId + appSecret. Return 403 on mismatch."
+          - "Step 2: Validate message using validateMessage(). Return 400 if invalid (empty, or > 459 chars)."
+          - "Step 3: Compute segmentsPerMessage = calcSegmentsPerMessage(message) from constants.js (1, 2, or 3)."
+          - "Step 4: Parse CSV using parseCsvBuffer(csvFile.buffer, BULK_MAX_PER_CAMPAIGN). Return 400 with { error: 'csv_parse_errors', errors: first10Errors } if any rows are invalid."
+          - "Step 5: Enforce totalCount <= BULK_MAX_PER_CAMPAIGN. Return 400 { error: 'max_campaign_size_exceeded', limit: BULK_MAX_PER_CAMPAIGN } if exceeded."
+          - "Step 6: Compute totalCost = totalCount * segmentsPerMessage."
+          - "Step 7: Atomically check AND deduct credits using Firestore runTransaction on bulk_credits/{appId}:\n    - Read current balance.\n    - If balance < totalCost: abort, return 402 { error: 'insufficient_bulk_credits', balance: currentBalance, required: totalCost }.\n    - If balance >= totalCost: deduct atomically: newBalance = balance - totalCost. Write newBalance, updatedAt = now()."
+          - "Step 8: Generate campaignId = crypto.randomUUID()."
+          - "Step 9: Upload raw CSV bytes to Firebase Storage at bulk_campaigns/{campaignId}/recipients.csv."
+          - "Step 10: Chunk phone array into batches of 100. Write each batch as a Firestore document in bulk_campaigns/{campaignId}/recipient_batches/{zeroPaddedIndex}. Use Firestore batched writes (max 500 ops each). Field: { batchIndex, phones, dispatched: false }."
+          - "Step 11: Write Firestore bulk_campaigns/{campaignId}: { campaignId, ownerUid: auth.uid, appId, name, message, status: 'pending', totalCount, sentCount: 0, failedCount: 0, dispatchCursor: 0, createdAt: now(), updatedAt: now(), startedAt: null, completedAt: null, pausedAt: null, cancelledAt: null, estimatedFinishAt: null, rateLimit: rateLimit ?? BULK_RATE_LIMIT_DEFAULT, maxRetries: BULK_MAX_RETRIES, maxSmsPerCampaign: BULK_MAX_PER_CAMPAIGN, csvStoragePath, bulkCreditTxId: null, totalBatches: batches.length, segmentsPerMessage, totalCost }."
+          - "ROLLBACK GUARD: If Step 9 or Step 10 fail after Step 7 has deducted credits, the Cloud Function must run a compensating runTransaction to refund the deducted totalCost back to bulk_credits/{appId}.balance. Log the rollback in a Firestore audit document."
+          - "Step 12: Return 200 { campaignId, totalCount, totalCost, segmentsPerMessage, estimatedMinutes: Math.ceil(totalCount / rateLimit) }."
+          - "Do NOT start dispatching immediately — dispatchBulkJobs (BCF-02) handles that on schedule."
+        verification:
+          - type: file_exists
+            path: "functions/src/bulk/createBulkCampaign.js"
+          - type: contains
+            file: "functions/src/bulk/createBulkCampaign.js"
+            patterns:
+              - "parseCsvBuffer"
+              - "recipient_batches"
+              - "bulk_campaigns"
+              - "bulk_credits"
+              - "insufficient_bulk_credits"
+              - "status.*pending"
+              - "getStorage\\|bucket\\|Storage"
+              - "timingSafeEqual"
+              - "runTransaction"
+              - "totalCost"
+              - "segmentsPerMessage\\|calcSegments"
+              - "ROLLBACK\\|compensat\\|refund.*failed"
+              - "idempotencyKey"
+          - type: anti_pattern_check
+            file: "functions/src/bulk/createBulkCampaign.js"
+            forbidden: "sendOtp\\|verifyOtp\\|pending_sms"
+            description: "createBulkCampaign must not reference any OTP function or node"
+        depends_on: [BCF-00, BCFS-01, BCFS-02, BCFS-03, BCFS-05]
+        priority: critical
+        security_notes:
+          - "Phone numbers are validated as E.164 at parse time. Malformed numbers are rejected with line-number context, never silently dropped."
+          - "Bulk credit check (Step 2) runs before CSV upload to fail fast and avoid wasting Storage quota on invalid campaigns."
+          - "Phone numbers are stored in recipient_batches only, never in the top-level campaign document. This limits blast radius if the campaign document is over-shared."
+
+      - id: BCF-02
+        status: "todo"
+        task: "Implement `dispatchBulkJobs` Cloud Function (Cloud Scheduler, every 1 minute)"
+        files_to_create:
+          - "functions/src/bulk/dispatchBulkJobs.js"
+        schedule: "every 1 minutes"
+        behaviour:
+          - "Query Firestore bulk_campaigns where status IN ['pending', 'sending'] (uses composite index from BCFS-06). Limit to 3 campaigns per execution to stay within Cloud Function timeout."
+          - "For each campaign in 'pending' status: update status = 'sending', startedAt = now()."
+          - "For each campaign in 'sending' status:"
+          - "  a. Read recipient_batches document at index dispatchCursor."
+          - "  b. If batch.dispatched == true: increment dispatchCursor, continue to next iteration."
+          - "  c. Determine jobs to dispatch this tick: min(batch.phones.length, BULK_DISPATCH_BATCH_SIZE)."
+          - "  d. For each phone in the batch: construct deterministic jobId = `${campaignId}:${batchIndex * 100 + phoneIndex}`. Write to RTDB /bulk_sms_queue/{jobId} = { campaignId, appId, to: phone, message, status: 'pending', attempts: 0, createdAt: Date.now(), recipientIndex: batchIndex * 100 + phoneIndex }. Use RTDB set() — idempotent on duplicate jobId."
+          - "  e. After dispatching all phones: update Firestore batch.dispatched = true, increment campaign.dispatchCursor."
+          - "  f. Recalculate and write campaign.estimatedFinishAt = now() + ((totalCount - sentCount - failedCount) / rateLimit * 60000)."
+          - "  g. Do NOT set status = 'completed' here. Completion is triggered by BCF-07 when counters match."
+          - "Skip campaigns with status 'paused', 'cancelled', 'completed', or 'failed' entirely."
+          - "If dispatchCursor >= total batch count AND campaign is still 'sending': this is a no-op tick — all batches are dispatched, waiting for BCF-07 to flip to 'completed'."
+        verification:
+          - type: file_exists
+            path: "functions/src/bulk/dispatchBulkJobs.js"
+          - type: contains
+            file: "functions/src/bulk/dispatchBulkJobs.js"
+            patterns:
+              - "onSchedule\\|pubsub.*schedule\\|every 1 minutes"
+              - "bulk_sms_queue"
+              - "dispatchCursor"
+              - "recipient_batches"
+              - "status.*sending"
+              - "BULK_DISPATCH_BATCH_SIZE"
+          - type: anti_pattern_check
+            file: "functions/src/bulk/dispatchBulkJobs.js"
+            forbidden: "pending_sms"
+            description: "dispatchBulkJobs must write to /bulk_sms_queue only, never /pending_sms"
+        depends_on: [BCF-01, BCFS-04, BCFS-06]
+        priority: critical
+        notes: >
+          The deterministic jobId ({campaignId}:{recipientIndex}) is the idempotency key.
+          If the scheduler fires twice before one execution completes, the second run calls
+          RTDB set() with an identical key and identical data — no duplicate SMS results.
+          Processing 3 campaigns × 30 jobs = 90 RTDB writes + 6 Firestore reads/writes;
+          well within the 540-second Cloud Functions v2 timeout and RTDB rate limits.
+
+      - id: BCF-03
+        status: "todo"
+        task: "Implement `getCampaignStatus` Cloud Function (HTTPS GET)"
+        files_to_create:
+          - "functions/src/bulk/getCampaignStatus.js"
+        behaviour:
+          - "Authentication: validate appId + appSecret (app owner) OR Firebase Auth ID token with admin custom claim."
+          - "Query param: campaignId (required). Return 400 if missing."
+          - "Read Firestore bulk_campaigns/{campaignId}. Return 404 { error: 'campaign_not_found' } if missing."
+          - "Verify campaign.appId matches the authenticated caller's appId (or caller is admin). Return 403 { error: 'access_denied' } on mismatch."
+          - "Return 200: { campaignId, name, status, totalCount, sentCount, failedCount, progressPercent: Number(((sentCount + failedCount) / totalCount * 100).toFixed(1)), createdAt, startedAt, completedAt, estimatedFinishAt, rateLimit, messagePreview: message.slice(0, 50) + (message.length > 50 ? '...' : '') }."
+        verification:
+          - type: file_exists
+            path: "functions/src/bulk/getCampaignStatus.js"
+          - type: contains
+            file: "functions/src/bulk/getCampaignStatus.js"
+            patterns:
+              - "bulk_campaigns"
+              - "progressPercent"
+              - "campaign_not_found"
+              - "access_denied"
+              - "appId.*match\\|match.*appId"
+        depends_on: [BCF-01]
+        priority: critical
+
+      - id: BCF-04
+        status: "todo"
+        task: "Implement `pauseCampaign` Cloud Function (HTTPS POST)"
+        files_to_create:
+          - "functions/src/bulk/pauseCampaign.js"
+        behaviour:
+          - "Authentication: validate appId + appSecret (app owner) OR admin custom claim."
+          - "Accept: { campaignId }."
+          - "Read Firestore bulk_campaigns/{campaignId}. Verify appId ownership (or admin)."
+          - "If status != 'sending': return 409 { error: 'campaign_not_pausable', currentStatus }."
+          - "Update Firestore: status = 'paused', pausedAt = now()."
+          - "Return 200 { success: true, campaignId, status: 'paused' }."
+          - "Effect: dispatchBulkJobs (BCF-02) skips paused campaigns on subsequent ticks. Jobs already in /bulk_sms_queue continue to be processed by the Android device — do not cancel in-flight jobs."
+          - "TODO (v1.1): add resumeCampaign function that sets status back to 'sending'."
+        verification:
+          - type: file_exists
+            path: "functions/src/bulk/pauseCampaign.js"
+          - type: contains
+            file: "functions/src/bulk/pauseCampaign.js"
+            patterns:
+              - "campaign_not_pausable"
+              - "status.*paused"
+              - "pausedAt"
+        depends_on: [BCF-01]
+        priority: critical
+        notes: >
+          ⚠️ FLAG: resumeCampaign is out of scope for this checklist.
+          Add a prominently visible TODO comment in pauseCampaign.js:
+          // TODO (v1.1): implement resumeCampaign — set status='sending', clear pausedAt.
+
+      - id: BCF-05
+        status: "todo"
+        task: "Implement `cancelCampaign` Cloud Function (HTTPS POST, admin-only)"
+        files_to_create:
+          - "functions/src/bulk/cancelCampaign.js"
+        behaviour:
+          - "Authentication: Firebase Auth ID token with admin custom claim ONLY. Return 403 { error: 'admin_only' } for non-admin callers."
+          - "Accept: { campaignId }."
+          - "Read Firestore bulk_campaigns/{campaignId}. Return 404 if not found."
+          - "If status IN ['completed', 'cancelled']: return 409 { error: 'campaign_already_terminal', currentStatus }."
+          - "Step 1 (LOCK): Update Firestore bulk_campaigns/{campaignId}: status = 'cancelling', updatedAt = now(). This acts as a distributed lock — dispatchBulkJobs and BCF-07 must skip campaigns in 'cancelling' state. If this update fails due to a concurrent write, retry once; if it fails again, return 409 { error: 'concurrent_modification' }."
+          - "Step 2 (DRAIN): Wait 3 seconds (or poll) to allow any in-flight BCF-07 triggers that were already queued to complete their runTransaction writes. This bounds the race window for the last in-flight jobs."
+          - "Step 3 (PURGE QUEUE): Re-read the latest campaign snapshot to get fresh sentCount + failedCount. Query RTDB /bulk_sms_queue ordered by campaignId. Delete all nodes where campaignId matches and status == 'pending'. Process in batches of 100 RTDB deletes to avoid payload limits."
+          - "Step 4 (REFUND): Run Firestore runTransaction on bulk_credits/{appId}: read current campaign sentCount + failedCount (fresh from Firestore, not from the initial read). Calculate refundCount = campaign.totalCost - (campaign.sentCount + campaign.failedCount). If refundCount > 0: balance += refundCount."
+          - "Step 5: Update campaign: status = 'cancelled', cancelledAt = now(), updatedAt = now()."
+          - "Return 200 { success: true, cancelledAt, refundedCredits: refundCount }."
+          - "IMPORTANT: 'cancelling' is a transient internal status. The campaign must end in 'cancelled'. If the function crashes after Step 1 but before Step 5, a Cloud Scheduler or admin-triggered cleanup job must detect 'cancelling' campaigns older than 5 minutes and complete the cancellation."
+        verification:
+          - type: file_exists
+            path: "functions/src/bulk/cancelCampaign.js"
+          - type: contains
+            file: "functions/src/bulk/cancelCampaign.js"
+            patterns:
+              - "admin_only"
+              - "campaign_already_terminal"
+              - "bulk_sms_queue"
+              - "runTransaction"
+              - "refundCount\\|refundedCredits"
+              - "status.*cancelling"
+              - "totalCost"
+              - "concurrent_modification"
+        depends_on: [BCF-01, BCFS-04]
+        priority: critical
+        security_notes:
+          - "Restrict to admin callers only — clients must not be able to cancel another user's campaign or manipulate credit refunds."
+          - "Credit refund uses runTransaction to prevent race conditions with concurrent BCF-07 counter updates."
+
+      - id: BCF-06
+        status: "todo"
+        task: "Implement `retryFailedJobs` Cloud Function (HTTPS POST)"
+        files_to_create:
+          - "functions/src/bulk/retryFailedJobs.js"
+        behaviour:
+          - "Authentication: validate appId + appSecret (owner) OR admin custom claim."
+          - "Accept: { campaignId }."
+          - "Read Firestore bulk_campaigns/{campaignId}. Verify ownership."
+          - "If status NOT IN ['completed', 'failed']: return 409 { error: 'retry_not_allowed', reason: 'Campaign must be in completed or failed state to retry' }."
+          - "Query RTDB /bulk_sms_queue where campaignId == campaignId and status == 'failed'. For each node: reset { status: 'pending', attempts: 0, error: null }."
+          - "Update Firestore bulk_campaigns/{campaignId}: status = 'sending', set failedCount = 0 (the retried jobs will re-increment if they fail again)."
+          - "dispatchBulkJobs will resume dispatching on the next scheduler tick."
+          - "Return 200 { success: true, retriedCount }."
+        verification:
+          - type: file_exists
+            path: "functions/src/bulk/retryFailedJobs.js"
+          - type: contains
+            file: "functions/src/bulk/retryFailedJobs.js"
+            patterns:
+              - "retry_not_allowed"
+              - "status.*pending"
+              - "attempts.*0\\|attempts: 0"
+              - "failedCount.*0\\|failedCount: 0"
+        depends_on: [BCF-01, BCF-07]
+        priority: high
+
+      - id: BCF-07
+        status: "todo"
+        task: "Implement RTDB `onUpdate` trigger on `/bulk_sms_queue/{jobId}` to update campaign counters"
+        files_to_create:
+          - "functions/src/bulk/onBulkJobStatusChange.js"
+        behaviour:
+          - "Trigger: database().ref('/bulk_sms_queue/{jobId}').onUpdate()"
+          - "Read beforeStatus = change.before.data().status and afterStatus = change.after.data().status."
+          - "Only act on transitions TO 'sent' or 'failed'. Ignore all other transitions (e.g. pending→pending, attempts increment)."
+          - "On transition to 'sent':"
+          - "  Run Firestore runTransaction on bulk_campaigns/{campaignId}:"
+          - "    sentCount++."
+          - "    Recalculate estimatedFinishAt."
+          - "    If sentCount + failedCount >= totalCount: set status = 'completed', completedAt = now()."
+          - "  Delete the RTDB /bulk_sms_queue/{jobId} node (job is resolved — clean up queue)."
+          - "On transition to 'failed':"
+          - "  Read attempts and maxRetries from the after snapshot."
+          - "  If attempts < maxRetries: increment attempts, reset status = 'pending' in RTDB. BCF-02 will re-dispatch on next tick."
+          - "  If attempts >= maxRetries (permanently failed):"
+          - "    Run Firestore runTransaction on bulk_campaigns/{campaignId}: failedCount++, check completion condition."
+          - "    Write audit record to Firestore bulk_campaigns/{campaignId}/failed_jobs/{jobId}: { to: phone (hashed as SHA-256 — do NOT store raw phone number), error, attempts, failedAt: now() }."
+          - "    Delete the RTDB /bulk_sms_queue/{jobId} node."
+          - "CRITICAL: This trigger fires because the Android app writes status BEFORE the job is deleted. This is different from the /pending_sms flow (which uses removeValue). Do not confuse the two patterns."
+        verification:
+          - type: file_exists
+            path: "functions/src/bulk/onBulkJobStatusChange.js"
+          - type: contains
+            file: "functions/src/bulk/onBulkJobStatusChange.js"
+            patterns:
+              - "onUpdate"
+              - "bulk_sms_queue"
+              - "sentCount\\|failedCount"
+              - "runTransaction"
+              - "status.*completed"
+              - "attempts.*maxRetries\\|maxRetries.*attempts"
+              - "createHash.*sha256\\|phone.*hash"
+          - type: anti_pattern_check
+            file: "functions/src/bulk/onBulkJobStatusChange.js"
+            forbidden: "update\\(.*sentCount\\|update\\(.*failedCount"
+            description: "Counter updates MUST use runTransaction, never update() — race condition risk"
+        depends_on: [BCF-01, BCFS-01, BCFS-04]
+        priority: critical
+        security_notes:
+          - "Phone numbers in the failed_jobs audit record must be stored as SHA-256 hashes — never raw PII."
+          - "runTransaction is non-negotiable for counter updates. Any rewrite using update() is a data integrity defect."
+
+      - id: BCF-08
+        status: "todo"
+        task: "Implement bulk credit management: `upsertBulkPackage`, `requestBulkCredit`, `submitBulkTrxId`, `approveBulkCredit`, `getBulkCredits`"
+        files_to_create:
+          - "functions/src/bulk/upsertBulkPackage.js"
+          - "functions/src/bulk/requestBulkCredit.js"
+          - "functions/src/bulk/submitBulkTrxId.js"
+          - "functions/src/bulk/approveBulkCredit.js"
+          - "functions/src/bulk/getBulkCredits.js"
+        behaviour:
+          - "upsertBulkPackage: mirrors BK-00 (upsertPackage) but targets bulk_packages collection. Admin auth required."
+          - "requestBulkCredit: mirrors BK-01 (requestCredit) but targets bulk_packages / bulk_transactions. Returns bKash payment instructions using BKASH_PERSONAL_NUMBER env var."
+          - "submitBulkTrxId: mirrors BK-02 (submitTrxId) but for bulk_transactions. Checks for duplicate trxId across all bulk_transactions."
+          - "approveBulkCredit: mirrors BK-03 (approveCredit) but credits go to bulk_credits/{appId}.balance (NOT app_credits.sms_remaining). Idempotency: if transaction.status != 'pending' → 409 { error: 'already_resolved' }. Run Firestore runTransaction: bulk_credits/{appId}.balance += transaction.smsQuota."
+          - "getBulkCredits: authenticate via appId + appSecret. Return { balance, lifetimePurchased, updatedAt } from bulk_credits/{appId}. Return { balance: 0, lifetimePurchased: 0 } if document does not exist."
+          - "IMPORTANT: These functions do not share code with the OTP billing functions. Each reads/writes its own collection hierarchy."
+        verification:
+          - type: file_exists
+            paths:
+              - "functions/src/bulk/upsertBulkPackage.js"
+              - "functions/src/bulk/requestBulkCredit.js"
+              - "functions/src/bulk/submitBulkTrxId.js"
+              - "functions/src/bulk/approveBulkCredit.js"
+              - "functions/src/bulk/getBulkCredits.js"
+          - type: contains
+            file: "functions/src/bulk/approveBulkCredit.js"
+            patterns:
+              - "bulk_credits"
+              - "already_resolved"
+              - "runTransaction"
+              - "balance.*smsQuota\\|smsQuota.*balance"
+          - type: contains
+            file: "functions/src/bulk/getBulkCredits.js"
+            patterns:
+              - "bulk_credits"
+              - "balance"
+          - type: anti_pattern_check
+            file: "functions/src/bulk/approveBulkCredit.js"
+            forbidden: "app_credits\\|sms_remaining"
+            description: "approveBulkCredit must only modify bulk_credits, never app_credits"
+        depends_on: [BCFS-02, BCFS-03, BCF-00]
+        priority: critical
+        notes: >
+          These functions are intentionally modelled after the existing OTP billing functions
+          (BK-00 through BK-03) to minimise the learning curve for developers. The key
+          invariant: bulk credits and OTP credits are stored in completely separate Firestore
+          collections and are managed by completely separate Cloud Functions.
+
+      - id: BCF-09
+        status: "todo"
+        task: "Register all new bulk Cloud Functions as exports in `functions/index.js`"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "Add imports for: createBulkCampaign, dispatchBulkJobs, getCampaignStatus, pauseCampaign, cancelCampaign, retryFailedJobs, onBulkJobStatusChange."
+          - "Add imports for: upsertBulkPackage, requestBulkCredit, submitBulkTrxId, approveBulkCredit, getBulkCredits."
+          - "Register dispatchBulkJobs as: exports.dispatchBulkJobs = functions.pubsub.schedule('every 1 minutes').onRun(dispatchBulkJobs);"
+          - "Register onBulkJobStatusChange as: exports.onBulkJobStatusChange = functions.database.ref('/bulk_sms_queue/{jobId}').onUpdate(onBulkJobStatusChange);"
+          - "Register all HTTPS functions as onRequest() exports following the existing naming pattern."
+          - "DO NOT modify any existing exports (sendOtp, verifyOtp, otpStatus, registerApp, revokeApp, requestCredit, approveCredit, etc.)."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            patterns:
+              - "createBulkCampaign"
+              - "dispatchBulkJobs"
+              - "onBulkJobStatusChange"
+              - "getCampaignStatus"
+              - "pauseCampaign"
+              - "cancelCampaign"
+              - "upsertBulkPackage"
+              - "approveBulkCredit"
+          - type: anti_pattern_check
+            file: "functions/index.js"
+            forbidden: "exports\\.sendOtp\\s*=\\s*null\\|exports\\.sendOtp\\s*=\\s*undefined"
+            description: "Existing sendOtp export must not be removed or nulled — regression risk"
+          - type: anti_pattern_check
+            file: "functions/index.js"
+            forbidden: "exports\\.verifyOtp\\s*=\\s*null\\|exports\\.verifyOtp\\s*=\\s*undefined"
+            description: "Existing verifyOtp export must not be removed or nulled — regression risk"
+        depends_on:
+          [BCF-01, BCF-02, BCF-03, BCF-04, BCF-05, BCF-06, BCF-07, BCF-08]
+        priority: critical
+
+      - id: BCF-10
+        status: "todo"
+        task: "Write unit and integration tests for all bulk Cloud Functions"
+        files_to_create:
+          - "functions/test/bulk/createBulkCampaign.test.js"
+          - "functions/test/bulk/dispatchBulkJobs.test.js"
+          - "functions/test/bulk/campaignLifecycle.test.js"
+          - "functions/test/bulk/bulkCredits.test.js"
+          - "functions/test/bulk/security.test.js"
+          - "functions/test/bulk/e2e-bulk.test.js"
+        test_cases:
+          createBulkCampaign:
+            - "Valid CSV with 100 rows: campaign created with status='pending', totalCount=100, 1 batch doc with 100 phones."
+            - "CSV with 10,001 rows: rejected 400 max_campaign_size_exceeded."
+            - "CSV with malformed E.164 numbers on rows 3 and 7: rejected 400 with errors listing lines 3 and 7."
+            - "Bulk credits balance = 0: rejected 402 insufficient_bulk_credits."
+            - "Invalid appId/appSecret: rejected 403."
+            - "Message exceeding 459 chars: rejected 400."
+            - "Empty message: rejected 400."
+            - "Missing csvFile field: rejected 400."
+          dispatchBulkJobs:
+            - "Campaign in 'pending' state: transitions to 'sending', first batch dispatched to RTDB."
+            - "Campaign in 'paused' state: zero jobs dispatched on scheduler tick."
+            - "Campaign in 'cancelled' state: zero jobs dispatched."
+            - "Dispatch tick: exactly BULK_DISPATCH_BATCH_SIZE job nodes written to RTDB."
+            - "Duplicate dispatch (same jobId): RTDB set() is idempotent — count of RTDB nodes does not increase."
+            - "dispatchCursor increments after each batch is dispatched."
+          campaignLifecycle:
+            - "pauseCampaign on sending campaign: status = 'paused', pausedAt set."
+            - "pauseCampaign on already-paused campaign: 409 campaign_not_pausable."
+            - "pauseCampaign on completed campaign: 409 campaign_not_pausable."
+            - "cancelCampaign by admin on sending campaign: status = 'cancelled', pending RTDB jobs deleted, credits refunded."
+            - "cancelCampaign on completed campaign: 409 campaign_already_terminal."
+            - "cancelCampaign by non-admin: 403 admin_only."
+            - "retryFailedJobs on completed campaign with failures: failed RTDB jobs reset to pending, status = 'sending'."
+            - "retryFailedJobs on sending campaign: 409 retry_not_allowed."
+            - "onBulkJobStatusChange 'sent': sentCount incremented in Firestore."
+            - "onBulkJobStatusChange 'sent' — last job: status = 'completed', completedAt set."
+            - "onBulkJobStatusChange 'failed' with attempts < maxRetries: RTDB job reset to 'pending'."
+            - "onBulkJobStatusChange 'failed' with attempts == maxRetries: failedCount incremented, failed_jobs audit record written with hashed phone."
+          bulkCredits:
+            - "approveBulkCredit on pending transaction: balance incremented, status = 'approved'."
+            - "approveBulkCredit called twice: second call returns 409 already_resolved, balance unchanged."
+            - "getBulkCredits with no document: returns { balance: 0, lifetimePurchased: 0 }."
+            - "submitBulkTrxId with duplicate trxId from another transaction: rejected."
+          security:
+            - "createBulkCampaign with no auth: 403."
+            - "getCampaignStatus for another tenant's campaign: 403 access_denied."
+            - "pauseCampaign for another tenant's campaign: 403."
+            - "cancelCampaign by non-admin caller: 403 admin_only."
+            - "approveBulkCredit by non-admin caller: 403."
+            - "Direct RTDB /bulk_sms_queue write by client SDK: denied by RTDB rules."
+            - "Direct Firestore bulk_campaigns write by non-owner client SDK: denied by Firestore rules."
+          e2e_bulk:
+            - "Full cycle via emulator: create campaign → dispatchBulkJobs tick → simulate Android sets status='sent' → BCF-07 fires → sentCount=totalCount → status='completed'."
+            - "OTP sendOtp still works after bulk system deployed: non-regression smoke test."
+        verification:
+          - type: command
+            run: "cd functions && npm test -- --testPathPattern=test/bulk/"
+            expect_exit: 0
+        depends_on:
+          [BCF-01, BCF-02, BCF-03, BCF-04, BCF-05, BCF-06, BCF-07, BCF-08]
+        priority: critical
+        notes: >
+          The e2e_bulk test must simulate the Android device by writing status='sent' to
+          /bulk_sms_queue/{jobId} via the Firebase Admin SDK in the test setup.
+          This is the correct simulation because BCF-07 is an RTDB onUpdate trigger — it
+          fires on field writes, not on node deletion.
+
+      - id: BCF-11
+        status: "todo"
+        task: "Add CORS middleware and HTTP method guards to all bulk HTTPS Cloud Functions"
+        files_to_modify:
+          - "functions/src/bulk/createBulkCampaign.js"
+          - "functions/src/bulk/getCampaignStatus.js"
+          - "functions/src/bulk/pauseCampaign.js"
+          - "functions/src/bulk/cancelCampaign.js"
+          - "functions/src/bulk/retryFailedJobs.js"
+          - "functions/src/bulk/upsertBulkPackage.js"
+          - "functions/src/bulk/requestBulkCredit.js"
+          - "functions/src/bulk/submitBulkTrxId.js"
+          - "functions/src/bulk/approveBulkCredit.js"
+          - "functions/src/bulk/getBulkCredits.js"
+        changes:
+          - "Import and apply the existing CORS middleware used by OTP functions (e.g. functions/src/middleware/cors.js). Do not create a new CORS utility — reuse what exists."
+          - "Method guards: createBulkCampaign accepts POST only, getCampaignStatus accepts GET only, all other HTTPS functions accept POST only. Return 405 { error: 'method_not_allowed', allowed: ['POST'] } for disallowed methods."
+          - "Handle CORS preflight OPTIONS requests: immediately return 204 with CORS headers, before any auth or business logic."
+          - "Allowed origins: read from BULK_SMS_CORS_ORIGIN env var. Default to CORS_ORIGIN if set; otherwise deny all cross-origin requests (do not default to wildcard *). Flag if neither var is set."
+          - "All error responses must include Content-Type: application/json header and a JSON body with at minimum: { error: string, message?: string }. Never return HTML error pages from HTTPS Cloud Functions."
+        verification:
+          - type: contains
+            file: "functions/src/bulk/createBulkCampaign.js"
+            patterns:
+              - "cors\\|CORS\\|Access-Control"
+              - "method.*POST\\|req\\.method"
+              - "OPTIONS\\|preflight"
+              - "method_not_allowed\\|405"
+          - type: anti_pattern_check
+            file: "functions/src/bulk/createBulkCampaign.js"
+            forbidden: "Access-Control-Allow-Origin.*\\*"
+            description: "Wildcard CORS origin is forbidden — use env var BULK_SMS_CORS_ORIGIN"
+        depends_on: [BCF-01, BCF-03, BCF-04, BCF-05, BCF-06, BCF-08]
+        priority: high
+        notes: >
+          ⚠️ FLAG: BULK_SMS_CORS_ORIGIN is a new environment variable.
+          Add it to functions/.env.example and docs/Plan/11-ENV-VARS.md.
+          Without CORS headers, the CreateCampaignPage in the React dashboard will
+          fail with a CORS preflight error on every call.
+
+      - id: BCF-12
+        status: "todo"
+        task: "Configure memory, timeout, and concurrency settings for all new Cloud Functions"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "createBulkCampaign: memory = '512MiB', timeoutSeconds = 540. Rationale: CSV parsing and batched Firestore writes for 10,000 recipients can consume significant memory; 9-min timeout allows large batch creation."
+          - "dispatchBulkJobs: memory = '256MiB', timeoutSeconds = 540. Rationale: 540s matches maximum Cloud Scheduler window; scheduler fires every 60s so timeout is effectively unbounded."
+          - "onBulkJobStatusChange: memory = '256MiB', timeoutSeconds = 60. Rationale: Counter update is a fast transaction; short timeout prevents runaway trigger loops."
+          - "getCampaignStatus: memory = '256MiB', timeoutSeconds = 30. Fast read-only function."
+          - "pauseCampaign / cancelCampaign / retryFailedJobs: memory = '256MiB', timeoutSeconds = 120. cancelCampaign requires time for RTDB batch deletes."
+          - "All billing functions (upsertBulkPackage, requestBulkCredit, submitBulkTrxId, approveBulkCredit, getBulkCredits): memory = '256MiB', timeoutSeconds = 60."
+          - "Apply settings using functions.runWith({ memory, timeoutSeconds }) (Gen1) or options object (Gen2). Match whatever runtime version the project uses."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            patterns:
+              - "512MiB\\|512M\\|memory.*512"
+              - "timeoutSeconds.*540\\|540.*timeout"
+              - "createBulkCampaign.*runWith\\|runWith.*createBulkCampaign"
+        depends_on: [BCF-09]
+        priority: high
+        notes: >
+          ⚠️ FLAG: Memory and timeout values above are recommendations based on known
+          workload characteristics. Verify against actual performance profiling in staging
+          before locking in for production. Overly high memory allocations increase
+          billing costs; too low causes OOM crashes on large campaigns.
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  - id: B3
+    name: "Android App Modifications"
+    blocking: true
+    description: >
+      Extend the existing Kotlin foreground service to: listen to the new
+      /bulk_sms_queue RTDB node alongside /pending_sms; enforce a cross-queue
+      device-level rate limiter (minimum 2 seconds between any two SMS sends);
+      write status ('sent' or 'failed') to RTDB before job deletion so BCF-07
+      can fire; and propagate error codes from SmsManager for retry intelligence.
+      The existing /pending_sms flow and its OA3–OA5 implementation must remain
+      completely unmodified.
+    items:
+      - id: BAN-01
+        status: "todo"
+        task: "Implement a global cross-queue SMS rate limiter in the Android foreground service"
+        files_to_modify:
+          - "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+        changes:
+          - "Add: private val smsHandlerThread = HandlerThread('sms-rate-limiter').also { it.start() }"
+          - "Add: private val smsHandler = Handler(smsHandlerThread.looper)"
+          - "Add: private val MIN_INTERVAL_MS: Long = 2000L  // 30 SMS/min max — carrier-safe"
+          - "Add: @Volatile private var lastSendTimestampMs: Long = 0L"
+          - "Add private fun enqueueSend(to: String, message: String, priority: SmsJobPriority = SmsJobPriority.BULK, onSuccess: () -> Unit, onFailure: (error: String) -> Unit): Unit."
+          - "SmsJobPriority enum: OTP (higher, posts with 0ms delay ignoring MIN_INTERVAL_MS), BULK (normal, posts with computed delay)."
+          - "OTP priority: when priority == OTP, remove all pending BULK Runnables from smsHandler queue (smsHandler.removeCallbacksAndMessages(BULK_TOKEN)), then post the OTP Runnable immediately at the front. This ensures OTP sends are never starved behind a long bulk burst."
+          - "BULK priority: computes delay = maxOf(0L, MIN_INTERVAL_MS - (SystemClock.elapsedRealtime() - lastSendTimestampMs)) and posts normally."
+          - "enqueueSend computes: val delay = maxOf(0L, MIN_INTERVAL_MS - (SystemClock.elapsedRealtime() - lastSendTimestampMs))"
+          - "enqueueSend posts a Runnable to smsHandler with that delay. Inside the Runnable: set lastSendTimestampMs = SystemClock.elapsedRealtime(), then call the existing SmsManager.sendTextMessage() logic."
+          - "The enqueueSend method is the ONLY way to invoke SmsManager.sendTextMessage() anywhere in this class."
+          - "The existing /pending_sms (OTP) ChildEventListener must call enqueueSend(..., priority = SmsJobPriority.OTP, ...) to ensure OTP messages always preempt bulk."
+          - "Start smsHandlerThread in onStartCommand. Stop it in onDestroy via smsHandlerThread.quitSafely()."
+          - "This rate limiter is shared by both /pending_sms (OTP) and /bulk_sms_queue (bulk) sends."
+        verification:
+          - type: contains
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            patterns:
+              - "MIN_INTERVAL_MS"
+              - "smsHandler\\|HandlerThread"
+              - "enqueueSend"
+              - "lastSendTimestampMs"
+              - "SmsJobPriority\\|OTP.*priority\\|priority.*OTP"
+              - "removeCallbacksAndMessages\\|BULK_TOKEN"
+          - type: anti_pattern_check
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            forbidden: "SmsManager.*sendTextMessage.*(?!enqueueSend)"
+            description: "All SmsManager.sendTextMessage() calls must go through enqueueSend — direct calls bypass the rate limiter"
+        depends_on: []
+        priority: critical
+        security_notes:
+          - "MIN_INTERVAL_MS = 2000ms enforces a maximum of 30 SMS/min, matching BULK_SMS_RATE_LIMIT_PER_MINUTE default. Do not reduce below 1500ms (40/min)."
+          - "The Android rate limiter is the last hardware-level defence against carrier blocking. The Cloud Function dispatcher (BCF-02) is the first software-level control."
+        notes: >
+          ⚠️ FLAG: MIN_INTERVAL_MS is hardcoded to 2000L. For future flexibility, this
+          should be configurable via Firebase Remote Config without an APK release. Flag
+          for v1.1 scope. Add a TODO comment: // TODO (v1.1): read MIN_INTERVAL_MS from
+          Firebase Remote Config with 2000L as fallback.
+
+      - id: BAN-02
+        status: "todo"
+        task: "Add a `ChildEventListener` for `/bulk_sms_queue` in the foreground service"
+        files_to_modify:
+          - "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+        changes:
+          - "Add: private lateinit var bulkQueueRef: DatabaseReference  // = database.getReference('bulk_sms_queue')"
+          - "Add: private val bulkQueueListener = object : ChildEventListener { ... }"
+          - "In onChildAdded: extract jobId (snapshot.key), to (snapshot.child('to').value as String), message (snapshot.child('message').value as String), campaignId (snapshot.child('campaignId').value as String)."
+          - "Call: enqueueSend(to = to, message = message, priority = SmsJobPriority.BULK, onSuccess = { updateBulkJobStatus(jobId, 'sent', null) }, onFailure = { errorCode -> updateBulkJobStatus(jobId, 'failed', errorCode) })"
+          - "CRITICAL — In onChildChanged: BCF-07 retries failed jobs by updating the RTDB node's status back to 'pending' and resetting attempts. Without handling this event, retried jobs are silently ignored. Handle onChildChanged: if snapshot.child('status').value == 'pending': re-call enqueueSend for the job (same logic as onChildAdded). If status is anything else (e.g. 'sent' or 'failed' written by this device), ignore — these are self-writes."
+          - "In onChildRemoved: BCF-07 removes nodes after they are fully processed. Cancel any pending Runnables in smsHandler for the removed jobId (via handler token keyed to jobId). This prevents processing a job whose node no longer exists."
+          - "In onCancelled: log the RTDB DatabaseError. Do NOT crash. Schedule a listener re-attach with 5-second exponential backoff."
+          - "Add private fun updateBulkJobStatus(jobId: String, status: String, error: String?): write Map('status' to status, 'error' to error) to /bulk_sms_queue/{jobId} using updateChildren(). Do NOT call removeValue() — BCF-07 deletes the node after processing."
+          - "Attach bulkQueueListener in onStartCommand after Firebase auth succeeds (same lifecycle position as /pending_sms listener)."
+          - "Remove bulkQueueListener in onDestroy alongside the /pending_sms listener removal."
+          - "Do NOT modify the existing /pending_sms ChildEventListener in any way."
+        verification:
+          - type: contains
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            patterns:
+              - "bulk_sms_queue"
+              - "bulkQueueListener\\|bulkQueueRef"
+              - "updateBulkJobStatus"
+              - "status.*sent"
+              - "onChildChanged"
+              - "onChildRemoved"
+              - "onCancelled.*bulk\\|bulk.*onCancelled"
+              - "status.*pending.*retry\\|retry.*pending"
+          - type: anti_pattern_check
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            forbidden: "bulk_sms_queue.*removeValue\\|removeValue.*bulk_sms_queue"
+            description: "CRITICAL: bulk queue jobs must NOT be deleted by the Android app. BCF-07 deletes nodes after the status update trigger fires."
+        depends_on: [BAN-01, BCFS-04]
+        priority: critical
+        notes: >
+          CRITICAL DIFFERENCE from the /pending_sms (OTP) flow:
+            /pending_sms: Android calls removeValue() on the node directly on success.
+            /bulk_sms_queue: Android calls updateChildren({ status: 'sent' }) BEFORE any deletion.
+          The BCF-07 RTDB onUpdate trigger fires on the status field change, then deletes
+          the node after updating Firestore counters. If the Android app calls removeValue()
+          directly, the onDelete trigger fires instead of onUpdate — BCF-07 uses onUpdate,
+          so the counter update would be silently skipped. This is the most critical
+          implementation detail in Phase B3.
+
+      - id: BAN-03
+        status: "todo"
+        task: "Propagate SmsManager error codes to RTDB and implement send timeout guard"
+        files_to_modify:
+          - "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+        changes:
+          - "In the SmsManager SentIntent PendingIntent callback: map Android result codes to human-readable error strings:"
+          - "  SmsManager.RESULT_ERROR_GENERIC_FAILURE → 'generic_failure'"
+          - "  SmsManager.RESULT_ERROR_NO_SERVICE → 'no_service'"
+          - "  SmsManager.RESULT_ERROR_RADIO_OFF → 'radio_off'"
+          - "  SmsManager.RESULT_ERROR_NULL_PDU → 'null_pdu'"
+          - "  Other codes → 'unknown_error_$resultCode'"
+          - "On any error code: call updateBulkJobStatus(jobId, 'failed', mappedErrorString). BCF-07 handles retry logic."
+          - "Timeout guard: in enqueueSend, after posting the send Runnable, post a secondary timeout Runnable to smsHandler with 30_000L delay: if SentIntent has not yet been received (use AtomicBoolean resolved flag), call updateBulkJobStatus(jobId, 'failed', 'send_timeout')."
+          - "Do NOT retry on the Android side. All retry logic is server-side in BCF-07."
+        verification:
+          - type: contains
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            patterns:
+              - "RESULT_ERROR_GENERIC_FAILURE\\|RESULT_ERROR_NO_SERVICE"
+              - "send_timeout"
+              - "updateBulkJobStatus.*failed"
+              - "AtomicBoolean\\|resolved"
+        depends_on: [BAN-02]
+        priority: high
+        notes: >
+          The 30-second timeout guard prevents zombie jobs: if the device silently loses
+          SMS capability (no failure callback from the OS), the job is explicitly failed
+          after 30 seconds. Without this guard, jobs remain 'pending' indefinitely and
+          the campaign can never reach 'completed' state.
+
+      - id: BAN-04
+        status: "todo"
+        task: "Update foreground service notification to show combined OTP + bulk queue depth"
+        files_to_modify:
+          - "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+        changes:
+          - "Add a ValueEventListener on /bulk_sms_queue that counts children with status='pending'. Store result in: private var bulkQueueDepth: Int = 0."
+          - "Update the notification content text to: '{otpQueueDepth} OTP pending, {bulkQueueDepth} bulk pending'."
+          - "Refresh the notification whenever either counter changes (call notificationManager.notify() with updated content)."
+          - "Do not change the existing notification channel ID, priority, or icon."
+        verification:
+          - type: contains
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            patterns:
+              - "bulkQueueDepth\\|bulk pending"
+              - "OTP pending"
+        depends_on: [BAN-02]
+        priority: medium
+        notes: >
+          ⚠️ FLAG: This is a UX enhancement. If the ValueEventListener for notification
+          depth update introduces observable performance overhead on low-end devices, defer
+          to v1.1 and keep the existing notification text unchanged.
+
+      - id: BAN-05
+        status: "todo"
+        task: "Increment Android version code and document bulk SMS changes in build.gradle"
+        files_to_modify:
+          - "app/build.gradle"
+        changes:
+          - "Increment versionCode by 1."
+          - "Update versionName to reflect bulk SMS release (follow project's existing versioning scheme)."
+          - "Add comment above the version block: // v{new version} — Bulk SMS: /bulk_sms_queue listener + cross-queue rate limiter (BAN-01–04)"
+        verification:
+          - type: contains
+            file: "app/build.gradle"
+            patterns:
+              - "versionCode"
+              - "Bulk SMS\\|bulk_sms_queue"
+        depends_on: [BAN-01, BAN-02, BAN-03]
+        priority: medium
+
+      - id: BAN-06
+        status: "todo"
+        task: "Support multi-segment SMS (>160 chars) and multi-SIM device configuration"
+        files_to_modify:
+          - "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+        changes:
+          - "Replace SmsManager.sendTextMessage() in the enqueueSend Runnable with a branch: if message.length > 160, call SmsManager.sendMultipartTextMessage(). Use SmsManager.divideMessage(message) to split, then sendMultipartTextMessage(destinationAddress, scAddress, parts, sentIntents, deliveryIntents)."
+          - "Multi-SIM support: read subscriptionId from SharedPreferences key 'sms_subscription_id' (default to -1 = system default). If subscriptionId != -1, obtain: val manager = SmsManager.getSmsManagerForSubscriptionId(subscriptionId). Otherwise use SmsManager.getDefault()."
+          - "Expose a settings screen toggle (or document as admin-set preference) to configure the preferred SIM subscription ID on dual-SIM devices."
+          - "Sent/delivery intents: for multipart messages, provide one SentIntent PendingIntent per part. Report job as 'sent' only when ALL part SentIntents succeed. Report as 'failed' if any part SentIntent returns an error code."
+          - "Timeout guard from BAN-03 must cover the entire multipart send (not just one part)."
+        verification:
+          - type: contains
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            patterns:
+              - "sendMultipartTextMessage\\|divideMessage"
+              - "getSmsManagerForSubscriptionId\\|subscriptionId"
+              - "sms_subscription_id\\|SharedPreferences.*subscription"
+          - type: anti_pattern_check
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            forbidden: "sendTextMessage.*message\\.length.*>\\s*160"
+            description: "Messages over 160 chars must use sendMultipartTextMessage, never sendTextMessage (which silently truncates)"
+        depends_on: [BAN-02, BAN-03]
+        priority: high
+        notes: >
+          The bulk SMS campaign schema allows messages up to 459 chars (3 segments).
+          Without sendMultipartTextMessage, messages >160 chars are silently truncated
+          by the Android API, delivering incomplete messages and wasting credits.
+          This is a silent data-integrity bug — no error is returned on truncation.
+
+      - id: BAN-07
+        status: "todo"
+        task: "Implement Firebase Auth token refresh and RTDB listener reconnection logic"
+        files_to_modify:
+          - "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+        changes:
+          - "Add FirebaseAuth.getInstance().addAuthStateListener in onStartCommand: if user signs out or token is revoked, immediately stop both /pending_sms and /bulk_sms_queue listeners, then attempt re-auth."
+          - "Add FirebaseDatabase.getInstance().getReference('.info/connected').addValueEventListener to detect RTDB connectivity state. When connected = false: log 'RTDB disconnected, queuing paused'. When connected = true: re-attach both ChildEventListeners if they are not already active."
+          - "Reconnection backoff: on repeated disconnections within 60 seconds, apply exponential backoff (2s, 4s, 8s, max 60s) before re-attaching listeners to avoid hammering the server."
+          - "Token refresh: call FirebaseAuth.getInstance().currentUser?.getIdToken(true) before re-attaching listeners after a connectivity gap > 30 minutes, to force an ID token refresh."
+          - "Log all connectivity transitions at INFO level. Do NOT log auth tokens or user IDs at any log level."
+        verification:
+          - type: contains
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            patterns:
+              - ".info/connected\\|connected.*RTDB"
+              - "addAuthStateListener\\|AuthStateListener"
+              - "reconnect\\|re-attach\\|reattach"
+              - "getIdToken.*true\\|forceRefresh"
+        depends_on: [BAN-02]
+        priority: high
+        notes: >
+          Without reconnection logic, an RTDB connectivity blip (e.g. network timeout)
+          will silently stop job processing. The service remains running but no new jobs
+          are processed until the app is restarted. This is invisible to the operator
+          and will cause stalled campaigns.
+
+      - id: BAN-08
+        status: "todo"
+        task: "Add wake-lock management and battery optimization bypass guidance for dedicated devices"
+        files_to_modify:
+          - "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+          - "app/src/main/AndroidManifest.xml"
+          - "docs/Modification Bulk/device-setup-guide.md"
+        changes:
+          - "In SmsDispatchService.onStartCommand: acquire a PARTIAL_WAKE_LOCK when there are jobs in the bulk queue (bulkQueueDepth > 0). Release it when bulkQueueDepth returns to 0. Wake lock tag: 'Authenticator:BulkSmsWakeLock'."
+          - "In AndroidManifest.xml: add permission: <uses-permission android:name='android.permission.WAKE_LOCK' />"
+          - "Create docs/Modification Bulk/device-setup-guide.md documenting the recommended setup for dedicated SMS gateway devices:"
+          - "  (1) Disable battery optimisation for the Authenticator app: Settings > Battery > Battery Optimisation > All Apps > Authenticator > Don't Optimise."
+          - "  (2) Enable auto-start (if OEM supports it) to ensure the foreground service survives reboots."
+          - "  (3) Disable adaptive battery and screen-off restrictions for the app."
+          - "  (4) Keep the device on a stable Wi-Fi + power connection; mobile data alone may cause higher RTDB latency."
+        verification:
+          - type: contains
+            file: "app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+            patterns:
+              - "WAKE_LOCK\\|WakeLock\\|wakeLock"
+              - "PowerManager"
+          - type: contains
+            file: "app/src/main/AndroidManifest.xml"
+            patterns:
+              - "android.permission.WAKE_LOCK"
+          - type: file_exists
+            path: "docs/Modification Bulk/device-setup-guide.md"
+        depends_on: [BAN-04]
+        priority: medium
+        notes: >
+          On stock Android, aggressive battery optimisation kills foreground services
+          during low-battery or idle periods. For a dedicated SMS gateway device, the
+          operator must explicitly disable battery optimisation. The device-setup-guide.md
+          is the runbook for provisioning new gateway devices.
+
+      - id: BAN-09
+        status: "todo"
+        task: "Write Android unit and instrumentation tests for BAN-01 through BAN-07"
+        files_to_create:
+          - "app/src/test/java/com/authenticator/service/SmsRateLimiterTest.kt"
+          - "app/src/test/java/com/authenticator/service/BulkQueueListenerTest.kt"
+          - "app/src/androidTest/java/com/authenticator/service/SmsDispatchIntegrationTest.kt"
+        test_cases:
+          unit_SmsRateLimiterTest:
+            - "Enqueue 5 BULK jobs: timestamps are MIN_INTERVAL_MS apart (Robolectric ShadowSystemClock)."
+            - "Enqueue 1 OTP job after 4 BULK jobs are queued: OTP job fires first (delay == 0), BULK jobs continue after."
+            - "Two concurrent enqueueSend OTP calls: both execute, neither is dropped."
+            - "MIN_INTERVAL_MS = 2000: no two SMS fire less than 1990ms apart (10ms jitter tolerance)."
+          unit_BulkQueueListenerTest:
+            - "onChildAdded with status='pending': enqueueSend called once."
+            - "onChildChanged with status='pending': enqueueSend called again (retry path)."
+            - "onChildChanged with status='sent': enqueueSend NOT called (self-write filter)."
+            - "onChildRemoved: pending Runnable for that jobId is cancelled, no NullPointerException."
+            - "onCancelled: listener re-attach is scheduled with backoff."
+          instrumentation_SmsDispatchIntegrationTest:
+            - "Service starts, connects to Firebase Test emulator, receives 3 bulk jobs: updateBulkJobStatus called 3 times with 'sent'."
+            - "RTDB connection drops mid-batch: service detects disconnection, reconnects, continues processing remaining jobs."
+        verification:
+          - type: command
+            run: "cd app && ./gradlew testDebugUnitTest --tests '*.SmsRateLimiterTest' --tests '*.BulkQueueListenerTest'"
+            expect_exit: 0
+        depends_on: [BAN-01, BAN-02, BAN-03, BAN-06, BAN-07]
+        priority: critical
+        notes: >
+          Use Robolectric for unit tests (no emulator needed). For instrumentation tests,
+          point Firebase config at the local emulator suite:
+          FirebaseApp.initializeApp(context, FirebaseOptions.Builder()...build())
+          Set RTDB emulator host in test setup: database.useEmulator('localhost', 9000).
+
+      - id: BAN-10
+        status: "todo"
+        task: "Build, sign, and deploy updated APK to dedicated SMS gateway device(s)"
+        files_to_modify:
+          - "app/build.gradle"
+        changes:
+          - "Ensure keystore credentials are stored in environment variables (not hardcoded in build.gradle): KEYSTORE_PATH, KEYSTORE_PASS, KEY_ALIAS, KEY_PASS."
+          - "Build release APK: ./gradlew assembleRelease"
+          - "Verify APK signature: apksigner verify --verbose app/build/outputs/apk/release/app-release.apk"
+          - "Install on device via ADB: adb install -r app/build/outputs/apk/release/app-release.apk"
+          - "Verify service auto-starts after install: adb shell am start-foreground-service com.authenticator/.service.SmsDispatchService"
+          - "Rollback procedure: keep the previous APK at a known path (e.g. releases/app-{previousVersionCode}-release.apk). To roll back: adb install -r releases/app-{previousVersionCode}-release.apk."
+          - "Document the gateway device IMEI/serial number, Android version, and SIM card details in the device registry at docs/Modification Bulk/device-registry.md."
+        verification:
+          - type: anti_pattern_check
+            file: "app/build.gradle"
+            forbidden: 'storePassword.*=.*[''"][^$]'
+            description: "Keystore password must never be hardcoded in build.gradle — must reference env var or gradle.properties (gitignored)"
+          - type: manual_check
+            description: "APK installed on device, SmsDispatchService foreground notification visible, OTP + bulk smoke tests pass."
+        depends_on: [BAN-01, BAN-02, BAN-03, BAN-06, BAN-07, BAN-09, BAN-05]
+        priority: critical
+        notes: >
+          Rollback APK must be retained for at least 30 days post-deployment.
+          If the device is remote, document the ADB-over-TCP procedure or
+          TeamViewer/MDM-based deployment alternative in device-setup-guide.md.
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  - id: B4
+    name: "Web UI (React) Additions"
+    blocking: false
+    description: >
+      Add bulk SMS pages and components to the existing React dashboard.
+      All new files live under web/src/pages/bulk/ and web/src/components/bulk/.
+      The feature is gated by the VITE_BULK_SMS_ENABLED environment variable.
+      Existing routes, components, and pages must remain unmodified unless a
+      task explicitly states an edit. Do not restructure any existing file.
+    items:
+      - id: BUI-00
+        status: "todo"
+        task: "Create `BulkSmsFeatureGuard` component and add bulk routes to React Router"
+        files_to_create:
+          - "web/src/components/bulk/BulkSmsFeatureGuard.jsx"
+        files_to_modify:
+          - "web/src/router.jsx"
+        changes:
+          - "BulkSmsFeatureGuard: reads import.meta.env.VITE_BULK_SMS_ENABLED. If falsy, renders <Navigate to='/dashboard' /> and shows a toast: 'Bulk SMS is not available on your plan.'"
+          - "Add three client-protected routes inside the existing auth guard:"
+          - "  { path: '/bulk', element: <BulkSmsFeatureGuard><BulkCampaignsPage /></BulkSmsFeatureGuard> }"
+          - "  { path: '/bulk/create', element: <BulkSmsFeatureGuard><CreateCampaignPage /></BulkSmsFeatureGuard> }"
+          - "  { path: '/bulk/:campaignId', element: <BulkSmsFeatureGuard><CampaignDetailPage /></BulkSmsFeatureGuard> }"
+          - "Do NOT modify any existing route definitions."
+        verification:
+          - type: file_exists
+            path: "web/src/components/bulk/BulkSmsFeatureGuard.jsx"
+          - type: contains
+            file: "web/src/router.jsx"
+            patterns:
+              - "/bulk"
+              - "BulkCampaignsPage"
+              - "CreateCampaignPage"
+              - "CampaignDetailPage"
+              - "BulkSmsFeatureGuard"
+          - type: anti_pattern_check
+            file: "web/src/router.jsx"
+            forbidden: "Route.*path.*'/dashboard'.*component.*null"
+            description: "Existing /dashboard route must not be modified"
+        depends_on: []
+        priority: critical
+
+      - id: BUI-01
+        status: "todo"
+        task: "Create `BulkCampaignsPage` — campaign list with live status badges"
+        files_to_create:
+          - "web/src/pages/bulk/BulkCampaignsPage.jsx"
+          - "web/src/hooks/useBulkCampaigns.js"
+        ui_requirements:
+          - "useBulkCampaigns hook: subscribes to Firestore bulk_campaigns via onSnapshot, filtered by ownerUid == auth.currentUser.uid, ordered by createdAt DESC, limited to 10. Exposes { campaigns, loading, error, loadMore }."
+          - "Renders a table or card list: campaign name, status badge (colour-coded: pending=grey, sending=blue, paused=amber, completed=green, cancelled=red, failed=red), totalCount, sentCount, failedCount, progressPercent (one decimal place)."
+          - "Each row or card is clickable — navigates to /bulk/:campaignId."
+          - "Empty state: 'No bulk campaigns yet.' with 'Create Your First Campaign' CTA button."
+          - "'Create Campaign' primary button in the page header navigates to /bulk/create."
+          - "Pagination: 'Load More' button that calls loadMore() for cursor-based Firestore pagination."
+        verification:
+          - type: file_exists
+            paths:
+              - "web/src/pages/bulk/BulkCampaignsPage.jsx"
+              - "web/src/hooks/useBulkCampaigns.js"
+          - type: contains
+            file: "web/src/pages/bulk/BulkCampaignsPage.jsx"
+            patterns:
+              - "onSnapshot\\|useBulkCampaigns"
+              - "status.*badge\\|badge.*status"
+              - "progressPercent"
+              - "/bulk/create"
+        depends_on: [BUI-00, BCF-03]
+        priority: critical
+        notes: >
+          Real-time updates via Firestore onSnapshot are preferred over polling. The
+          composite index BCFS-06 (ownerUid ASC, createdAt DESC) must be deployed before
+          this page will load without a Firestore index error.
+
+      - id: BUI-02
+        status: "todo"
+        task: "Create `CreateCampaignPage` — CSV upload with client-side validation, message composer, preview"
+        files_to_create:
+          - "web/src/pages/bulk/CreateCampaignPage.jsx"
+          - "web/src/components/bulk/CsvUploader.jsx"
+          - "web/src/components/bulk/RecipientPreview.jsx"
+        ui_requirements:
+          - "Form fields: Campaign Name (text input, required), Message (textarea, max 459 chars, required), CSV File (file input, accept='.csv,.txt'), Rate Limit (dropdown: 10/min, 20/min, 30/min, 60/min — default 30/min)."
+          - "CsvUploader: drag-and-drop zone and click-to-browse. After file selection, parses CSV client-side using PapaParse. Shows filename, parsed row count, and first 10 validation errors inline."
+          - "RecipientPreview: table displaying the first 5 valid phone numbers from the parsed CSV and a '… and N more recipients' summary row."
+          - "Bulk credits balance display: fetches from getBulkCredits CF on mount. Shows warning banner if balance < parsed row count: 'Insufficient bulk credits. Available: X, Required: Y. Purchase more below.'"
+          - "Message character counter: shows segment count (≤160 = 1 SMS, ≤306 = 2 SMS, ≤459 = 3 SMS) and a note that credits are deducted per SMS segment, not per message."
+          - "Submit button: disabled until CSV is valid (no parse errors), message is non-empty, and credit balance >= row count."
+          - "On submit: call createBulkCampaign CF as multipart/form-data. Show loading spinner. On success: navigate to /bulk/:campaignId. On error: show inline error text from CF response."
+        verification:
+          - type: file_exists
+            paths:
+              - "web/src/pages/bulk/CreateCampaignPage.jsx"
+              - "web/src/components/bulk/CsvUploader.jsx"
+              - "web/src/components/bulk/RecipientPreview.jsx"
+          - type: contains
+            file: "web/src/pages/bulk/CreateCampaignPage.jsx"
+            patterns:
+              - "createBulkCampaign"
+              - "Papa\\.parse\\|PapaParse\\|papaparse"
+              - "insufficient_bulk_credits\\|Insufficient bulk"
+              - "rateLimit"
+              - "segment\\|1 SMS\\|2 SMS"
+        depends_on: [BUI-00, BCF-01, BCF-08]
+        priority: critical
+        notes: >
+          ⚠️ FLAG: papaparse is a new frontend dependency.
+          Justification: client-side CSV validation before upload prevents avoidable
+          round-trips to Cloud Functions for malformed files, improving UX significantly
+          for large CSVs. papaparse is MIT licensed with zero transitive dependencies.
+          Add to web/package.json: "papaparse": "^5.x.x"
+
+      - id: BUI-03
+        status: "todo"
+        task: "Create `CampaignDetailPage` — real-time progress with pause/cancel/retry controls"
+        files_to_create:
+          - "web/src/pages/bulk/CampaignDetailPage.jsx"
+          - "web/src/components/bulk/ProgressBar.jsx"
+          - "web/src/components/bulk/CampaignStats.jsx"
+        ui_requirements:
+          - "Real-time data via Firestore onSnapshot listener on bulk_campaigns/{campaignId}."
+          - "ProgressBar: animated fill bar at (sentCount + failedCount) / totalCount × 100%."
+          - "CampaignStats: totalCount, sentCount (green), failedCount (red), remaining = totalCount - sentCount - failedCount, progressPercent, estimatedFinishAt displayed as human-readable countdown ('Estimated finish: 12 min 30 sec')."
+          - "Status badge: same colour scheme as BulkCampaignsPage."
+          - "Control buttons — conditionally visible based on status:"
+          - "  'Pause' button: visible when status == 'sending'. Calls pauseCampaign CF. Requires confirmation dialog."
+          - "  'Cancel' button: visible when status IN ['sending', 'paused']. Calls cancelCampaign CF. Requires confirmation dialog with text: 'This will cancel all pending jobs and refund unused credits. This action cannot be undone.'"
+          - "  'Retry Failed' button: visible when status IN ['completed', 'failed'] AND failedCount > 0. Calls retryFailedJobs CF."
+          - "Campaign metadata section: name, full message text, appId, createdAt, startedAt, completedAt."
+          - "Back button / breadcrumb: navigates to /bulk."
+        verification:
+          - type: file_exists
+            paths:
+              - "web/src/pages/bulk/CampaignDetailPage.jsx"
+              - "web/src/components/bulk/ProgressBar.jsx"
+              - "web/src/components/bulk/CampaignStats.jsx"
+          - type: contains
+            file: "web/src/pages/bulk/CampaignDetailPage.jsx"
+            patterns:
+              - "onSnapshot"
+              - "pauseCampaign\\|cancelCampaign\\|retryFailedJobs"
+              - "estimatedFinishAt"
+              - "confirmation\\|confirm\\|dialog\\|Dialog"
+        depends_on: [BUI-00, BCF-03, BCF-04, BCF-05, BCF-06]
+        priority: critical
+
+      - id: BUI-04
+        status: "todo"
+        task: "Add Bulk SMS navigation entry to the existing sidebar / navigation component"
+        files_to_modify:
+          - "web/src/components/layout/Sidebar.jsx"
+        changes:
+          - "Locate the existing navigation item list in Sidebar.jsx (or the equivalent nav file if the path differs — use grep to confirm before editing)."
+          - "Insert a new nav item: icon = EnvelopeIcon (or equivalent), label = 'Bulk SMS', href = '/bulk'."
+          - "Wrap the nav item with a conditional: only render when import.meta.env.VITE_BULK_SMS_ENABLED is truthy."
+          - "Position: immediately below 'API Keys' and above 'Billing' in the navigation hierarchy."
+          - "Do not restructure or reorder any existing nav items."
+        verification:
+          - type: contains
+            file: "web/src/components/layout/Sidebar.jsx"
+            patterns:
+              - "/bulk"
+              - "Bulk SMS"
+              - "VITE_BULK_SMS_ENABLED"
+        depends_on: [BUI-00]
+        priority: high
+        notes: >
+          ⚠️ FLAG: If the sidebar component is not located at
+          web/src/components/layout/Sidebar.jsx, locate the correct file using:
+          grep -r 'API Keys' web/src --include='*.jsx' -l
+          before editing. Do NOT create a new Sidebar component.
+
+      - id: BUI-05
+        status: "todo"
+        task: "Create `BulkCreditsWidget` and add it to the existing client dashboard"
+        files_to_create:
+          - "web/src/components/bulk/BulkCreditsWidget.jsx"
+          - "web/src/hooks/useBulkCredits.js"
+        ui_requirements:
+          - "useBulkCredits hook: calls getBulkCredits CF on mount and every 30 seconds. Exposes { balance, lifetimePurchased, loading, error }."
+          - "BulkCreditsWidget: displays 'Bulk SMS Credits: N available'. Shows an amber warning badge ('Low balance') when balance < 100."
+          - "Includes a 'Buy More' link — for v1.0 this may navigate to /billing or show a toast 'Contact admin to purchase bulk credits'."
+          - "Add this widget to the existing client dashboard page in a non-destructive way (append after existing widgets, do not replace any)."
+        verification:
+          - type: file_exists
+            paths:
+              - "web/src/components/bulk/BulkCreditsWidget.jsx"
+              - "web/src/hooks/useBulkCredits.js"
+          - type: contains
+            file: "web/src/components/bulk/BulkCreditsWidget.jsx"
+            patterns:
+              - "getBulkCredits\\|useBulkCredits"
+              - "balance"
+              - "Low balance\\|low.*balance"
+        depends_on: [BUI-00, BCF-08]
+        priority: high
+
+      - id: BUI-06
+        status: "todo"
+        task: "Create admin `BulkPackagesPage` — manage bulk SMS packages"
+        files_to_create:
+          - "web/src/pages/admin/BulkPackagesPage.jsx"
+          - "web/src/hooks/useBulkPackages.js"
+        ui_requirements:
+          - "List all bulk_packages documents ordered by createdAt DESC. Show: name, smsQuota, priceBdt, isActive badge."
+          - "'Create Package' form: fields name (text, required), smsQuota (number, required), priceBdt (number, required), isActive (toggle, default true). On submit: calls upsertBulkPackage CF."
+          - "'Edit Package' inline: click a row to edit. Same fields. Submits to upsertBulkPackage (update mode by passing packageId)."
+          - "'Deactivate' toggle: sets isActive = false. A deactivated package no longer appears in the client requestBulkCredit flow."
+          - "Guard with admin custom claim check. Non-admin access: redirect to /dashboard with toast 'Access denied'."
+        verification:
+          - type: file_exists
+            paths:
+              - "web/src/pages/admin/BulkPackagesPage.jsx"
+              - "web/src/hooks/useBulkPackages.js"
+          - type: contains
+            file: "web/src/pages/admin/BulkPackagesPage.jsx"
+            patterns:
+              - "upsertBulkPackage"
+              - "smsQuota"
+              - "isActive"
+        depends_on: [BUI-00, BCF-08]
+        priority: high
+
+      - id: BUI-07
+        status: "todo"
+        task: "Create admin `BulkTransactionsPage` — approve/reject bulk credit purchase requests"
+        files_to_create:
+          - "web/src/pages/admin/BulkTransactionsPage.jsx"
+          - "web/src/hooks/useBulkTransactions.js"
+        ui_requirements:
+          - "useBulkTransactions hook: subscribes to Firestore bulk_transactions via onSnapshot, ordered by requestedAt DESC, filtered to status='pending' by default. Toggle to show all."
+          - "Table columns: txId (truncated), appId, packageName, smsQuota, amountBdt, trxId (bKash), requestedAt, status badge."
+          - "'Approve' button: calls approveBulkCredit CF with { txId }. Requires confirmation dialog."
+          - "'Reject' button: calls a rejectBulkCredit CF (new, admin-only) with { txId, adminNotes }. Shows a text field for notes."
+          - "After action: row status badge updates in real time via onSnapshot."
+          - "Guard with admin custom claim check."
+        verification:
+          - type: file_exists
+            paths:
+              - "web/src/pages/admin/BulkTransactionsPage.jsx"
+              - "web/src/hooks/useBulkTransactions.js"
+          - type: contains
+            file: "web/src/pages/admin/BulkTransactionsPage.jsx"
+            patterns:
+              - "approveBulkCredit"
+              - "rejectBulkCredit\\|Reject"
+              - "trxId\\|bKash"
+              - "onSnapshot"
+        depends_on: [BUI-00, BCF-08]
+        priority: high
+        notes: >
+          ⚠️ FLAG: rejectBulkCredit CF is referenced here but not defined in BCF-08.
+          Add it as a new function: admin-only, sets bulk_transactions/{txId}.status = 'rejected',
+          records adminUid, adminNotes, rejectedAt. Does NOT modify bulk_credits.
+
+      - id: BUI-08
+        status: "todo"
+        task: "Create admin `AdminCampaignListPage` and `AdminCampaignDetailPage` with failed-jobs log"
+        files_to_create:
+          - "web/src/pages/admin/AdminCampaignListPage.jsx"
+          - "web/src/pages/admin/AdminCampaignDetailPage.jsx"
+          - "web/src/hooks/useAdminCampaigns.js"
+        ui_requirements:
+          - "AdminCampaignListPage: lists ALL campaigns across all tenants, ordered by createdAt DESC. Columns: campaignId (truncated), appId, ownerUid, name, status badge, totalCount, sentCount, failedCount, createdAt."
+          - "AdminCampaignDetailPage: same data as CampaignDetailPage (BUI-03) plus admin actions: 'Force Cancel' (calls cancelCampaign) and 'Retry Failed' (calls retryFailedJobs)."
+          - "Failed jobs log section: reads failed_jobs sub-collection. Table: jobId, phoneHash (display as first 8 chars + '...'), error, attempts, failedAt. Export to CSV button."
+          - "Guard with admin custom claim check."
+        verification:
+          - type: file_exists
+            paths:
+              - "web/src/pages/admin/AdminCampaignListPage.jsx"
+              - "web/src/pages/admin/AdminCampaignDetailPage.jsx"
+          - type: contains
+            file: "web/src/pages/admin/AdminCampaignDetailPage.jsx"
+            patterns:
+              - "failed_jobs"
+              - "phoneHash"
+              - "cancelCampaign\\|Force Cancel"
+        depends_on: [BUI-00, BCF-03, BCF-05, BCF-06]
+        priority: high
+
+      - id: BUI-09
+        status: "todo"
+        task: "Add CSV template download and idempotency token to CreateCampaignPage"
+        files_to_modify:
+          - "web/src/pages/bulk/CreateCampaignPage.jsx"
+        changes:
+          - "CSV template download: add a 'Download CSV Template' link that generates a sample CSV file client-side with headers: phone_number and 3 example rows (+8801XXXXXXXXX format). Use a Blob URL for download."
+          - "Idempotency token: on component mount, generate a UUID (crypto.randomUUID()) and store it in component state as idempotencyKey. Include it in the createBulkCampaign request body. This prevents duplicate campaigns if the user double-clicks Submit or refreshes mid-request."
+          - "If createBulkCampaign returns 200 with an existing campaignId (idempotency hit), navigate to /bulk/{campaignId} as normal — the user sees their existing campaign."
+          - "Regenerate idempotencyKey on successful campaign creation (not on error) to allow retrying after a genuine failure."
+        verification:
+          - type: contains
+            file: "web/src/pages/bulk/CreateCampaignPage.jsx"
+            patterns:
+              - "idempotencyKey\\|idempotency_key"
+              - "randomUUID\\|crypto.randomUUID"
+              - "Download.*CSV\\|csv.*template\\|template.*csv"
+              - "Blob\\|URL.createObjectURL"
+        depends_on: [BUI-02]
+        priority: high
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  - id: B5
+    name: "Testing & Monitoring"
+    blocking: false
+    description: >
+      Comprehensive test coverage to verify: (1) bulk SMS campaigns complete
+      correctly end-to-end, (2) rate limiting prevents carrier blocking at both
+      the Cloud Function and Android layers, (3) the existing OTP flow is
+      completely unaffected by all changes, (4) the campaign state machine
+      is correct for all valid and invalid transitions, and (5) concurrency
+      edge cases (race conditions on counters, duplicate approvals) are handled.
+    items:
+      - id: BTST-01
+        status: "todo"
+        task: "Run the full existing OTP test suite — confirm zero regressions"
+        commands:
+          - "cd functions && npm test -- sendOtp.test.js verifyOtp.test.js otpStatus.test.js"
+          - "cd functions && npm test -- registerApp.test.js revokeApp.test.js updateAppWebhook.test.js regenerateAppSecret.test.js"
+          - "cd functions && npm test -- creditCheck.test.js approveCredit.test.js upsertPackage.test.js"
+          - "cd functions && npm test -- e2e-billing.test.js"
+        expected_outcome: >
+          All existing tests pass with 0 failures. Any single failure is a regression
+          introduced by the bulk SMS changes and must block deployment until resolved.
+        verification:
+          - type: command
+            run: "cd functions && npm test -- sendOtp.test.js verifyOtp.test.js otpStatus.test.js"
+            expect_exit: 0
+          - type: command
+            run: "cd functions && npm test -- creditCheck.test.js approveCredit.test.js"
+            expect_exit: 0
+        depends_on: [BCF-09]
+        priority: critical
+        notes: >
+          This is the highest-priority test in Phase B5. Run it before any other B5 item.
+          Verify that functions/index.js has not had sendOtp or verifyOtp modified:
+          git diff HEAD~1 functions/index.js | grep '^[-+].*sendOtp\|^[-+].*verifyOtp'
+          If any existing OTP export is altered, roll back immediately.
+
+      - id: BTST-02
+        status: "todo"
+        task: "Test Cloud Function rate limiter: verify dispatch throttling with a 500-recipient campaign"
+        files_to_create:
+          - "functions/test/bulk/rateLimit.test.js"
+        test_cases:
+          - "Create a campaign with 500 recipients, rateLimit=30."
+          - "Run 3 simulated dispatchBulkJobs ticks in the emulator."
+          - "After tick 1: exactly 30 RTDB /bulk_sms_queue nodes exist."
+          - "After tick 2: exactly 60 RTDB nodes exist (tick 1 jobs still pending in simulation)."
+          - "Verify no more than BULK_DISPATCH_BATCH_SIZE jobs are written per tick."
+          - "Verify campaign.estimatedFinishAt ≈ now() + (500 / 30 * 60000) ± 120000 ms."
+          - "Verify dispatchCursor increments by 1 per tick."
+        verification:
+          - type: command
+            run: "cd functions && firebase emulators:exec --only functions,firestore,database 'npm test -- bulk/rateLimit.test.js'"
+            expect_exit: 0
+        depends_on: [BCF-02, BCF-10]
+        priority: critical
+
+      - id: BTST-03
+        status: "todo"
+        task: "Test campaign state machine: all valid and invalid status transitions"
+        files_to_create:
+          - "functions/test/bulk/stateMachine.test.js"
+        test_cases:
+          - "pending → sending: triggered by first dispatchBulkJobs tick."
+          - "sending → paused: pauseCampaign succeeds, subsequent dispatcher tick skips the campaign."
+          - "paused → [no direct resume in v1.0]: pauseCampaign on paused → 409 campaign_not_pausable."
+          - "sending → completed: all sentCount + failedCount == totalCount, BCF-07 sets completed."
+          - "sending → cancelled: cancelCampaign by admin, pending RTDB jobs deleted, credits refunded."
+          - "completed → cancelled: 409 campaign_already_terminal."
+          - "cancelled → cancelled: 409 campaign_already_terminal."
+          - "completed with failures → retry: retryFailedJobs resets failedCount=0, status='sending'."
+          - "failed → retry: retryFailedJobs resets all failed RTDB jobs to pending, status='sending'."
+          - "sending + retryFailedJobs: 409 retry_not_allowed."
+        verification:
+          - type: command
+            run: "cd functions && firebase emulators:exec --only functions,firestore,database 'npm test -- bulk/stateMachine.test.js'"
+            expect_exit: 0
+        depends_on: [BCF-04, BCF-05, BCF-06, BCF-07]
+        priority: critical
+
+      - id: BTST-04
+        status: "todo"
+        task: "Test concurrency safety: race conditions on counter updates and credit operations"
+        files_to_create:
+          - "functions/test/bulk/concurrency.test.js"
+        test_cases:
+          - "Concurrent sendOtp calls while a bulk campaign is running: OTP credits (app_credits) not confused with bulk credits."
+          - "Last bulk job: two concurrent onBulkJobStatusChange triggers fire simultaneously — only one sets status='completed', no double-decrement."
+          - "cancelCampaign fires concurrently with the last job completing: refunded credits are correct, no over-refund."
+          - "approveBulkCredit called simultaneously by two admin sessions: only one increments balance (409 on second call)."
+          - "createBulkCampaign called twice with same CSV: two separate campaigns created, each with independent credit deduction."
+        verification:
+          - type: command
+            run: "cd functions && firebase emulators:exec --only auth,functions,firestore,database 'npm test -- bulk/concurrency.test.js'"
+            expect_exit: 0
+        depends_on: [BCF-05, BCF-07, BCF-08]
+        priority: critical
+        notes: >
+          All concurrency safety in this system relies on Firestore runTransaction()
+          calls in BCF-05, BCF-07, and BCF-08. If any of those functions use update()
+          instead of runTransaction() for counter writes, this test suite will produce
+          flaky results under load. A flaky concurrency test is itself a defect.
+
+      - id: BTST-05
+        status: "todo"
+        task: "Manual end-to-end test against staging with 50 recipients and a physical Android device"
+        manual_test_steps:
+          - step: "1. Deploy all B1 and B2 artefacts to a staging Firebase project."
+            expected: "Cloud Functions deployed with 0 errors. dispatchBulkJobs appears in Cloud Scheduler."
+          - step: "2. Purchase 100 bulk credits via dashboard (upsertBulkPackage → requestBulkCredit → submitBulkTrxId → approveBulkCredit)."
+            expected: "Firestore bulk_credits/{appId}.balance = 100."
+          - step: "3. Create a CSV with 50 valid test phone numbers. Upload via CreateCampaignPage."
+            expected: "Campaign created with status='pending', totalCount=50."
+          - step: "4. Wait up to 60 seconds for the first dispatchBulkJobs tick."
+            expected: "30 RTDB /bulk_sms_queue job nodes appear. Campaign status = 'sending'."
+          - step: "5. Connect the Android device running the new APK (BAN-01–04). Observe foreground notification."
+            expected: "Notification reads '30 bulk pending'. Device begins sending SMS."
+          - step: "6. Monitor CampaignDetailPage in real time."
+            expected: "ProgressBar advances. sentCount increments live via Firestore onSnapshot."
+          - step: "7. After 30 jobs are sent, wait for the next scheduler tick (up to 60 sec)."
+            expected: "20 more job nodes appear. sentCount continues incrementing."
+          - step: "8. After all 50 SMS are sent, check campaign document."
+            expected: "status='completed', sentCount=50, failedCount=0, completedAt is set."
+          - step: "9. Verify bulk credit deduction."
+            expected: "bulk_credits/{appId}.balance = 50 (100 - 50)."
+          - step: "10. Immediately send a regular OTP via the API Playground."
+            expected: "OTP received on phone. app_credits (OTP credits) unchanged. Bulk campaign unaffected."
+        verification:
+          - type: manual_check
+            description: "All 10 steps must pass. Record results in a file: docs/Modification Bulk/test-results/bulk-e2e-manual.md with a date stamp."
+        depends_on: [BAN-01, BAN-02, BAN-03, BCF-09, BUI-03]
+        priority: critical
+
+      - id: BTST-06
+        status: "todo"
+        task: "Security audit test: verify all bulk endpoints enforce authentication and tenant isolation"
+        files_to_create:
+          - "functions/test/bulk/security.test.js"
+        test_cases:
+          - "createBulkCampaign with no appId/appSecret: 403."
+          - "createBulkCampaign with valid appId but wrong appSecret: 403."
+          - "getCampaignStatus for a different tenant's campaignId: 403 access_denied."
+          - "pauseCampaign for a different tenant's campaignId: 403."
+          - "cancelCampaign by non-admin authenticated caller: 403 admin_only."
+          - "approveBulkCredit by non-admin authenticated caller: 403."
+          - "upsertBulkPackage by non-admin authenticated caller: 403."
+          - "Unauthenticated RTDB set() to /bulk_sms_queue: denied by RTDB rules (emulator)."
+          - "Authenticated non-owner Firestore write to bulk_campaigns: denied by Firestore rules (emulator)."
+          - "Authenticated non-owner Firestore write to bulk_credits: denied by Firestore rules (emulator)."
+        verification:
+          - type: command
+            run: "cd functions && firebase emulators:exec --only auth,functions,firestore,database 'npm test -- bulk/security.test.js'"
+            expect_exit: 0
+        depends_on: [BCF-01, BCF-03, BCF-04, BCF-05, BCF-08, BCFS-03, BCFS-04]
+        priority: critical
+
+      - id: BTST-07
+        status: "todo"
+        task: "Deploy to production and run smoke tests"
+        commands:
+          - "firebase deploy --only firestore:rules,firestore:indexes,database,storage:rules"
+          - "firebase deploy --only functions"
+          - "cd web && npm run build && firebase deploy --only hosting"
+        post_deploy_checks:
+          - "Verify dispatchBulkJobs appears in Cloud Scheduler UI with 'every 1 minutes' frequency."
+          - "Verify /bulk_sms_queue RTDB node has the .indexOn rule active (Firebase console → Realtime Database → Rules)."
+          - "Call getCampaignStatus with a fake campaignId via curl → expect 404 campaign_not_found (not 500)."
+          - "Attempt a direct RTDB write to /bulk_sms_queue via the browser console Firebase SDK → expect permission denied."
+          - "Run the OTP smoke test: POST to sendOtp with valid production credentials → expect { sessionId, expiresAt }."
+          - "Confirm Firebase console shows 0 errors in the bulk Cloud Functions within 5 minutes of deploy."
+        verification:
+          - type: command
+            run: "firebase deploy --only functions --dry-run"
+            expect_exit: 0
+          - type: manual_check
+            description: "All post_deploy_checks items verified and documented. Deploy to staging first if a staging project is available."
+        depends_on: [BTST-01, BTST-02, BTST-03, BTST-04, BTST-05, BTST-06]
+        priority: critical
+        notes: >
+          Deploy order matters:
+          1. Firestore rules and indexes first (they take time to propagate).
+          2. RTDB rules and Storage rules second.
+          3. Cloud Functions third (dispatchBulkJobs will not fire until Firestore schema is live).
+          4. Hosting last (UI depends on all functions being deployed).
+          Keep the previous Cloud Functions deployment available for rollback:
+          firebase functions:rollback --only createBulkCampaign,dispatchBulkJobs,onBulkJobStatusChange,...
+
+      - id: BTST-08
+        status: "todo"
+        task: "Unit tests for `validators.js`: CSV parser, E.164 validation, and message segmentation"
+        files_to_create:
+          - "functions/test/bulk/validators.test.js"
+        test_cases:
+          parseCsvBuffer:
+            - "Valid CSV with 10 rows, all E.164: returns { phones: [...10 phones], errors: [] }."
+            - "CSV with row 3 containing '+8801 234 567 890' (spaces): normalised to '+88012345678890' or rejected with E.164 error on row 3."
+            - "CSV with row 5 containing '01711000000' (no country code): rejected with E.164 error on row 5."
+            - "CSV with row 8 containing 'not-a-phone': rejected with error on row 8."
+            - "CSV with 10,001 rows: returns exactly 10,000 phones (hard cap) and a warning."
+            - "Empty CSV (header only): returns { phones: [], errors: ['no_recipients'] }."
+            - "CSV with Windows-style CRLF line endings: parsed correctly."
+            - "CSV with UTF-8 BOM prefix: BOM stripped, first row parsed correctly."
+          validateMessage:
+            - "Empty string: returns error."
+            - "160-char string: valid, segments = 1."
+            - "161-char string: valid, segments = 2."
+            - "306-char string: valid, segments = 2."
+            - "307-char string: valid, segments = 3."
+            - "459-char string: valid, segments = 3."
+            - "460-char string: returns error (exceeds 3-segment max)."
+          calcSegmentsPerMessage:
+            - "message.length 1: returns 1."
+            - "message.length 160: returns 1."
+            - "message.length 161: returns 2."
+            - "message.length 306: returns 2."
+            - "message.length 307: returns 3."
+            - "message.length 459: returns 3."
+        verification:
+          - type: command
+            run: "cd functions && npm test -- validators.test.js"
+            expect_exit: 0
+        depends_on: [BCF-00, BCFS-08]
+        priority: critical
+        notes: >
+          These tests have zero external dependencies (no Firebase emulator needed).
+          They can run in under 1 second and must be included in the CI gate on every PR.
+
+      - id: BTST-09
+        status: "todo"
+        task: "Set up Cloud Monitoring alerts for bulk SMS operational health"
+        files_to_create:
+          - "docs/Modification Bulk/monitoring-setup.md"
+        monitoring_alerts:
+          - name: "stalled_campaign"
+            description: "A campaign has been in 'sending' status for > STALL_THRESHOLD_MINUTES (default 30) with no sentCount progress."
+            metric: "firestore.googleapis.com/document/write_count filtered on bulk_campaigns collection"
+            action: "Alert ops team via email or PagerDuty. Check: (1) dispatchBulkJobs scheduler is running, (2) RTDB /bulk_sms_queue has jobs with status='pending', (3) Android device is online."
+          - name: "high_rtdb_bulk_backlog"
+            description: "RTDB /bulk_sms_queue node count exceeds 500 (implies Android device is not consuming jobs)."
+            metric: "Custom metric via Cloud Function that periodically counts /bulk_sms_queue children (add to dispatchBulkJobs)."
+            action: "Alert ops team. Check Android device connectivity, wake-lock status, and SmsManager errors."
+          - name: "cf_bulk_error_rate"
+            description: "Cloud Functions error rate for dispatchBulkJobs or onBulkJobStatusChange exceeds 5 errors in 5 minutes."
+            metric: "cloudfunctions.googleapis.com/function/execution_count filtered on error status."
+            action: "Page on-call engineer. Likely cause: Firestore runTransaction contention or RTDB write failure."
+          - name: "cancelling_status_stuck"
+            description: "A campaign has been in 'cancelling' status for > 5 minutes (implies cancelCampaign crashed mid-execution)."
+            metric: "Firestore query for campaigns with status='cancelling' and updatedAt < now() - 5min."
+            action: "Admin must manually complete the cancellation or trigger the cleanup job."
+        verification:
+          - type: file_exists
+            path: "docs/Modification Bulk/monitoring-setup.md"
+          - type: contains
+            file: "docs/Modification Bulk/monitoring-setup.md"
+            patterns:
+              - "stalled_campaign\\|stall"
+              - "bulk_backlog\\|RTDB.*queue"
+              - "cancelling.*stuck\\|stuck.*cancelling"
+        depends_on: [BCF-02, BCF-07, BTST-07]
+        priority: high
+
+      - id: BTST-10
+        status: "todo"
+        task: "Update CI/CD pipeline to run bulk tests on every PR and pre-deploy"
+        files_to_modify:
+          - ".github/workflows/ci.yml"
+        changes:
+          - "Add a 'bulk-tests' job that runs after 'unit-tests': cd functions && firebase emulators:exec --only functions,firestore,database,auth 'npm test -- --testPathPattern=test/bulk/'"
+          - "Add validators test as a fast pre-check (no emulator): cd functions && npm test -- validators.test.js"
+          - "Add Android unit tests step: cd app && ./gradlew testDebugUnitTest --tests '*.SmsRateLimiterTest' --tests '*.BulkQueueListenerTest'"
+          - "Enforce: if any bulk test fails, block merge (required status check)."
+          - "OTP regression test (BTST-01 commands) must also run in CI: cd functions && npm test -- sendOtp.test.js verifyOtp.test.js."
+          - "DO NOT remove or weaken any existing CI checks."
+        verification:
+          - type: contains
+            file: ".github/workflows/ci.yml"
+            patterns:
+              - "bulk-tests\\|bulk tests"
+              - "validators.test.js"
+              - "SmsRateLimiterTest"
+              - "firebase emulators:exec"
+          - type: anti_pattern_check
+            file: ".github/workflows/ci.yml"
+            forbidden: "sendOtp.test.js.*#.*removed\\|# bulk tests disabled"
+            description: "Neither OTP tests nor bulk tests may be commented out in CI"
+        depends_on: [BTST-08, BAN-09]
+        priority: high
+        notes: >
+          ⚠️ FLAG: If a .github/workflows/ci.yml does not exist, this task becomes
+          'Create CI/CD pipeline from scratch'. Flag this gap and ask the user before proceeding.
+          Do NOT create a CI file that only runs bulk tests — the OTP regression suite must run too.
+
+      - id: BTST-11
+        status: "todo"
+        task: "Set up Firestore TTL policy and archival for completed bulk campaigns"
+        files_to_create:
+          - "docs/Modification Bulk/data-retention-policy.md"
+        files_to_modify:
+          - "firestore.indexes.json"
+        changes:
+          - "Define retention policy: bulk_campaigns with status IN ['completed', 'cancelled'] and completedAt or cancelledAt older than CAMPAIGN_RETENTION_DAYS (default: 90) should be archived and deleted."
+          - "Enable Firestore TTL: add a TTL policy on bulk_campaigns using a field archiveAt (Firestore Timestamp). Set archiveAt = completedAt + CAMPAIGN_RETENTION_DAYS when a campaign reaches terminal status in BCF-07 or cancelCampaign."
+          - "Alternatively: a scheduled Cloud Function (monthly) moves old campaign metadata to Firebase Storage as JSON, then deletes the Firestore documents."
+          - "recipient_batches sub-collection: delete when the parent bulk_campaigns document is deleted (via Firestore bulk delete or extension)."
+          - "failed_jobs sub-collection: delete alongside parent."
+          - "RTDB: orphaned /bulk_sms_queue jobs (status='pending', createdAt older than BULK_SMS_JOB_TTL_HOURS) must be purged by a scheduled Cloud Function or by dispatchBulkJobs on each tick."
+          - "Document the full policy in docs/Modification Bulk/data-retention-policy.md."
+        verification:
+          - type: file_exists
+            path: "docs/Modification Bulk/data-retention-policy.md"
+          - type: contains
+            file: "docs/Modification Bulk/data-retention-policy.md"
+            patterns:
+              - "retention\\|archiv"
+              - "TTL\\|archiveAt"
+              - "CAMPAIGN_RETENTION_DAYS"
+              - "recipient_batches"
+        depends_on: [BCF-07, BCF-05, BCFS-01]
+        priority: medium
+        notes: >
+          ⚠️ FLAG: Firestore TTL (native) is only available in Firestore in Native mode.
+          If the project uses Firestore in Datastore mode, TTL is not available
+          and a scheduled delete Cloud Function is the only option.
+
+  # ───────────────────────────────────────────────────────────────────────────
+  - id: B6
+    name: "Documentation, Environment Variables & Runbook"
+    blocking: false
+    description: >
+      Ensure all new environment variables, deployment steps, and operational procedures
+      are documented. Update the central ENV-VARS doc and deployment runbook. This phase
+      can run in parallel with B5 but must be complete before BTST-07 (production deploy).
+    items:
+      - id: BDOC-01
+        status: "todo"
+        task: "Update `docs/Plan/11-ENV-VARS.md` with all new bulk SMS environment variables"
+        files_to_modify:
+          - "docs/Plan/11-ENV-VARS.md"
+        new_vars:
+          - "BULK_SMS_RATE_LIMIT_PER_MINUTE — Default SMS/min per campaign. Carrier-safe default: 30."
+          - "BULK_SMS_MAX_PER_CAMPAIGN — Hard cap on recipients per campaign. Default: 10000."
+          - "BULK_SMS_MAX_RETRIES — Max retry attempts per failed job. Default: 3."
+          - "BULK_SMS_DISPATCH_BATCH_SIZE — Jobs pushed to RTDB per scheduler tick. Default: 30."
+          - "BULK_SMS_JOB_TTL_HOURS — Hours before orphaned bulk jobs are purged. Default: 48."
+          - "BULK_SMS_CORS_ORIGIN — Allowed CORS origin for bulk HTTPS Cloud Functions. No wildcard."
+          - "CAMPAIGN_RETENTION_DAYS — Days before completed/cancelled campaigns are archived. Default: 90."
+          - "STALL_THRESHOLD_MINUTES — Minutes of no-progress before stalled campaign alert fires. Default: 30."
+          - "VITE_BULK_SMS_ENABLED — Set to 'true' to show Bulk SMS UI in the React dashboard."
+          - "VITE_BULK_SMS_MAX_CSV_ROWS — Max rows validated client-side by PapaParse preview. Default: 10000."
+        verification:
+          - type: contains
+            file: "docs/Plan/11-ENV-VARS.md"
+            patterns:
+              - "BULK_SMS_RATE_LIMIT_PER_MINUTE"
+              - "BULK_SMS_CORS_ORIGIN"
+              - "CAMPAIGN_RETENTION_DAYS"
+              - "VITE_BULK_SMS_ENABLED"
+        depends_on: [BCFS-07, BCF-11]
+        priority: critical
+        notes: >
+          Per project rules (docs/Plan/11-ENV-VARS.md), every environment variable used
+          in production code must be listed here with a description, whether it has a
+          default, and where to get the value. Do NOT list actual values in this doc.
+
+      - id: BDOC-02
+        status: "todo"
+        task: "Update `docs/Plan/15-RUNBOOK-DEPLOY.md` with bulk SMS deploy sequence and smoke tests"
+        files_to_modify:
+          - "docs/Plan/15-RUNBOOK-DEPLOY.md"
+        changes:
+          - "Add section 'Bulk SMS Deploy Sequence' with the required deploy order:"
+          - "  (1) firebase deploy --only firestore:rules,firestore:indexes (wait for index build: 5-15 min)"
+          - "  (2) firebase deploy --only database (RTDB rules)"
+          - "  (3) firebase deploy --only storage:rules"
+          - "  (4) firebase deploy --only functions"
+          - "  (5) cd web && npm run build && firebase deploy --only hosting"
+          - "  (6) adb install -r app/build/outputs/apk/release/app-release.apk (on gateway device)"
+          - "Add Bulk SMS smoke tests section:"
+          - "  (a) curl -X POST {FUNCTION_URL}/getCampaignStatus?campaignId=fake123 → expect 404 campaign_not_found"
+          - "  (b) firebase database:get /bulk_sms_queue → expect empty or {} (no orphaned jobs)"
+          - "  (c) Open /bulk in browser as authenticated user → expect BulkCampaignsPage renders without JS errors"
+          - "  (d) Send a test OTP via API Playground → expect delivery, confirming OTP non-regression"
+          - "Add Rollback procedure:"
+          - "  Cloud Functions: firebase functions:rollback --only {functionName}"
+          - "  Android: adb install -r releases/app-{previousVersionCode}-release.apk"
+          - "  Firestore rules: revert to previous rules file via git, redeploy"
+        verification:
+          - type: contains
+            file: "docs/Plan/15-RUNBOOK-DEPLOY.md"
+            patterns:
+              - "Bulk SMS Deploy Sequence\\|bulk.*deploy"
+              - "firestore:indexes"
+              - "adb install"
+              - "smoke test\\|smoke tests"
+              - "Rollback\\|rollback"
+        depends_on: [BTST-07, BAN-10]
+        priority: critical
+
+      - id: BDOC-03
+        status: "todo"
+        task: "Create `docs/Modification Bulk/api-reference.md` documenting all new public Cloud Function endpoints"
+        files_to_create:
+          - "docs/Modification Bulk/api-reference.md"
+        required_sections:
+          - "createBulkCampaign: method, URL, auth, request fields (with types and validation), success response, all error codes."
+          - "getCampaignStatus: method, URL, auth, query params, response fields."
+          - "pauseCampaign: method, URL, auth, request, response, 409 conditions."
+          - "cancelCampaign: method, URL, auth (admin only), request, response, refund calculation."
+          - "retryFailedJobs: method, URL, auth, request, response."
+          - "requestBulkCredit / submitBulkTrxId / approveBulkCredit / getBulkCredits: same structure."
+          - "Error codes glossary: all { error: '...' } string values used across all bulk CFs, with HTTP status and description."
+        verification:
+          - type: file_exists
+            path: "docs/Modification Bulk/api-reference.md"
+          - type: contains
+            file: "docs/Modification Bulk/api-reference.md"
+            patterns:
+              - "createBulkCampaign"
+              - "getCampaignStatus"
+              - "insufficient_bulk_credits"
+              - "Error codes"
+        depends_on: [BCF-01, BCF-02, BCF-03, BCF-04, BCF-05, BCF-06, BCF-08]
+        priority: high
+
+# ─────────────────────────────────────────────────────────────────────────────
+failure_conditions:
+  - condition: "Android device rate limiter missing or disabled (MIN_INTERVAL_MS = 0)"
+    check: "grep -c 'MIN_INTERVAL_MS' app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+    action: "BLOCK_DEPLOY — carrier blocking risk is unacceptable without the hardware-level rate limiter"
+
+  - condition: "Android app calls removeValue() on /bulk_sms_queue nodes (BCF-07 trigger will not fire)"
+    check: "grep -A10 'bulk_sms_queue' app/src/main/java/com/authenticator/service/SmsDispatchService.kt | grep -c 'removeValue'"
+    action: "BLOCK_DEPLOY — bulk queue jobs must use updateChildren() to write status, never removeValue()"
+
+  - condition: "dispatchBulkJobs does not respect BULK_DISPATCH_BATCH_SIZE (unlimited push to RTDB)"
+    check: "grep -L 'BULK_DISPATCH_BATCH_SIZE\\|DISPATCH_BATCH_SIZE' functions/src/bulk/dispatchBulkJobs.js"
+    action: "BLOCK_DEPLOY — unbounded dispatch will overwhelm the Android device and trigger carrier blocking"
+
+  - condition: "createBulkCampaign does not check bulk_credits before creating the campaign"
+    check: "grep -L 'insufficient_bulk_credits\\|bulk_credits' functions/src/bulk/createBulkCampaign.js"
+    action: "BLOCK_DEPLOY — campaigns could be created without credit deduction, allowing free bulk SMS"
+
+  - condition: "onBulkJobStatusChange uses update() instead of runTransaction() for counter increments"
+    check: "grep -c 'runTransaction' functions/src/bulk/onBulkJobStatusChange.js"
+    action: "BLOCK_DEPLOY — concurrent status updates will cause lost increments and incorrect campaign completion detection"
+
+  - condition: "cancelCampaign credit refund not wrapped in runTransaction (race condition risk)"
+    check: "grep -L 'runTransaction' functions/src/bulk/cancelCampaign.js"
+    action: "BLOCK_DEPLOY — concurrent completions and cancellations will produce incorrect credit balances"
+
+  - condition: "approveBulkCredit lacks idempotency check on transaction status (double-credit risk)"
+    check: "grep -L 'already_resolved\\|status.*pending\\|pending.*status' functions/src/bulk/approveBulkCredit.js"
+    action: "BLOCK_DEPLOY — admin double-click or network retry could credit the same transaction twice"
+
+  - condition: "cancelCampaign accessible by non-admin callers"
+    check: "grep -L 'admin_only\\|admin.*claim\\|token.*admin' functions/src/bulk/cancelCampaign.js"
+    action: "BLOCK_DEPLOY — clients must not be able to cancel campaigns or trigger credit refunds"
+
+  - condition: "RTDB /bulk_sms_queue missing .indexOn rules (cancelCampaign query will fail or be unacceptably slow)"
+    check: "grep -c 'bulk_sms_queue' database.rules.json && grep -c 'indexOn\\|\\.indexOn' database.rules.json"
+    action: "BLOCK_DEPLOY — cancelCampaign queries by campaignId will return all nodes without an index, causing full-table scans"
+
+  - condition: "dispatchBulkJobs not registered as pubsub schedule in functions/index.js"
+    check: "grep -L 'schedule.*every 1 minutes\\|pubsub.*schedule.*1.*minute' functions/index.js"
+    action: "BLOCK_DEPLOY — campaigns will never transition from 'pending' to 'sending' without the scheduler"
+
+  - condition: "Phone numbers stored as plaintext in bulk_campaigns top-level document"
+    check: "grep -n 'phones\\|phoneNumber\\|phone_number' functions/src/bulk/createBulkCampaign.js | grep -v 'validateE164\\|parseCsv\\|recipient_batches\\|hash'"
+    action: "REVIEW — phone numbers belong only in recipient_batches sub-collection, never in the campaign document root"
+
+  - condition: "Raw phone numbers stored in failed_jobs audit records (PII violation)"
+    check: "grep -n 'to:.*phone\\|\\.to\\b' functions/src/bulk/onBulkJobStatusChange.js | grep -v 'hash\\|sha256\\|createHash'"
+    action: "BLOCK_DEPLOY — failed_jobs must store only hashed phone numbers (SHA-256)"
+
+  - condition: "Existing sendOtp tests fail after bulk functions are deployed"
+    check: "cd functions && npm test -- sendOtp.test.js 2>&1 | grep -c 'FAIL\\|failed'"
+    action: "BLOCK_DEPLOY — roll back all bulk Cloud Function changes immediately and investigate"
+
+  - condition: "Android BAN-02 does not implement onChildChanged (retried bulk jobs silently ignored)"
+    check: "grep -c 'onChildChanged' app/src/main/java/com/authenticator/service/SmsDispatchService.kt"
+    action: "BLOCK_DEPLOY — BCF-07 retry logic resets RTDB nodes to status='pending' via update(), which fires onChildChanged. Without this handler, retried jobs are never processed."
+
+  - condition: "createBulkCampaign uses balance >= 1 check instead of runTransaction with totalCost deduction"
+    check: "grep -L 'runTransaction' functions/src/bulk/createBulkCampaign.js"
+    action: "BLOCK_DEPLOY — campaigns could run consuming more credits than the user has. Credit deduction must be atomic via runTransaction at campaign creation."
+
+  - condition: "Bulk HTTPS Cloud Functions missing CORS headers (browser calls will fail with CORS error)"
+    check: "grep -L 'cors\\|Access-Control-Allow-Origin' functions/src/bulk/createBulkCampaign.js"
+    action: "BLOCK_DEPLOY — CreateCampaignPage and all bulk UI actions will fail with CORS preflight error in every browser."
+
+  - condition: "bulk_credits Firestore rule uses resource.data.appId instead of resource.data.ownerUid (all non-admin reads denied)"
+    check: "grep -n 'bulk_credits' firestore.rules | grep -c 'appId.*auth\\.uid\\|auth\\.uid.*appId'"
+    action: "BLOCK_DEPLOY — if result > 0, the old broken rule is still present. Replace with ownerUid == request.auth.uid."
+
+  - condition: "VITE_BULK_SMS_ENABLED missing from web/.env.example"
+    check: "grep -c 'VITE_BULK_SMS_ENABLED' web/.env.example"
+    action: "BLOCK_DEPLOY — the feature flag must be documented so developers can enable/disable the UI"
+
+  - condition: "papaparse added without pinned version (supply-chain risk)"
+    check: "grep 'papaparse' web/package.json | grep -c '\\^\\|~\\|\\*'"
+    action: "REVIEW — pin papaparse to an exact version in package.json for reproducible builds"
+
+  - condition: "bulk_campaigns Firestore composite indexes not deployed before Cloud Functions"
+    check: "firebase firestore:indexes | grep -c 'bulk_campaigns'"
+    action: "WARN — queries in dispatchBulkJobs, BulkCampaignsPage, and getCampaignStatus will fail until indexes are built"
+
+# ─────────────────────────────────────────────────────────────────────────────
+validation_commands:
+  # Non-regression (run first, always)
+  otp_regression_test: "cd functions && npm test -- sendOtp.test.js verifyOtp.test.js otpStatus.test.js creditCheck.test.js"
+
+  # Bulk unit tests (no emulator needed)
+  bulk_validators_test: "cd functions && npm test -- --testPathPattern=bulk/validators"
+  bulk_unit_tests: "cd functions && npm test -- --testPathPattern=test/bulk/"
+
+  # Android unit tests (no emulator needed, uses Robolectric)
+  android_unit_tests: "cd app && ./gradlew testDebugUnitTest --tests '*.SmsRateLimiterTest' --tests '*.BulkQueueListenerTest'"
+
+  # Bulk integration and e2e tests (require emulator)
+  bulk_e2e_test: "cd functions && firebase emulators:exec --only auth,functions,firestore,database 'npm test -- bulk/e2e-bulk.test.js'"
+  bulk_rate_limit_test: "cd functions && firebase emulators:exec --only functions,firestore,database 'npm test -- bulk/rateLimit.test.js'"
+  bulk_state_machine_test: "cd functions && firebase emulators:exec --only functions,firestore,database 'npm test -- bulk/stateMachine.test.js'"
+  bulk_concurrency_test: "cd functions && firebase emulators:exec --only auth,functions,firestore,database 'npm test -- bulk/concurrency.test.js'"
+  bulk_security_test: "cd functions && firebase emulators:exec --only auth,functions,firestore,database 'npm test -- bulk/security.test.js'"
+
+  # Security rules tests
+  firestore_bulk_rules_test: "firebase emulators:exec --only firestore,auth 'npm test -- bulk/firestoreRules.test.js'"
+  rtdb_bulk_rules_test: "firebase emulators:exec --only database,auth 'npm test -- bulk/rtdbRules.test.js'"
+
+  # Frontend
+  dashboard_build: "cd web && npm run build"
+  dashboard_test: "cd web && npm test"
+
+  # Full combined suite (CI gate)
+  full_test_suite: "cd functions && npm test && cd ../web && npm test && cd ../app && ./gradlew testDebugUnitTest"
+
+  # Deployment (ordered — do NOT change order)
+  deploy_dry_run: "firebase deploy --only functions --dry-run"
+  deploy_rules_and_indexes: "firebase deploy --only firestore:rules,firestore:indexes,database,storage:rules"
+  deploy_functions: "firebase deploy --only functions"
+  deploy_hosting: "cd web && npm run build && firebase deploy --only hosting"
+  deploy_apk: "cd app && ./gradlew assembleRelease && adb install -r app/build/outputs/apk/release/app-release.apk"
+  deploy_all: "firebase deploy --only firestore:rules,firestore:indexes,database,storage:rules && firebase deploy --only functions && cd web && npm run build && firebase deploy --only hosting"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Tracking State (updated by AI during session)
+ai_tracking:
+  session_start: null
+  current_phase: null
+  completed_items: []
+  blocked_items: []
+  last_updated: null
+
+references:
+  base_checklist: "docs/Modification 3/dev-checklist.yaml"
+  original_checklist: "docs/Plan/14-DEV-CHECKLIST.yaml"
+  rtdb_indexon_docs: "https://firebase.google.com/docs/database/security/indexing-data"
+  firestore_transactions: "https://firebase.google.com/docs/firestore/manage-data/transactions"
+  firebase_storage_rules: "https://firebase.google.com/docs/storage/security"
+  firebase_scheduler: "https://firebase.google.com/docs/functions/schedule-functions"
+  android_sms_manager: "https://developer.android.com/reference/android/telephony/SmsManager"
+  android_handler_thread: "https://developer.android.com/reference/android/os/HandlerThread"
+  e164_format: "https://en.wikipedia.org/wiki/E.164"
+  papaparse: "https://www.papaparse.com"
+  carrier_sms_limits: "https://support.twilio.com/hc/en-us/articles/223183808-Sending-SMS-messages — 30 SMS/min is a conservative carrier-safe starting rate"
+  migration_notes: >
+    Zero-downtime migration strategy:
+    1. Deploy Phase B1 (rules, indexes, env vars) — additive, no existing functionality changes.
+    2. Deploy Phase B2 Cloud Functions — new exports only, no existing function modified.
+    3. Release Phase B3 Android APK — new RTDB listener alongside existing /pending_sms listener.
+    4. Enable Phase B4 UI — set VITE_BULK_SMS_ENABLED=true in hosting env only after APK is live.
+    Rollback: set VITE_BULK_SMS_ENABLED=false to hide UI instantly. Roll back CF via
+    firebase functions:rollback. Redeploy previous APK. No data migration needed at any step.

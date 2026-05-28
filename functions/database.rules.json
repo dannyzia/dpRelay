@@ -52,6 +52,51 @@
         }
       },
       ".indexOn": ["lastPing"]
+    },
+    "registered_apps": {
+      "$appId": {
+        ".read": "auth != null && (auth.token.admin == true || auth.uid == data.child('ownerUid').val())",
+        ".write": "auth != null && auth.token.admin == true"
+      }
+    },
+    "pending_sms": {
+      "$sessionId": {
+        ".read": "auth != null && (auth.token.admin == true || auth.token.role == 'authenticator')",
+        ".write": "false"
+      }
+    },
+    "otp_requests": {
+      "$sessionId": {
+        ".read": "auth != null && auth.token.admin == true",
+        ".write": "false"
+      }
+    },
+    "otp_verify_receipts": {
+      "$sessionId": {
+        ".read": "auth != null && auth.token.admin == true",
+        ".write": "false"
+      },
+      ".indexOn": ["expiresAt"]
+    },
+    "stats": {
+      ".read": "auth != null",
+      ".write": "false"
+    },
+    "webhook_failures": {
+      "$failureId": {
+        ".read": "auth != null && auth.token.admin == true",
+        ".write": "false"
+      }
+    },
+    "bulk_progress": {
+      "$campaignId": {
+        ".read": "auth != null",
+        ".write": "false"
+      }
+    },
+    "config": {
+      ".read": "auth != null",
+      ".write": "auth != null && auth.token.admin == true"
     }
   }
 }

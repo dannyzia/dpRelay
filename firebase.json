@@ -2,8 +2,7 @@
   "project": "authenticator-15fb7",
   "functions": {
     "source": "functions",
-    "runtime": "nodejs20",
-    "region": "asia-southeast1"
+    "runtime": "nodejs20"
   },
   "database": {
     "rules": "database.rules.json"
@@ -13,19 +12,22 @@
     "indexes": "firestore.indexes.json"
   },
   "hosting": {
-    "public": "public",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ]
+    "public": "web/dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [{ "source": "**", "destination": "/index.html" }]
   },
   "emulators": {
     "functions": {
       "port": 5001
     },
+    "firestore": {
+      "port": 8080
+    },
     "database": {
       "port": 9000
+    },
+    "auth": {
+      "port": 9099
     },
     "ui": {
       "enabled": true,

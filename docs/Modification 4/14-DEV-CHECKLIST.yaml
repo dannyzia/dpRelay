@@ -1,0 +1,943 @@
+# Development Checklist — Modification 4 (Unified)
+# Project: dpRelay — Bulk SMS Enhancements + Dashboard Polish
+# Format: YAML 1.2
+# AI Instructions:
+# - Parse this file at the start of each implementation session.
+# - Treat depends_on as a hard constraint — never implement a task before its dependencies.
+# - Use files_to_create / files_to_modify to scope your changes exactly.
+# - verification entries are the pass/fail criteria — do not mark complete without meeting them.
+# - Do not modify files outside files_to_create / files_to_modify unless a dependency chain requires it.
+# - Phases 1-4 = Track A (new features). Phases 5-8 = Track B (UI/UX polish). Phase 9 = verification.
+# - Track A and Track B can be worked in parallel — they share no blocking dependencies
+#   except that FE1 (Phase 3) must be done before both tracks' UI work.
+
+version: "2.0"
+project: "dpRelay — Modification 4: Bulk SMS Enhancements + Dashboard Polish"
+total_phases: 9
+critical_path:
+  - phase: 1
+    must_complete_before: [3]
+  - phase: 2
+    must_complete_before: [9]
+  - phase: 3
+    must_complete_before: [4, 5, 6, 7, 8]
+  - phase: 4
+    must_complete_before: [9]
+  - phase: 5
+    must_complete_before: [6, 7, 8]
+  - phase: 6
+    must_complete_before: [9]
+  - phase: 7
+    must_complete_before: [9]
+  - phase: 8
+    must_complete_before: [9]
+
+phases:
+
+  # ═══════════════════════════════════════════════════════════════
+  # TRACK A — NEW FEATURES
+  # ═══════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 1
+    name: "Backend — Cloud Functions"
+    blocking: true
+    notes: >
+      All new callable functions go in functions/index.js.
+      Auth pattern: every function checks context.auth; throw HttpsError('unauthenticated') if absent.
+      UID pattern: set uid = context.auth.uid server-side; never trust a uid from the request body.
+    items:
+
+      - id: CF1
+        task: "Implement createContactGroup callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: []
+        priority: critical
+        notes: >
+          See 06-API.md for full spec.
+          De-duplicate phones before writing sub-collection (use Set or Map keyed by phone).
+          Write phones as batch (max 500 per Firestore batch — split if needed).
+          Set phoneCount to de-duplicated count on the parent doc.
+          Enforce 50-group limit per uid before creating.
+        verification:
+          - type: callable_function_exists
+            name: "createContactGroup"
+          - type: contains
+            pattern: "context.auth.uid"
+          - type: contains
+            pattern: "contactGroups"
+          - type: contains
+            pattern: "batch"
+          - type: anti_pattern
+            forbidden: "req.body.uid"
+            description: "uid must never come from the client request body"
+
+      - id: CF2
+        task: "Implement listContactGroups callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: [CF1]
+        priority: critical
+        notes: >
+          Query contactGroups where uid == context.auth.uid, ordered by createdAt DESC, limit 50.
+        verification:
+          - type: callable_function_exists
+            name: "listContactGroups"
+          - type: contains
+            pattern: "uid.*context.auth.uid"
+
+      - id: CF3
+        task: "Implement deleteContactGroup callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: [CF1]
+        priority: critical
+        notes: >
+          Validate groupId present. Read group doc; confirm uid matches context.auth.uid.
+          Batch-delete all phones sub-documents first, then delete the parent doc.
+        verification:
+          - type: callable_function_exists
+            name: "deleteContactGroup"
+          - type: contains
+            pattern: "permission-denied"
+
+      - id: CF4
+        task: "Implement listContactGroupPhones callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: [CF1]
+        priority: high
+        notes: >
+          Verify caller owns the group before reading phones sub-collection.
+          Support pageSize (default 100, max 500) and pageToken for pagination.
+        verification:
+          - type: callable_function_exists
+            name: "listContactGroupPhones"
+
+      - id: CF5
+        task: "Implement createMessageTemplate callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: []
+        priority: critical
+        notes: >
+          Validate name (max 100 chars) and body (max 1600 chars).
+          Enforce 100-template limit per uid. Set uid = context.auth.uid.
+        verification:
+          - type: callable_function_exists
+            name: "createMessageTemplate"
+          - type: contains
+            pattern: "messageTemplates"
+
+      - id: CF6
+        task: "Implement listMessageTemplates callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: [CF5]
+        priority: critical
+        verification:
+          - type: callable_function_exists
+            name: "listMessageTemplates"
+
+      - id: CF7
+        task: "Implement updateMessageTemplate callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: [CF5]
+        priority: critical
+        notes: >
+          Read template; confirm uid matches caller. At least one of name or body must be provided.
+        verification:
+          - type: callable_function_exists
+            name: "updateMessageTemplate"
+          - type: contains
+            pattern: "permission-denied"
+
+      - id: CF8
+        task: "Implement deleteMessageTemplate callable function"
+        files_to_modify: ["functions/index.js"]
+        depends_on: [CF5]
+        priority: critical
+        verification:
+          - type: callable_function_exists
+            name: "deleteMessageTemplate"
+          - type: contains
+            pattern: "permission-denied"
+
+      - id: CF9
+        task: "Extend createBulkCampaign to accept sourceType: 'contactGroups'"
+        files_to_modify: ["functions/index.js"]
+        depends_on: [CF1, CF2]
+        priority: critical
+        notes: >
+          See 06-API.md. When sourceType == 'contactGroups': validate each groupId,
+          confirm uid ownership, read all phones, de-duplicate union, proceed with dispatch.
+          Store sourceType and sourceGroupIds on campaign document.
+          GAP-6: If de-duplicated phone array is empty, throw HttpsError('invalid-argument',
+          'Selected groups contain no valid phone numbers').
+        verification:
+          - type: contains
+            pattern: "sourceType"
+          - type: contains
+            pattern: "contactGroups"
+          - type: contains
+            pattern: "sourceGroupIds"
+          - type: contains
+            pattern: "invalid-argument"
+            description: "Must throw when de-duplicated phone array is empty (Gap 6)"
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 2
+    name: "Firestore Security Rules & Indexes"
+    blocking: true
+    items:
+
+      - id: SR1
+        task: "Add Firestore security rules for contactGroups and messageTemplates"
+        files_to_modify: ["firestore.rules"]
+        depends_on: [CF1, CF5]
+        priority: critical
+        notes: >
+          See 05-DATA-MODEL.md for exact rules.
+          contactGroups: read+delete by owner uid; write=false (CF only).
+          messageTemplates: read+delete by owner uid; create+update=false (CF only).
+        verification:
+          - type: contains
+            pattern: "contactGroups"
+          - type: contains
+            pattern: "messageTemplates"
+          - type: contains
+            pattern: "request.auth.uid == resource.data.uid"
+
+      - id: SR2
+        task: "Add Firestore composite indexes"
+        files_to_modify: ["firestore.indexes.json"]
+        depends_on: [CF1, CF5]
+        priority: high
+        notes: >
+          contactGroups: uid ASC + createdAt DESC.
+          messageTemplates: uid ASC + updatedAt DESC.
+        verification:
+          - type: contains
+            pattern: "contactGroups"
+          - type: contains
+            pattern: "messageTemplates"
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 3
+    name: "Frontend — Firebase Utility Wrappers"
+    blocking: true
+    notes: >
+      NOTE: Research found that all 8 callable wrappers (createContactGroup, listContactGroups,
+      deleteContactGroup, listContactGroupPhones, createMessageTemplate, listMessageTemplates,
+      updateMessageTemplate, deleteMessageTemplate) ALREADY EXIST in web/src/utils/firebase.js.
+      This phase may already be complete. Verify before proceeding — if all 8 exist, mark done.
+    items:
+
+      - id: FE1
+        task: "Verify firebase utility wrappers exist for all new callable functions"
+        files_to_modify: ["web/src/utils/firebase.js"]
+        depends_on: []
+        priority: critical
+        notes: >
+          All 8 wrappers were found during codebase research. Verify they match the
+          Cloud Function names exactly. If any are missing, add them following the existing pattern.
+        verification:
+          - type: contains
+            pattern: "createContactGroup"
+          - type: contains
+            pattern: "listContactGroups"
+          - type: contains
+            pattern: "deleteContactGroup"
+          - type: contains
+            pattern: "listContactGroupPhones"
+          - type: contains
+            pattern: "createMessageTemplate"
+          - type: contains
+            pattern: "listMessageTemplates"
+          - type: contains
+            pattern: "updateMessageTemplate"
+          - type: contains
+            pattern: "deleteMessageTemplate"
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 4
+    name: "Frontend — New Feature Pages"
+    blocking: true
+    notes: >
+      All new pages use the dark theme (after Phase 5 applies it).
+      If Phase 5 is not yet done, build pages with dark theme from the start.
+      Reuse existing components: Button, CsvUploader, PhonePreviewTable, MessageInput.
+    items:
+
+      - id: UI1
+        task: "Create ContactGroups.jsx page (list + new group modal)"
+        files_to_create: ["web/src/pages/dashboard/ContactGroups.jsx"]
+        depends_on: [FE1]
+        priority: critical
+        notes: >
+          Route: /dashboard/contact-groups. See 08-UI-SPEC.md.
+          States: loading, empty, error, success, limit-reached.
+          Show N/50 counter. Dark theme from start.
+        verification:
+          - type: file_exists
+            path: "web/src/pages/dashboard/ContactGroups.jsx"
+          - type: contains
+            pattern: "listContactGroups"
+          - type: contains
+            pattern: "createContactGroup"
+          - type: contains
+            pattern: "deleteContactGroup"
+
+      - id: UI2
+        task: "Create ContactGroupDetail.jsx page (phone list with pagination)"
+        files_to_create: ["web/src/pages/dashboard/ContactGroupDetail.jsx"]
+        depends_on: [FE1]
+        priority: high
+        notes: >
+          Route: /dashboard/contact-groups/:groupId. Paginated phone list.
+        verification:
+          - type: file_exists
+          - type: contains
+            pattern: "listContactGroupPhones"
+          - type: contains
+            pattern: "pageToken"
+
+      - id: UI3
+        task: "Create MessageTemplates.jsx page (card grid + create/edit/delete)"
+        files_to_create: ["web/src/pages/dashboard/MessageTemplates.jsx"]
+        depends_on: [FE1]
+        priority: critical
+        notes: >
+          Route: /dashboard/templates. See 08-UI-SPEC.md.
+          GAP-1: Pass maxLength={1600} to MessageInput in the template modal.
+        verification:
+          - type: file_exists
+          - type: contains
+            pattern: "listMessageTemplates"
+          - type: contains
+            pattern: "createMessageTemplate"
+          - type: contains
+            pattern: "1600"
+
+      - id: UI4
+        task: "Modify CreateBulkCampaign Step 2 — add 'Use Contact Groups' tab"
+        files_to_modify: ["web/src/pages/dashboard/CreateBulkCampaign.jsx"]
+        depends_on: [FE1, UI1]
+        priority: critical
+        notes: >
+          Tab switcher: 'Upload CSV' (existing) | 'Use Contact Groups' (new).
+          Pass sourceType and sourceGroupIds to createBulkCampaign.
+          Existing CSV path unchanged.
+        verification:
+          - type: contains
+            pattern: "sourceType"
+          - type: contains
+            pattern: "sourceGroupIds"
+
+      - id: UI5
+        task: "Modify CreateBulkCampaign Step 3 — add 'Load Template' button"
+        files_to_modify: ["web/src/pages/dashboard/CreateBulkCampaign.jsx"]
+        depends_on: [FE1, UI3]
+        priority: high
+        notes: >
+          'Load Template' button only shown if templates exist.
+          GAP-1: Campaign Step 3 keeps standard message limit — do NOT raise it here.
+        verification:
+          - type: contains
+            pattern: "Load Template"
+
+      - id: UI6
+        task: "Modify BulkCampaignDetail — add 'Download Report' button"
+        files_to_modify: ["web/src/pages/dashboard/BulkCampaignDetail.jsx"]
+        depends_on: [FE1]
+        priority: critical
+        notes: >
+          Button visible only when completed/cancelled/failed.
+          GAP-5: Paginate listFailedRecipients (max 5 pages = 50,000).
+          CSV via Blob + URL.createObjectURL.
+        verification:
+          - type: contains
+            pattern: "Download Report"
+          - type: contains
+            pattern: "createObjectURL"
+          - type: contains
+            pattern: "text/csv"
+
+      - id: UI7
+        task: "Add Contact Groups and Templates to ClientSidebar and React Router"
+        files_to_modify:
+          - "web/src/components/layout/ClientSidebar.jsx"
+          - "web/src/App.jsx"
+        depends_on: [UI1, UI2, UI3]
+        priority: critical
+        notes: >
+          Sidebar: add under Bulk SMS group (same bulkEnabled gate).
+          Routes: /dashboard/contact-groups, /dashboard/contact-groups/:groupId, /dashboard/templates.
+        verification:
+          - type: contains
+            pattern: "contact-groups"
+          - type: contains
+            pattern: "templates"
+          - type: contains
+            pattern: "ContactGroups"
+          - type: contains
+            pattern: "MessageTemplates"
+
+  # ═══════════════════════════════════════════════════════════════
+  # TRACK B — UI/UX POLISH
+  # ═══════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 5
+    name: "Theme Unification & Bug Fixes"
+    blocking: true
+    notes: >
+      This phase converts the entire client portal from light theme to dark theme,
+      matching the admin portal. This MUST be done before other Track B UI work
+      to avoid double-work (building light, then converting to dark).
+      Also fixes the BDT symbol rendering bug and sidebar active-state issue.
+    items:
+
+      - id: TH1
+        task: "Convert DashboardLayout to dark theme"
+        files_to_modify: ["web/src/components/layout/DashboardLayout.jsx"]
+        depends_on: []
+        priority: critical
+        notes: >
+          Change bg-gray-50 → bg-gray-900. Change text colors to light.
+          This is the wrapper for ALL client dashboard pages.
+        verification:
+          - type: contains
+            pattern: "bg-gray-900"
+          - type: anti_pattern
+            forbidden: "bg-gray-50"
+
+      - id: TH2
+        task: "Convert ClientSidebar to dark theme (match AdminSidebar)"
+        files_to_modify: ["web/src/components/layout/ClientSidebar.jsx"]
+        depends_on: []
+        priority: critical
+        notes: >
+          See 08-UI-SPEC.md F4 color table.
+          bg-white → bg-gray-900. Active: bg-brand-500 text-white.
+          Inactive: text-gray-300 hover:bg-gray-700.
+        verification:
+          - type: contains
+            pattern: "bg-gray-900"
+          - type: contains
+            pattern: "bg-brand-500"
+          - type: anti_pattern
+            forbidden: "bg-white"
+            description: "Sidebar should no longer use light theme bg-white"
+
+      - id: TH3
+        task: "Convert DashboardHome.jsx to dark theme"
+        files_to_modify: ["web/src/pages/dashboard/DashboardHome.jsx"]
+        depends_on: [TH1]
+        priority: critical
+        notes: >
+          Cards: bg-white → bg-gray-800, text-gray-900 → text-white.
+          This page is also enhanced in DH1 (Phase 6) — if working sequentially,
+          do both TH3 and DH1 in the same pass.
+        verification:
+          - type: contains
+            pattern: "bg-gray-800"
+          - type: anti_pattern
+            forbidden: "bg-white"
+
+      - id: TH4
+        task: "Convert all remaining client dashboard pages to dark theme"
+        files_to_modify:
+          - "web/src/pages/dashboard/Apps.jsx"
+          - "web/src/pages/dashboard/BuyCredits.jsx"
+          - "web/src/pages/dashboard/CreditsOverview.jsx"
+          - "web/src/pages/dashboard/Transactions.jsx"
+          - "web/src/pages/dashboard/Invoices.jsx"
+          - "web/src/pages/dashboard/Playground.jsx"
+          - "web/src/pages/dashboard/Settings.jsx"
+          - "web/src/pages/dashboard/BulkCampaigns.jsx"
+          - "web/src/pages/dashboard/BulkCampaignDetail.jsx"
+          - "web/src/pages/dashboard/CreateBulkCampaign.jsx"
+        depends_on: [TH1]
+        priority: critical
+        notes: >
+          Apply the dark theme color pattern from 08-UI-SPEC.md F4.
+          bg-white → bg-gray-800. text-gray-900 → text-white.
+          border-gray-200 → border-gray-700. Input: bg-gray-700 border-gray-600.
+          Table header: text-gray-400. Table row: text-gray-100 hover:bg-gray-700.
+          Status badges: adapt to dark variants (use dark bg with lighter text).
+          This is a bulk color-swap task — do NOT change component logic.
+        verification:
+          - type: anti_pattern
+            forbidden: "bg-white"
+            description: "No light theme backgrounds should remain in client dashboard pages"
+
+      - id: BF1
+        task: "Fix BDT taka symbol (৳) rendering as ↓"
+        files_to_modify:
+          - "web/src/pages/dashboard/Transactions.jsx"
+          - "tailwind.config.js"
+        depends_on: []
+        priority: high
+        notes: >
+          Option A: Add 'Noto Sans Bengali' to fontFamily fallback in tailwind.config.js.
+          Option B: Replace ৳ with 'BDT ' string prefix in affected files.
+          Choose the simpler option that works. Verify rendering in Chrome and Firefox.
+        verification:
+          - type: manual_check
+            description: "BDT currency displays correctly on Transactions page"
+
+      - id: BF2
+        task: "Fix sidebar active-state for sub-pages"
+        files_to_modify:
+          - "web/src/components/layout/ClientSidebar.jsx"
+          - "web/src/components/layout/AdminSidebar.jsx"
+        depends_on: [TH2]
+        priority: medium
+        notes: >
+          Change exact path matching to prefix matching:
+          pathname === item.path || pathname.startsWith(item.path + '/')
+          Exception: /dashboard and /admin use exact match only.
+        verification:
+          - type: manual_check
+            description: "Sidebar highlights 'Bulk SMS' when on /dashboard/bulk/create"
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 6
+    name: "Dashboard Data Density"
+    blocking: false
+    notes: >
+      Enhance both the client and admin home pages with live data, credit banners,
+      and actionable widgets. These are the highest-value visual improvements.
+    items:
+
+      - id: DH1
+        task: "Enhance DashboardHome with live credit balance and app cards"
+        files_to_modify: ["web/src/pages/dashboard/DashboardHome.jsx"]
+        depends_on: [TH3, FE1]
+        priority: critical
+        notes: >
+          See 08-UI-SPEC.md F5 for exact layout.
+          Fetch listApps() on mount for credit data.
+          Hero banner: total OTP + total Bulk credits across all apps.
+          Per-app cards: name, OTP credits, Bulk credits, status badge.
+          Replace the current 4 generic text-only nav cards entirely.
+        verification:
+          - type: contains
+            pattern: "listApps"
+          - type: contains
+            pattern: "credit"
+          - type: anti_pattern
+            forbidden: "Your Apps.*Buy Credits.*Credits Overview.*API Playground"
+            description: "Old generic nav cards should be replaced with contextual app cards"
+
+      - id: DH2
+        task: "Add low-credit warning banner to DashboardHome"
+        files_to_modify: ["web/src/pages/dashboard/DashboardHome.jsx"]
+        depends_on: [DH1]
+        priority: high
+        notes: >
+          If any app has sms_remaining < 10 OR bulk_sms_remaining < 10,
+          show amber alert: "⚠️ {appName} has {N} credits left. Top up now →".
+          Link to /dashboard/buy-credits.
+        verification:
+          - type: contains
+            pattern: "warning"
+          - type: contains
+            pattern: "buy-credits"
+
+      - id: DH3
+        task: "Add recent activity feed to DashboardHome"
+        files_to_modify: ["web/src/pages/dashboard/DashboardHome.jsx"]
+        depends_on: [DH1]
+        priority: medium
+        notes: >
+          Fetch getTransactions({ limit: 5 }) on mount.
+          Show mini-table: Date · App · Type · Amount · Status badge.
+          Link to /dashboard/transactions for "View all →".
+        verification:
+          - type: contains
+            pattern: "getTransactions"
+          - type: contains
+            pattern: "Recent"
+
+      - id: AH1
+        task: "Color-code Admin KPI cards and add icons"
+        files_to_modify: ["web/src/pages/admin/AdminHome.jsx"]
+        depends_on: []
+        priority: critical
+        notes: >
+          See 08-UI-SPEC.md F6 for exact layout.
+          Sent: green border-l-4, PaperAirplaneIcon.
+          Failed: red, ExclamationCircleIcon.
+          Active: blue, BoltIcon.
+          Total: gray, CalendarIcon.
+          Import icons from @heroicons/react/24/outline.
+        verification:
+          - type: contains
+            pattern: "border-green"
+          - type: contains
+            pattern: "border-red"
+          - type: contains
+            pattern: "border-blue"
+          - type: contains
+            pattern: "PaperAirplaneIcon"
+
+      - id: AH2
+        task: "Add recent pending transactions widget to AdminHome"
+        files_to_modify: ["web/src/pages/admin/AdminHome.jsx"]
+        depends_on: [AH1]
+        priority: high
+        notes: >
+          Fetch getTransactions({ status: 'pending', limit: 5 }).
+          Show mini-table with quick Approve/Reject buttons.
+          Empty state: "✅ All caught up! No pending transactions."
+          Link to /admin/transactions for full list.
+        verification:
+          - type: contains
+            pattern: "getTransactions"
+          - type: contains
+            pattern: "pending"
+          - type: contains
+            pattern: "All caught up"
+
+      - id: AH3
+        task: "Add pending transaction badge to Admin sidebar"
+        files_to_modify: ["web/src/components/layout/AdminSidebar.jsx"]
+        depends_on: []
+        priority: medium
+        notes: >
+          Fetch pending count on mount. Re-fetch every 30 seconds via setInterval.
+          Show red badge (bg-red-500 text-white rounded-full) on Transactions nav item.
+          Badge hidden if count is 0.
+        verification:
+          - type: contains
+            pattern: "pendingCount"
+          - type: contains
+            pattern: "bg-red-500"
+          - type: contains
+            pattern: "setInterval"
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 7
+    name: "Table & Component Polish"
+    blocking: false
+    notes: >
+      Status badges, UUID resolution, timestamps, empty states, and icons.
+      These are high-impact, low-risk visual improvements.
+    items:
+
+      - id: TP1
+        task: "Add color-coded status badges to Transactions.jsx"
+        files_to_modify: ["web/src/pages/dashboard/Transactions.jsx"]
+        depends_on: [TH4]
+        priority: critical
+        notes: >
+          Current: all statuses use bg-gray-100 text-gray-700 (no differentiation).
+          Apply dark-theme adapted statusClass pattern from Invoices.jsx:
+          approved → bg-green-900/50 text-green-300.
+          pending → bg-yellow-900/50 text-yellow-300.
+          rejected → bg-red-900/50 text-red-300.
+          default → bg-gray-700 text-gray-300.
+        verification:
+          - type: contains
+            pattern: "green"
+          - type: contains
+            pattern: "yellow"
+          - type: contains
+            pattern: "red"
+
+      - id: TP2
+        task: "Resolve app UUIDs to names in Transactions.jsx"
+        files_to_modify: ["web/src/pages/dashboard/Transactions.jsx"]
+        depends_on: [TH4]
+        priority: high
+        notes: >
+          Call listApps() on mount. Build Map<appId, appName>.
+          Display appNameMap.get(row.appId) || row.appId.slice(0, 8) + '...'.
+        verification:
+          - type: contains
+            pattern: "listApps"
+          - type: contains
+            pattern: "appName"
+
+      - id: TP3
+        task: "Resolve app UUIDs to names in Invoices.jsx"
+        files_to_modify: ["web/src/pages/dashboard/Invoices.jsx"]
+        depends_on: [TH4]
+        priority: high
+        notes: >
+          Invoices already calls listApps() for filter dropdown.
+          Reuse the apps data to build a name lookup map.
+        verification:
+          - type: contains
+            pattern: "appName"
+
+      - id: TP4
+        task: "Add click-to-copy for App IDs in Apps.jsx"
+        files_to_modify: ["web/src/pages/dashboard/Apps.jsx"]
+        depends_on: [TH4]
+        priority: medium
+        notes: >
+          Truncate appId to first 8 chars + '...'. Add ClipboardDocumentIcon button.
+          Use navigator.clipboard.writeText(). Show "Copied!" tooltip briefly.
+        verification:
+          - type: contains
+            pattern: "clipboard"
+          - type: contains
+            pattern: "ClipboardDocumentIcon"
+
+      - id: TP5
+        task: "Add relative timestamps to transaction tables"
+        files_to_modify:
+          - "web/src/pages/dashboard/Transactions.jsx"
+          - "web/src/pages/admin/ApproveTransactions.jsx"
+        depends_on: [TH4]
+        priority: medium
+        notes: >
+          Show "2 hours ago" primary + full date secondary.
+          Use Intl.RelativeTimeFormat — no new dependency.
+          Create a shared relativeTime() helper in web/src/utils/.
+        verification:
+          - type: contains
+            pattern: "RelativeTimeFormat"
+
+      - id: TP6
+        task: "Add empty-state designs to all empty tables"
+        files_to_modify:
+          - "web/src/pages/admin/ApproveTransactions.jsx"
+          - "web/src/pages/dashboard/Transactions.jsx"
+          - "web/src/pages/dashboard/BulkCampaigns.jsx"
+          - "web/src/pages/dashboard/CreditsOverview.jsx"
+        depends_on: [TH4]
+        priority: high
+        notes: >
+          See 08-UI-SPEC.md F7 empty states table for icon/message/CTA per page.
+          Pattern: centered icon + message + CTA button, all in bg-gray-800 card.
+        verification:
+          - type: manual_check
+            description: "All empty tables show friendly empty-state design instead of blank void"
+
+      - id: TP7
+        task: "Add icons to Invoices KPI summary cards"
+        files_to_modify: ["web/src/pages/dashboard/Invoices.jsx"]
+        depends_on: [TH4]
+        priority: low
+        notes: >
+          Credit Purchases → CreditCardIcon. Total Spent → BanknotesIcon.
+          OTP Sent → DevicePhoneMobileIcon. Bulk Delivered → PaperAirplaneIcon.
+        verification:
+          - type: contains
+            pattern: "CreditCardIcon"
+          - type: contains
+            pattern: "PaperAirplaneIcon"
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 8
+    name: "Charts & Visualizations"
+    blocking: false
+    notes: >
+      Should-have phase. Adds charting to Admin Home and Invoices.
+      Requires recharts dependency — pre-approved in PRD.
+    items:
+
+      - id: CH1
+        task: "Install recharts dependency"
+        files_to_modify: ["web/package.json"]
+        depends_on: []
+        priority: medium
+        notes: >
+          Run: npm install recharts
+          This is the only new dependency in this modification.
+          FLAG: New dependency added — recharts (React charting library).
+        verification:
+          - type: contains
+            pattern: "recharts"
+
+      - id: CH2
+        task: "Add 7-day OTP trend area chart to AdminHome"
+        files_to_modify: ["web/src/pages/admin/AdminHome.jsx"]
+        depends_on: [CH1, AH1]
+        priority: medium
+        notes: >
+          Read RTDB stats/history/{YYYY-MM-DD} for last 7 days.
+          Render AreaChart (recharts): X=date, Y=total_today.
+          Fill brand-500/20, stroke brand-400. Height 200px.
+          Card spanning full width below KPI cards.
+        verification:
+          - type: contains
+            pattern: "AreaChart"
+          - type: contains
+            pattern: "stats/history"
+
+      - id: CH3
+        task: "Add monthly spending bar chart to Invoices"
+        files_to_modify: ["web/src/pages/dashboard/Invoices.jsx"]
+        depends_on: [CH1, TH4]
+        priority: low
+        notes: >
+          Aggregate monthly BDT spend from existing getInvoiceHistory data.
+          Render BarChart (recharts) below the KPI cards.
+          X=month, Y=BDT amount. Fill brand-500.
+        verification:
+          - type: contains
+            pattern: "BarChart"
+
+  # ═══════════════════════════════════════════════════════════════
+  # VERIFICATION
+  # ═══════════════════════════════════════════════════════════════
+
+  # ─────────────────────────────────────────────────────────────
+  - id: 9
+    name: "Verification & Testing"
+    blocking: false
+    notes: >
+      Manual testing checklist before marking this modification complete.
+    items:
+
+      # Track A — Feature tests
+      - id: VT1
+        task: "Test contact group create → use in campaign → campaign completes"
+        depends_on: [UI1, UI4, CF1, CF9]
+        priority: critical
+        verification:
+          - type: manual_test
+            steps:
+              - "Create a contact group with 3 phone numbers"
+              - "Create a campaign using 'Use Contact Groups'"
+              - "Confirm campaign shows totalRecipients = 3"
+              - "Confirm campaign doc has sourceType: 'contactGroups'"
+
+      - id: VT2
+        task: "Test message template create → load in campaign"
+        depends_on: [UI3, UI5, CF5]
+        priority: critical
+        verification:
+          - type: manual_test
+            steps:
+              - "Create a template 'Test Template' with body 'Hello test'"
+              - "Start new campaign, reach Step 3"
+              - "Click 'Load Template', select it"
+              - "Confirm textarea pre-filled with 'Hello test'"
+              - "Edit the message — confirm campaign uses edited version"
+
+      - id: VT3
+        task: "Test delivery report download"
+        depends_on: [UI6]
+        priority: critical
+        verification:
+          - type: manual_test
+            steps:
+              - "Open completed campaign detail page"
+              - "Click 'Download Report'"
+              - "Confirm CSV downloads with correct filename"
+              - "Confirm CSV has phone,status,errorMessage,attemptedAt headers"
+
+      - id: VT4
+        task: "Test Firestore security rules — cross-user isolation"
+        depends_on: [SR1]
+        priority: critical
+        verification:
+          - type: emulator_test
+            description: >
+              Confirm user A cannot read contactGroups owned by user B.
+              Confirm user A cannot delete messageTemplates owned by user B.
+              Confirm unauthenticated reads are rejected.
+
+      - id: VT5
+        task: "Test Download Report button hidden for in-progress campaigns"
+        depends_on: [UI6]
+        priority: high
+        verification:
+          - type: manual_test
+            steps:
+              - "Open campaign with status 'sending' or 'queued'"
+              - "Confirm 'Download Report' button is NOT visible"
+              - "Open completed campaign — confirm button IS visible"
+
+      - id: VT6
+        task: "Test pagination on Contact Group Detail page with >100 phones"
+        depends_on: [UI2, CF4]
+        priority: high
+        verification:
+          - type: manual_test
+            steps:
+              - "Create contact group with 150+ phone numbers"
+              - "Open Contact Group Detail page"
+              - "Confirm only 100 phones shown initially"
+              - "Click Next — confirm next page loads"
+              - "Click Prev — confirm navigation back works"
+
+      # Track B — Polish tests
+      - id: VT7
+        task: "Test theme consistency across all client dashboard pages"
+        depends_on: [TH1, TH2, TH3, TH4]
+        priority: critical
+        verification:
+          - type: manual_test
+            steps:
+              - "Navigate to every client dashboard page"
+              - "Confirm all use dark theme (bg-gray-900 page, bg-gray-800 cards)"
+              - "Confirm no light-theme remnants (bg-white, bg-gray-50)"
+              - "Confirm sidebar matches admin sidebar styling"
+
+      - id: VT8
+        task: "Test BDT symbol renders correctly"
+        depends_on: [BF1]
+        priority: high
+        verification:
+          - type: manual_test
+            steps:
+              - "Open Transactions page"
+              - "Confirm ৳ or BDT displays correctly, not ↓"
+              - "Check in Chrome and Firefox"
+
+      - id: VT9
+        task: "Test status badges on Transactions page"
+        depends_on: [TP1]
+        priority: high
+        verification:
+          - type: manual_test
+            steps:
+              - "Open Transactions page with mixed statuses"
+              - "Confirm approved → green badge"
+              - "Confirm pending → yellow badge"
+              - "Confirm rejected → red badge"
+
+      - id: VT10
+        task: "Test app UUID resolution in Transactions"
+        depends_on: [TP2]
+        priority: high
+        verification:
+          - type: manual_test
+            steps:
+              - "Open Transactions page"
+              - "Confirm App column shows app names, not raw UUIDs"
+
+      - id: VT11
+        task: "Test Admin Dashboard live data and pending widget"
+        depends_on: [AH1, AH2]
+        priority: high
+        verification:
+          - type: manual_test
+            steps:
+              - "Open Admin Dashboard"
+              - "Confirm KPI cards are color-coded with icons"
+              - "Confirm recent pending transactions widget shows or shows empty state"
+
+      - id: VT12
+        task: "Test Client Dashboard credit balance and warnings"
+        depends_on: [DH1, DH2]
+        priority: high
+        verification:
+          - type: manual_test
+            steps:
+              - "Open Client Dashboard"
+              - "Confirm credit hero banner shows OTP + Bulk totals"
+              - "Confirm per-app cards show real credit data"
+              - "If any app has <10 credits, confirm amber warning appears"
+
+      - id: VT13
+        task: "Test sidebar pending badge and active-state"
+        depends_on: [AH3, BF2]
+        priority: medium
+        verification:
+          - type: manual_test
+            steps:
+              - "Open admin panel — confirm pending count badge on Transactions"
+              - "Navigate to /dashboard/bulk/create — confirm 'Bulk SMS' is highlighted in sidebar"

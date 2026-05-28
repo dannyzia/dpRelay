@@ -1,0 +1,1941 @@
+# Development Checklist - Authenticator Service (Consolidated React Platform + Webhooks + Client SDKs + bKash Billing + Marketing)
+# Format: YAML 1.2
+# AI Instructions:
+# - Parse this file at the start of implementation sessions.
+# - Use it as the checklist source of truth for task sequencing.
+# - Track completion state in your agent or session tooling.
+
+version: "2.0"
+# Frontend React PWA is already built and located in the web/ directory. All frontend tasks below are marked complete.
+project: AuthenticatorService
+total_phases: 10
+critical_path:
+  - phase: 1
+    name: Consolidated React Platform (PWA)
+    must_complete_before: [2, 3, 4, 5, 6, 7, 8, 9]
+    reason: "All other phases depend on the shared React app shell, Firebase Auth, and app-registry Cloud Functions built here"
+  - phase: 2
+    name: Webhook Delivery
+    must_complete_before: []
+    reason: "Independent of billing, but depends on app registry from Phase 1"
+  - phase: 3
+    name: Client Integration Guides
+    must_complete_before: []
+    reason: "Documentation can be written in parallel with Phases 2 and 4"
+  - phase: 4
+    name: Billing Integration (bKash — Manual Admin Verification)
+    must_complete_before: []
+    reason: "Superseded by Phases 6–9 which deliver a Firestore-backed, fully structured billing system. Phase 4 items (BI-*) are deprecated and should NOT be implemented if Phases 6–9 are being built."
+  - phase: 5
+    name: Marketing Site
+    must_complete_before: []
+    reason: "Public pages can be built last; depends on Phase 1 shell and Phase 3 docs being complete"
+  - phase: 6
+    name: Billing Database & Firestore Setup
+    must_complete_before: [7, 8, 9]
+    reason: "Firestore schema for packages/app_credits/transactions must exist before Cloud Functions or UI can reference it"
+  - phase: 7
+    name: Credit Check & Deduction in Cloud Functions
+    must_complete_before: [8, 9]
+    reason: "sendOtp credit gate (CR-01–03) and getCredits (CR-04) must be in place before the credit request flow (Phase 8) and UI (Phase 9) can be built on top of them"
+  - phase: 8
+    name: Manual bKash Credit Request & Admin Approval (Cloud Functions)
+    must_complete_before: [9]
+    reason: "Cloud Functions must exist before the React dashboard UI in Phase 9 can call them"
+  - phase: 9
+    name: React Dashboard — Package Management & Transaction Approval
+    must_complete_before: []
+    reason: "UI layer; depends on Phases 6, 7, and 8 being complete"
+
+phases:
+  - id: 1
+    name: "Consolidated React Platform (PWA) — Firebase Hosting"
+    blocking: true
+    description: >
+      Build a single Progressive Web App (PWA) deployed on Firebase Hosting that serves
+      four audiences in one codebase: the super-admin (app management, billing approval),
+      client/developer portal (API keys, metrics, credit purchase), API playground
+      (interactive sendOtp / verifyOtp console), and public marketing pages.
+      All authenticated sections are protected by Firebase Auth with custom claims.
+    platform_sections:
+      - "Admin Dashboard: app management, usage metrics, pending bKash payment approval"
+      - "Client Portal: per-app metrics, API key display/regeneration, credit balance, buy-credits flow"
+      - "API Playground: interactive console — enter appId + appSecret, test sendOtp/verifyOtp, see raw JSON"
+      - "Marketing / Landing: public Home, Pricing, Documentation, code-snippet guides"
+    items:
+      - id: INFRA-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Initialize Firebase project and enable all required services"
+        commands:
+          - "firebase login"
+          - "firebase projects:create <project-id> --display-name 'Authenticator Service'"
+          - "firebase use <project-id>"
+          - "firebase init  # select: Firestore, Functions, Hosting, RTDB, Emulators"
+        services_to_enable:
+          - "Authentication (Email/Password provider)"
+          - "Realtime Database (production mode)"
+          - "Cloud Firestore (production mode, nam5 multi-region)"
+          - "Cloud Functions (Node 18)"
+          - "Firebase Hosting"
+        verification:
+          - type: file_exists
+            path: ".firebaserc"
+          - type: contains
+            file: ".firebaserc"
+            pattern: "projects.*default"
+        depends_on: []
+        priority: critical
+        notes: "Must run before any other task. Record the project ID in .env.example as FIREBASE_PROJECT_ID."
+
+      - id: INFRA-02
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Create firebase.json with hosting, functions, emulator, and rules deploy config"
+        files_to_create:
+          - "firebase.json"
+          - ".firebaserc"
+        config_requirements:
+          hosting:
+            public: "web/dist"
+            rewrites: "all traffic → /index.html (SPA mode)"
+            headers: "Cache-Control for static assets"
+          functions:
+            source: "functions"
+            runtime: "nodejs20"
+          emulators:
+            - auth (port 9099)
+            - functions (port 5001)
+            - firestore (port 8080)
+            - database (port 9000)
+            - hosting (port 5000)
+          rules:
+            firestore: "firestore.rules"
+            database: "database.rules.json"
+        verification:
+          - type: file_exists
+            path: "firebase.json"
+          - type: contains
+            file: "firebase.json"
+            patterns:
+              - "rewrites"
+              - "emulators"
+              - "firestore"
+        depends_on: [INFRA-01]
+        priority: critical
+
+      - id: INFRA-03
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Set up Firebase Emulator Suite for local development"
+        files_to_create:
+          - ".env.local"
+          - "functions/.env.local"
+        commands:
+          - "firebase emulators:start"
+        setup_requirements:
+          - "Add FIREBASE_EMULATOR=true check in firebase.js to connect to emulator when running locally."
+          - "In web/src/firebase.js: if (import.meta.env.VITE_USE_EMULATOR) { connectAuthEmulator(...); connectDatabaseEmulator(...); connectFirestoreEmulator(...); }"
+          - "In functions/index.js: emulator is auto-detected via FIREBASE_EMULATOR env variable."
+        verification:
+          - type: command
+            run: "firebase emulators:exec --only auth,functions,firestore,database 'echo ok'"
+            expect_exit: 0
+        depends_on: [INFRA-02]
+        priority: critical
+        notes: "All development and testing must use the emulator. Never test against production Firebase with test data."
+
+      - id: ENV-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Define all environment variables in .env.example files"
+        files_to_create:
+          - "web/.env.example"
+          - "functions/.env.example"
+        react_env_vars:
+          - "VITE_FIREBASE_API_KEY=          # Firebase project API key"
+          - "VITE_FIREBASE_AUTH_DOMAIN=      # project.firebaseapp.com"
+          - "VITE_FIREBASE_DATABASE_URL=     # RTDB URL"
+          - "VITE_FIREBASE_PROJECT_ID=       # Firebase project ID"
+          - "VITE_FIREBASE_STORAGE_BUCKET=   # project.appspot.com"
+          - "VITE_FIREBASE_MESSAGING_SENDER_ID="
+          - "VITE_FIREBASE_APP_ID="
+          - "VITE_USE_EMULATOR=false         # Set true for local dev"
+          - "FIREBASE_HOSTING_URL=           # https://your-app.web.app (for AD-08 health check)"
+          - "FIREBASE_HOSTING_TARGET=        # firebase hosting target alias"
+        functions_env_vars:
+          - "APP_MASTER_SECRET=              # Protects setAdminClaim CF. Generate with: openssl rand -hex 32"
+          - "BKASH_PERSONAL_NUMBER=          # bKash Send Money number for credit top-ups"
+          - "BKASH_MIN_TOPUP_AMOUNT=500      # Minimum acceptable BDT per top-up"
+        verification:
+          - type: file_exists
+            paths:
+              - "web/.env.example"
+              - "functions/.env.example"
+          - type: anti_pattern_check
+            file: "web/.env.example"
+            forbidden: "=[a-zA-Z0-9+/]{20,}"
+            description: "Example files must not contain real secret values"
+          - type: anti_pattern_check
+            file: "functions/.env.example"
+            forbidden: "01613249520"
+            description: "Real bKash number must not appear in example files"
+        depends_on: [INFRA-01]
+        priority: critical
+        notes: "Every developer must copy both .env.example files to .env.local before starting. Document this in README.md."
+
+      - id: RTDB-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Write Firebase RTDB security rules"
+        files_to_create:
+          - "database.rules.json"
+        rules:
+          "/registered_apps/{appId}":
+            read: "auth != null && (auth.token.admin == true || auth.uid == data.child('ownerUid').val())"
+            write: "auth != null && auth.token.admin == true  # Cloud Functions write via Admin SDK"
+          "/pending_sms/{sessionId}":
+            read: "auth != null && auth.token.admin == true"
+            write: "false  # Cloud Functions only"
+          "/otp_requests/{sessionId}":
+            read: "auth != null && auth.token.admin == true"
+            write: "false  # Cloud Functions only"
+          "/stats":
+            read: "auth != null"
+            write: "false  # aggregateStats CF only"
+          "/webhook_failures":
+            read: "auth != null && auth.token.admin == true"
+            write: "false  # sendWebhook CF only"
+        verification:
+          - type: file_exists
+            path: "database.rules.json"
+          - type: contains
+            file: "database.rules.json"
+            patterns:
+              - "ownerUid"
+              - "auth.token.admin"
+              - "registered_apps"
+        depends_on: [CF-01]
+        priority: critical
+        security_notes:
+          - "Client SDK reads of /registered_apps/{appId} are scoped to ownerUid — clients cannot see other apps."
+          - "All write paths go through Cloud Functions (Admin SDK bypasses rules) — rules serve as a defence-in-depth layer."
+
+      - id: ROUTE-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Set up React Router v6 with all application routes"
+        files_to_create:
+          - "web/src/router.jsx"
+        routes:
+          public:
+            - "/ → Home.jsx"
+            - "/pricing → Pricing.jsx"
+            - "/docs → Docs.jsx"
+            - "/login → Login.jsx"
+          client_protected:
+            - "/portal → ClientPortal.jsx (ClientRoute guard)"
+            - "/portal/apps → MyApps.jsx"
+            - "/portal/apps/:appId → AppDetail.jsx"
+            - "/portal/credits → CreditsOverview.jsx"
+            - "/portal/buy-credits → BuyCredits.jsx"
+            - "/playground → Playground.jsx"
+          admin_protected:
+            - "/admin → Dashboard.jsx (AdminRoute guard)"
+            - "/admin/apps → AppsList.jsx"
+            - "/admin/packages → PackageManager.jsx"
+            - "/admin/transactions → TransactionQueue.jsx"
+        verification:
+          - type: file_exists
+            path: "web/src/router.jsx"
+          - type: contains
+            file: "web/src/router.jsx"
+            patterns:
+              - "createBrowserRouter\\|BrowserRouter"
+              - "AdminRoute\\|ClientRoute"
+              - "/admin"
+              - "/portal"
+        depends_on: [AD-02]
+        priority: critical
+
+      - id: ROUTE-02
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build shared NavBar / Sidebar component (role-aware)"
+        files_to_create:
+          - "web/src/components/NavBar.jsx"
+          - "web/src/components/Sidebar.jsx"
+        ui_requirements:
+          - "Unauthenticated: show public links only (Home, Pricing, Docs, Login)."
+          - "Client authenticated: show portal links (My Apps, Credits, Buy Credits, Playground, Logout)."
+          - "Admin authenticated: show all client links PLUS admin links (All Apps, Packages, Transactions)."
+          - "Active route highlighted. Responsive: collapses to hamburger on mobile."
+          - "Role detection via Firebase Auth custom claims (getIdTokenResult().claims)."
+        verification:
+          - type: contains
+            file: "web/src/components/NavBar.jsx"
+            patterns:
+              - "admin.*claim\\|isAdmin"
+              - "Logout\\|signOut"
+        depends_on: [AD-02, ROUTE-01]
+        priority: critical
+
+      - id: AD-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Initialize React project with Vite + Firebase SDK"
+        files_to_create:
+          - "web/package.json"
+          - "web/vite.config.js"
+          - "web/index.html"
+          - "web/src/main.jsx"
+          - "web/src/App.jsx"
+          - "web/src/firebase.js"
+          - "web/.env.example"
+        verification:
+          - type: file_exists
+            paths:
+              - "web/package.json"
+              - "web/src/firebase.js"
+          - type: contains
+            file: "web/src/firebase.js"
+            pattern: "initializeApp"
+          - type: anti_pattern_check
+            file: "web/.env.example"
+            forbidden: "API_KEY.*="
+            description: "Env example must not contain real keys"
+        depends_on: []
+        priority: critical
+        notes: "Use Firebase JS SDK (not admin SDK) — authentication via Firebase Auth with custom claims."
+
+      - id: AD-02
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Implement Firebase Authentication with email/password + custom admin claim"
+        files_to_create:
+          - "web/src/context/AuthContext.jsx"
+          - "web/src/pages/Login.jsx"
+          - "web/src/components/ProtectedRoute.jsx"
+          - "web/src/components/AdminRoute.jsx"
+          - "web/src/components/ClientRoute.jsx"
+        verification:
+          - type: contains
+            file: "web/src/context/AuthContext.jsx"
+            pattern: "signInWithEmailAndPassword"
+          - type: contains
+            file: "web/src/components/ProtectedRoute.jsx"
+            pattern: "customClaim.*admin\\|hasAdminClaim"
+        depends_on: [AD-01]
+        priority: critical
+        notes: "Requires a Cloud Function to set admin claims when first admin is created."
+
+      - id: AD-03
+        task: "Create Cloud Function `setAdminClaim` (HTTP) to assign admin role to a Firebase user"
+        files_to_modify:
+          - "functions/index.js"
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            patterns:
+              - "setAdminClaim"
+              - "setCustomUserClaims"
+        depends_on: []
+        priority: high
+        notes: "This function must be protected by a master secret (APP_MASTER_SECRET). Called once during initial setup."
+
+      - id: CF-01
+        task: "Create `registerApp` Cloud Function (HTTP POST) — new app registration"
+        files_to_create:
+          - "functions/src/apps/registerApp.js"
+        behaviour:
+          - "Accept: { appName, webhookUrl?, webhookSecret?, rateLimit? }."
+          - "Authenticate via Firebase Auth ID token (client claim or admin). The caller's Firebase UID becomes the app owner."
+          - "Generate appId (UUID v4) and appSecret (crypto.randomBytes(32).toString('hex'))."
+          - "Hash appSecret with SHA-256 — store only the hash in RTDB."
+          - "Write to RTDB `/registered_apps/{appId}`: { appName, ownerUid, appSecretHash, webhookUrl, webhookSecretHash, rateLimit, active: true, createdAt }."
+          - "Return: { appId, appSecret } — plaintext secret returned ONCE only. Warn caller to save it."
+        verification:
+          - type: file_exists
+            path: "functions/src/apps/registerApp.js"
+          - type: contains
+            file: "functions/src/apps/registerApp.js"
+            patterns:
+              - "randomBytes\\|crypto"
+              - "appSecretHash"
+              - "/registered_apps"
+              - "ownerUid"
+        depends_on: [AD-03]
+        priority: critical
+        security_notes:
+          - "Never store plaintext appSecret — only SHA-256 hash."
+          - "The returned appSecret must be shown to the user once and then discarded from server memory."
+
+      - id: CF-02
+        task: "Create `revokeApp` Cloud Function (HTTP POST) — deactivate a registered app"
+        files_to_create:
+          - "functions/src/apps/revokeApp.js"
+        behaviour:
+          - "Authenticate via Firebase Auth ID token (admin claim required OR ownerUid matches caller)."
+          - "Accept: { appId }."
+          - "Read RTDB `/registered_apps/{appId}`; verify caller is admin or owns the app."
+          - "Set `active: false` and `revokedAt: now()` on the RTDB record."
+          - "Return: { success: true, message: 'App revoked. All future OTP requests will be rejected.' }."
+          - "sendOtp must already check `active` flag — this ensures OTPs stop immediately."
+        verification:
+          - type: file_exists
+            path: "functions/src/apps/revokeApp.js"
+          - type: contains
+            file: "functions/src/apps/revokeApp.js"
+            patterns:
+              - "active.*false\\|revokedAt"
+              - "/registered_apps"
+              - "ownerUid\\|admin"
+        depends_on: [CF-01]
+        priority: critical
+
+      - id: CF-03
+        task: "Create `updateAppWebhook` Cloud Function (HTTP POST) — update webhook URL and secret"
+        files_to_create:
+          - "functions/src/apps/updateAppWebhook.js"
+        behaviour:
+          - "Authenticate via Firebase Auth ID token (admin or app owner)."
+          - "Accept: { appId, webhookUrl, regenerateSecret?: boolean }."
+          - "Verify caller owns appId (ownerUid match) or has admin claim."
+          - "Update RTDB `/registered_apps/{appId}/webhookUrl`."
+          - "If regenerateSecret=true: generate new webhookSecret (crypto.randomBytes(32)), hash it, update `webhookSecretHash`, return plaintext once."
+          - "Return: { success: true, webhookSecret?: '<new-plaintext-if-regenerated>' }."
+        verification:
+          - type: file_exists
+            path: "functions/src/apps/updateAppWebhook.js"
+          - type: contains
+            file: "functions/src/apps/updateAppWebhook.js"
+            patterns:
+              - "webhookUrl"
+              - "webhookSecretHash"
+              - "/registered_apps"
+        depends_on: [CF-01]
+        priority: high
+        notes: "AD-07 webhook configuration UI calls this function."
+
+      - id: CF-04
+        task: "Create `aggregateStats` scheduled Cloud Function — write /stats node for dashboard"
+        files_to_create:
+          - "functions/src/jobs/aggregateStats.js"
+        schedule: "every 1 minutes"
+        behaviour:
+          - "Read from RTDB `/otp_requests` (last 24h window)."
+          - "Compute: total_today, success_count, failed_count, pending_count, success_rate."
+          - "Read `/pending_sms` to get queue_depth."
+          - "Write computed values to RTDB `/stats`: { total_today, success_count, failed_count, success_rate, queue_depth, updated_at }."
+          - "Keep a rolling 7-day history at `/stats/history/{YYYY-MM-DD}` for the Recharts trend chart in AD-06."
+        verification:
+          - type: file_exists
+            path: "functions/src/jobs/aggregateStats.js"
+          - type: contains
+            file: "functions/src/jobs/aggregateStats.js"
+            patterns:
+              - "/stats"
+              - "schedule\\|pubsub"
+              - "success_rate\\|total_today"
+        depends_on: [AD-01]
+        priority: high
+        notes: "AD-06 dashboard listens to /stats via onValue(). This function must be deployed before the dashboard metrics display correctly."
+
+      - id: AD-04
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build App Registration form (self-service)"
+        files_to_create:
+          - "web/src/pages/RegisterApp.jsx"
+        ui_requirements:
+          - "Form fields: App Name, SMS Template (optional), Rate Limit (optional, defaults 3/10min), Callback URL for webhook (optional)."
+          - "On submit: call Cloud Function `registerApp` (from Phase 9 of main checklist) with masterSecret (stored in admin dashboard env)."
+          - "On success: display appId and appSecret in a modal with copy buttons and warning: 'Save this secret now. It will never be shown again.'"
+        verification:
+          - type: contains
+            file: "web/src/pages/RegisterApp.jsx"
+            patterns:
+              - "registerApp"
+              - "appSecret"
+              - "Copy to clipboard"
+        depends_on: [AD-02]
+        priority: critical
+
+      - id: AD-05
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build App List table with revoke button"
+        files_to_create:
+          - "web/src/pages/AppsList.jsx"
+        ui_requirements:
+          - "Fetch list of registered apps from Firebase RTDB `/registered_apps` (read access for admin only via security rules)."
+          - "Display columns: App ID, App Name, Active (toggle), Created At, Callback URL, Actions (Revoke)."
+          - "Revoke button: calls `revokeApp` Cloud Function (gated by masterSecret)."
+          - "Show confirmation modal before revoke."
+        verification:
+          - type: contains
+            file: "web/src/pages/AppsList.jsx"
+            patterns:
+              - "revokeApp"
+              - "/registered_apps"
+        depends_on: [AD-02]
+        priority: critical
+
+      - id: AD-06
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Implement live metrics dashboard (RTDB listeners + Charts)"
+        files_to_create:
+          - "web/src/pages/Dashboard.jsx"
+          - "web/src/components/MetricsCard.jsx"
+        ui_requirements:
+          - "Use Firebase RTDB `.onValue` to listen to `/stats` node (populated by a scheduled Cloud Function)."
+          - "Display: Total OTP requests today, success rate, failed rate, active devices, pending queue depth."
+          - "Chart.js or Recharts for 7-day trend of OTP requests."
+        verification:
+          - type: contains
+            file: "web/src/pages/Dashboard.jsx"
+            patterns:
+              - "onValue"
+              - "Recharts\\|Chart"
+              - "/stats"
+        depends_on: [AD-02]
+        priority: high
+        notes: "Stats aggregation can be done with a scheduled Cloud Function writing to `/stats` every minute."
+
+      - id: AD-07
+        status: "pending"
+        note: "Frontend UI not yet implemented – pending Phase 10"
+        task: "Add webhook configuration UI per app (edit callback URL + secret rotation)"
+        files_to_modify:
+          - "web/src/pages/AppsList.jsx"
+        ui_requirements:
+          - "Inline edit for webhookUrl and ability to regenerate webhookSecret."
+          - "Call Cloud Function `updateAppWebhook` (new) to write to `/registered_apps/{appId}/webhookUrl` and `/registered_apps/{appId}/webhookSecret` (hashed)."
+        verification:
+          - type: contains
+            file: "web/src/pages/AppsList.jsx"
+            patterns:
+              - "webhookUrl"
+              - "webhookSecret"
+        depends_on: [AD-05]
+        priority: high
+
+      - id: AD-08
+        status: "pending"
+        note: "Frontend UI not yet implemented – pending Phase 10"
+        task: "Deploy consolidated React PWA to Firebase Hosting"
+        commands:
+          - "cd admin-dashboard && npm run build"
+          - "firebase target:apply hosting admin-dashboard ${FIREBASE_HOSTING_TARGET}"
+          - "firebase deploy --only hosting:${FIREBASE_HOSTING_TARGET}"
+        verification:
+          - type: command
+            run: "curl -sf $FIREBASE_HOSTING_URL | grep -i 'Authenticator'"
+            expect_exit: 0
+            description: "PWA is reachable on Firebase Hosting. Set FIREBASE_HOSTING_URL in .env.example."
+          - type: file_exists
+            path: "web/dist/index.html"
+            description: "Production build completed"
+        depends_on: [AD-01]
+        priority: critical
+
+      - id: CP-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Client Portal — authenticated area for app owners"
+        files_to_create:
+          - "web/src/pages/ClientPortal.jsx"
+          - "web/src/pages/MyApps.jsx"
+        ui_requirements:
+          - "After login, clients land on /portal showing their registered apps list."
+          - "Each app card shows: App Name, appId (copyable), credit balance, status (active/revoked)."
+          - "Link to per-app detail page with full metrics and API key management."
+          - "Clients with no registered app see a 'Register Your First App' CTA."
+        verification:
+          - type: contains
+            file: "web/src/pages/MyApps.jsx"
+            patterns:
+              - "/registered_apps"
+              - "appId"
+              - "balance"
+        depends_on: [AD-02, AD-05]
+        priority: critical
+        notes: "Client users have a non-admin Firebase custom claim. They can only read their own /registered_apps/{appId} node."
+
+      - id: CP-02
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build API Key management UI — appSecret reveal and regeneration"
+        files_to_create:
+          - "web/src/pages/AppDetail.jsx"
+        ui_requirements:
+          - "Display appId (always visible) and appSecret (hidden by default, shown as ●●●●●●●●)."
+          - "'Reveal Secret' button: shows confirmation dialog — 'Never share your secret or embed it in frontend code' — then reveals the value for 30 seconds before re-hiding."
+          - "'Regenerate Secret' button: calls Cloud Function `regenerateAppSecret`; shows new secret once in modal with copy button and same warning."
+          - "Sample integration code snippet (curl / fetch) pre-filled with the app's real appId."
+        verification:
+          - type: contains
+            file: "web/src/pages/AppDetail.jsx"
+            patterns:
+              - "appSecret"
+              - "Reveal"
+              - "Regenerate"
+              - "Never share"
+        depends_on: [CP-01]
+        priority: critical
+        security_notes:
+          - "appSecret must never be embedded in any JavaScript bundle. It is fetched on-demand via an authenticated Cloud Function call, never stored in RTDB readable by the client."
+
+      - id: CP-03
+        status: "pending"
+        note: "Frontend UI not yet implemented – pending Phase 10"
+        task: "Create `regenerateAppSecret` Cloud Function — replace appSecret securely"
+        files_to_create:
+          - "functions/src/apps/regenerateAppSecret.js"
+        behaviour:
+          - "Authenticated (Firebase Auth ID token required; caller must be the app owner or an admin)."
+          - "Accept: { appId } (appId inferred from Firebase Auth UID or passed explicitly for admin calls)."
+          - "Generate a new cryptographically random appSecret (32 bytes, hex-encoded) using crypto.randomBytes."
+          - "Hash the new secret (SHA-256) and write the hash to RTDB `/registered_apps/{appId}/appSecretHash`. The plaintext is NEVER stored."
+          - "Return the plaintext secret ONCE in the response: { appSecret: '<new-secret>' }. After this response, the plaintext is gone."
+          - "Invalidate any active OTP sessions tied to the old secret (optional but recommended: set a `secretRotatedAt` timestamp on the app record)."
+        verification:
+          - type: file_exists
+            path: "functions/src/apps/regenerateAppSecret.js"
+          - type: contains
+            file: "functions/src/apps/regenerateAppSecret.js"
+            patterns:
+              - "randomBytes\\|crypto"
+              - "appSecretHash"
+              - "secretRotatedAt"
+        depends_on: [AD-03]
+        priority: critical
+        security_notes:
+          - "Use crypto.randomBytes(32) — never Math.random()."
+          - "Only return the plaintext once; caller must copy it immediately. Warn in the response: 'Store this secret now. It cannot be shown again.'"
+          - "This function must verify the caller owns the appId (match Firebase Auth UID to app owner record)."
+
+      - id: TEST-01
+        task: "Write unit and integration tests for core app management Cloud Functions"
+        files_to_create:
+          - "functions/test/registerApp.test.js"
+          - "functions/test/revokeApp.test.js"
+          - "functions/test/updateAppWebhook.test.js"
+          - "functions/test/regenerateAppSecret.test.js"
+        test_cases:
+          registerApp:
+            - "Valid call: returns appId and plaintext appSecret."
+            - "Unauthenticated call: rejected with 401."
+            - "Duplicate appName: allowed (no uniqueness constraint on name)."
+            - "appSecret stored as hash (SHA-256) not plaintext in RTDB."
+          revokeApp:
+            - "Admin revokes own app: sets active=false."
+            - "Owner revokes own app: sets active=false."
+            - "Non-owner non-admin revokes another's app: rejected with 403."
+            - "Revoked app subsequent sendOtp call: rejected with 403 app_revoked."
+          updateAppWebhook:
+            - "Owner updates webhookUrl: RTDB record updated."
+            - "regenerateSecret=true: new webhookSecretHash written, plaintext returned once."
+            - "Non-owner call: rejected with 403."
+          regenerateAppSecret:
+            - "Owner calls: new appSecretHash written to RTDB, plaintext returned."
+            - "secretRotatedAt timestamp updated."
+            - "Old appSecret no longer validates against new hash."
+        verification:
+          - type: command
+            run: "cd functions && npm test -- registerApp.test.js revokeApp.test.js updateAppWebhook.test.js regenerateAppSecret.test.js"
+            expect_exit: 0
+        depends_on: [CF-01, CF-02, CF-03, CP-03]
+        priority: critical
+
+      - id: TEST-RULES
+        task: "Write automated tests for RTDB and Firestore security rules"
+        files_to_create:
+          - "functions/test/rtdb-rules.test.js"
+          - "functions/test/firestore-rules.test.js"
+        rtdb_test_cases:
+          - "Admin can read any /registered_apps/{appId}."
+          - "Owner can read own /registered_apps/{appId} (ownerUid matches)."
+          - "Non-owner cannot read another app's RTDB record."
+          - "Unauthenticated cannot read /registered_apps."
+          - "No client can write /registered_apps directly."
+          - "No client can write /pending_sms or /stats."
+        firestore_test_cases:
+          - "Authenticated user can read packages collection."
+          - "Unauthenticated user cannot read packages."
+          - "No client can write packages directly."
+          - "Owner can read own app_credits/{appId}."
+          - "Non-owner cannot read another's app_credits."
+          - "Admin can read any transaction."
+          - "Owner can read own transactions."
+          - "No client can write transactions directly."
+        verification:
+          - type: command
+            run: "cd functions && firebase emulators:exec --only firestore,database 'npm test -- rtdb-rules.test.js firestore-rules.test.js'"
+            expect_exit: 0
+        depends_on: [RTDB-01, FS-05]
+        priority: critical
+        notes: "This creates the firestore-rules.test.js file referenced in validation_commands."
+
+      - id: PG-01
+        status: "pending"
+        note: "Frontend UI not yet implemented – pending Phase 10"
+        task: "Build API Playground (interactive OTP testing console)"
+        files_to_create:
+          - "web/src/pages/Playground.jsx"
+        ui_requirements:
+          - "Route: /playground. Requires authentication (client or admin)."
+          - "App selector dropdown: populates appId from the user's registered apps."
+          - "appSecret input field (password type): client enters it manually — it is NEVER stored anywhere server-side during this flow."
+          - "sendOtp section: phone number input + 'Send OTP' button. Calls sendOtp Cloud Function directly from browser using appId + appSecret entered above."
+          - "Response panel: shows raw JSON response (success or error). Displays sessionId on success."
+          - "verifyOtp section (unlocked after sendOtp): OTP code input + sessionId (auto-filled) + 'Verify' button. Calls verifyOtp and shows raw JSON result."
+          - "Error codes are explained inline (e.g., 402 → 'Insufficient credits — top up via Billing page')."
+          - "Security banner at top: 'Requests are made directly from your browser to the API. Your appSecret is never logged or stored by this playground.'"
+        verification:
+          - type: contains
+            file: "web/src/pages/Playground.jsx"
+            patterns:
+              - "sendOtp"
+              - "verifyOtp"
+              - "appSecret"
+              - "sessionId"
+              - "402"
+        depends_on: [AD-02, CP-01]
+        priority: high
+        notes: "The playground calls Cloud Functions directly (not a proxy) so the appSecret never touches the React server. Display a clear disclaimer."
+
+  - id: 2
+    name: "Webhook Delivery — Notify App Backends on OTP Status Change"
+    blocking: false
+    description: >
+      Extend the existing Cloud Functions to send HTTP POST callbacks to app-configured webhook URLs
+      when an OTP status changes to 'sent', 'failed', or 'expired'. Includes HMAC signature verification.
+    items:
+      - id: WH-01
+        task: "Extend `sendOtp` to store webhookUrl and webhookSecret from app registry into `/pending_sms/{sessionId}`"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "In `sendOtp`, after reading app config, copy webhookUrl and webhookSecret (hashed) into the new `/pending_sms/{sessionId}` node."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            pattern: "webhookUrl.*pending_sms\\|pending_sms.*webhookUrl"
+        depends_on: [AD-01, CF-01]
+        priority: critical
+        notes: "Requires registerApp CF (CF-01) to have written webhookUrl into /registered_apps first."
+
+      - id: WH-02
+        task: "Create utility function `sendWebhook(sessionId, status, details)`"
+        files_to_create:
+          - "functions/src/lib/webhook.js"
+        behaviour:
+          - "Read `/pending_sms/{sessionId}` to get webhookUrl, webhookSecret, to, message, etc."
+          - "Construct payload: { sessionId, status, phoneNumber, timestamp, error? }"
+          - "Compute HMAC-SHA256 signature using webhookSecret over the JSON stringified payload."
+          - "Add header: X-Webhook-Signature: base64(signature)"
+          - "POST to webhookUrl with timeout 5 seconds. Retry up to 3 times with exponential backoff (1s, 2s, 4s)."
+          - "Log failures (non-200 response or timeout) to Firebase Crashlytics and RTDB `/webhook_failures/{sessionId}`."
+        verification:
+          - type: file_exists
+            path: "functions/src/lib/webhook.js"
+          - type: contains
+            file: "functions/src/lib/webhook.js"
+            patterns:
+              - "hmac\\|createHmac"
+              - "X-Webhook-Signature"
+              - "retry"
+              - "fetch\\|axios"
+        depends_on: [WH-01]
+        priority: critical
+
+      - id: WH-03
+        task: "Call webhook from `otpStatus` when status transitions to 'sent', 'failed', or 'expired'"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "In `otpStatus`, after determining the final status (sent/failed/expired), call sendWebhook() asynchronously (do not await – fire and forget but log errors)."
+          - "If status is 'failed' and resend triggered, also send webhook for the failure before regenerating."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            pattern: "sendWebhook\\|webhook"
+        depends_on: [WH-02]
+        priority: high
+
+      - id: WH-04
+        task: "Add scheduled cleanup for webhook failure logs"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "Extend `cleanupOldRequests` to delete `/webhook_failures/*` older than 7 days."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            pattern: "webhook_failures.*remove\\|delete.*webhook_failures"
+        depends_on: [WH-02]
+        priority: medium
+
+      - id: WH-05
+        task: "Write test for webhook delivery (local emulator + mock endpoint)"
+        files_to_create:
+          - "functions/test/webhook.test.js"
+        test_cases:
+          - "Send OTP, manually set status to 'sent' via RTDB, verify webhook called with correct signature."
+          - "Simulate webhook endpoint returning 500, verify retry logic."
+        verification:
+          - type: command
+            run: "cd functions && npm test -- webhook.test.js"
+            expect_exit: 0
+        depends_on: [WH-02, WH-03]
+        priority: high
+
+  - id: 3
+    name: "Client Integration Guides (Multi-Language SDK Examples)"
+    blocking: false
+    description: >
+      Produce ready-to-copy code snippets and documentation for integrating the OTP service
+      from various backend languages: Laravel (PHP), WordPress (PHP), Next.js (Node.js), Dart (server),
+      Python, Ruby, Go. Include security warnings about never embedding appSecret in frontend.
+    items:
+      - id: CI-01
+        task: "Create integration guide index page (public docs)"
+        files_to_create:
+          - "docs/CLIENT-INTEGRATION.md"
+        content_requirements:
+          - "Overview of how OTP service works (sendOtp → verifyOtp)."
+          - "Prerequisites: register app (via admin dashboard) to get appId and appSecret."
+          - "Security rule: NEVER embed appSecret in mobile/web frontend – only in backend server."
+          - "Rate limits and error codes reference."
+          - "Links to language-specific examples (separate files)."
+        verification:
+          - type: file_exists
+            path: "docs/CLIENT-INTEGRATION.md"
+          - type: contains
+            file: "docs/CLIENT-INTEGRATION.md"
+            pattern: "appSecret.*never\\|NEVER embed"
+        depends_on: []
+        priority: high
+
+      - id: CI-02
+        task: "Write Laravel (PHP) integration example"
+        files_to_create:
+          - "docs/examples/laravel-otp-service.md"
+        content:
+          - "Environment variables: AUTH_APP_ID, AUTH_APP_SECRET, AUTH_SEND_OTP_URL, AUTH_VERIFY_OTP_URL, AUTH_OTP_STATUS_URL"
+          - "Service class with sendOtp($phoneNumber) and verifyOtp($sessionId, $otp) methods using Laravel HTTP Client."
+          - "Example controller for phone login."
+          - "Warning: store appSecret in .env, never in database or config cache."
+        verification:
+          - type: contains
+            file: "docs/examples/laravel-otp-service.md"
+            pattern: "Http::post\\|sendOtp"
+        depends_on: [CI-01]
+        priority: high
+
+      - id: CI-03
+        task: "Write WordPress (PHP) integration example"
+        files_to_create:
+          - "docs/examples/wordpress-otp-plugin.md"
+        content:
+          - "Define constants in wp-config.php: AUTH_APP_ID, AUTH_APP_SECRET."
+          - "Custom function using wp_remote_post to call sendOtp and verifyOtp."
+          - "Example hook for login form submission."
+          - "Security: never expose appSecret via REST API or shortcodes."
+        verification:
+          - type: contains
+            file: "docs/examples/wordpress-otp-plugin.md"
+            pattern: "wp_remote_post"
+        depends_on: [CI-01]
+        priority: high
+
+      - id: CI-04
+        task: "Write Next.js (Node.js) integration example"
+        files_to_create:
+          - "docs/examples/nextjs-otp-api.md"
+        content:
+          - "API routes: /api/send-otp, /api/verify-otp."
+          - "Environment variables: AUTH_APP_ID, AUTH_APP_SECRET, AUTH_API_URLS."
+          - "Using fetch with timeout and error handling."
+          - "Middleware to protect routes – only backend calls."
+        verification:
+          - type: contains
+            file: "docs/examples/nextjs-otp-api.md"
+            pattern: "export async function POST"
+        depends_on: [CI-01]
+        priority: high
+
+      - id: CI-05
+        task: "Write Dart (server-side) integration example (e.g., Dart Frog)"
+        files_to_create:
+          - "docs/examples/dart-otp-service.md"
+        content:
+          - "Using http package to make POST requests."
+          - "Environment variables via Platform.environment."
+          - "Example Dart Frog route handler."
+        verification:
+          - type: contains
+            file: "docs/examples/dart-otp-service.md"
+            pattern: "http.post\\|sendOtp"
+        depends_on: [CI-01]
+        priority: medium
+
+      - id: CI-06
+        task: "Write Python (Flask/FastAPI) integration example"
+        files_to_create:
+          - "docs/examples/python-otp-service.md"
+        content:
+          - "Requests library, environment variables, error handling."
+          - "Example FastAPI endpoint."
+        verification:
+          - type: contains
+            file: "docs/examples/python-otp-service.md"
+            pattern: "requests.post"
+        depends_on: [CI-01]
+        priority: medium
+
+      - id: CI-07
+        task: "Add webhook receiver example (Node.js + PHP) for app backends"
+        files_to_create:
+          - "docs/examples/webhook-receiver-node.md"
+          - "docs/examples/webhook-receiver-php.md"
+        content:
+          - "How to verify X-Webhook-Signature header using shared secret."
+          - "Idempotency: store event_id to prevent duplicate processing."
+          - "Example update user's verification status."
+        verification:
+          - type: file_exists
+            paths:
+              - "docs/examples/webhook-receiver-node.md"
+              - "docs/examples/webhook-receiver-php.md"
+          - type: contains
+            file: "docs/examples/webhook-receiver-node.md"
+            pattern: "crypto.createHmac"
+        depends_on: [WH-02]
+        priority: high
+
+  - id: 4
+    name: "Billing Integration — bKash (Manual Admin Verification)"
+    blocking: false
+    status: deprecated
+    deprecation_note: >
+      All BI-* items are superseded by Phases 6–9 which implement the same flow using
+      Firestore instead of RTDB. The RTDB data model here (/topup_requests, /app_credits)
+      conflicts with the Firestore collections defined in Phase 6. If you are building
+      Phases 6–9, skip this entire phase. Do NOT implement both.
+    description: >
+      Simple bKash top-up flow with NO official API and NO automated SMS scraping.
+      The merchant bKash personal/Send Money number is +8801613249520.
+      Flow: user pays via bKash → submits TrxID in dashboard → admin checks their
+      own bKash SMS/app history → admin manually confirms in the admin panel →
+      OTP credits are added to the app's balance.
+    payment_flow:
+      - "1. App owner clicks 'Top Up Credits' in the admin dashboard."
+      - "2. Dashboard shows the bKash personal number (+8801613249520) and exact BDT amount to send."
+      - "3. App owner opens bKash app (or dials *247#) and sends money to +8801613249520."
+      - "4. bKash sends a confirmation SMS to the app owner's phone containing a TrxID."
+      - "5. App owner enters the TrxID and amount into the dashboard form and clicks 'Submit'."
+      - "6. A top-up request is created in RTDB with status=pending."
+      - "7. Admin receives a notification (or sees it on the Pending Payments list)."
+      - "8. Admin checks their own bKash SMS / bKash app transaction history to verify the TrxID and amount."
+      - "9. If verified, admin clicks 'Confirm' in the dashboard — OTP credits are added. Otherwise, admin clicks 'Reject'."
+    security_notes:
+      - "TrxID is user-submitted — trust is established by the admin manually cross-checking against real bKash history."
+      - "Store bKash personal number in environment variable, never hardcoded in client code."
+      - "TrxIDs are idempotency-keyed to prevent double-crediting the same transaction."
+    items:
+      - id: BI-01
+        task: "Add bKash environment variables to .env.example and functions/.env.example"
+        files_to_modify:
+          - ".env.example"
+          - "functions/.env.example"
+        required_vars:
+          - "BKASH_PERSONAL_NUMBER=   # Merchant Send Money number shown to payers (+8801613249520)"
+          - "BKASH_MIN_TOPUP_AMOUNT=  # Minimum acceptable BDT amount per top-up"
+        verification:
+          - type: contains
+            file: ".env.example"
+            pattern: "BKASH_PERSONAL_NUMBER"
+          - type: anti_pattern_check
+            file: ".env.example"
+            forbidden: "01613249520"
+            description: "Real bKash number must not appear in the example file — use empty placeholder"
+        depends_on: []
+        priority: critical
+
+      - id: BI-02
+        task: "Add RTDB data model for top-up requests and app credit balances"
+        files_to_modify:
+          - "docs/DATA-MODEL.md"
+        data_model:
+          "/topup_requests/{requestId}":
+            fields:
+              appId: string
+              amountBDT: number # BDT amount the app owner claims to have sent
+              otpCreditsToAdd: number # Credits to grant on confirmation
+              trxId: string # bKash TrxID submitted by app owner
+              status: "pending|confirmed|rejected"
+              createdAt: timestamp
+              confirmedAt: timestamp|null
+              adminUid: string|null # Firebase UID of admin who confirmed/rejected
+              adminNote: string|null # Optional note from admin
+          "/app_credits/{appId}":
+            fields:
+              balance: number # Remaining OTP credits
+              lifetimeTopupBDT: number # Total BDT credited across all time
+              lastTopupAt: timestamp
+        verification:
+          - type: file_exists
+            path: "docs/DATA-MODEL.md"
+          - type: contains
+            file: "docs/DATA-MODEL.md"
+            pattern: "topup_requests"
+        depends_on: [BI-01]
+        priority: critical
+
+      - id: BI-03
+        task: "Create Cloud Function `submitTopupRequest` — app owner submits payment claim"
+        files_to_create:
+          - "functions/src/billing/topupRequest.js"
+        behaviour:
+          - "Authenticated (admin dashboard Firebase ID token, admin claim required)."
+          - "Accept: { appId, amountBDT, otpCreditsToAdd, trxId }."
+          - "Validate: amountBDT >= BKASH_MIN_TOPUP_AMOUNT, trxId is non-empty string, trxId not already used in /topup_requests."
+          - "Write to RTDB `/topup_requests/{requestId}` with status=pending and createdAt=now."
+          - "Return: { requestId, message: 'Pending admin review.' }."
+        verification:
+          - type: file_exists
+            path: "functions/src/billing/topupRequest.js"
+          - type: contains
+            file: "functions/src/billing/topupRequest.js"
+            patterns:
+              - "submitTopupRequest"
+              - "/topup_requests"
+              - "status.*pending"
+        depends_on: [BI-02]
+        priority: critical
+
+      - id: BI-04
+        task: "Create Cloud Function `resolveTopupRequest` — admin confirms or rejects"
+        files_to_modify:
+          - "functions/src/billing/topupRequest.js"
+        behaviour:
+          - "Authenticated (admin claim required)."
+          - "Accept: { requestId, action: 'confirm'|'reject', adminNote? }."
+          - "Read `/topup_requests/{requestId}` — reject if already resolved (idempotency)."
+          - "If action=confirm: increment `/app_credits/{appId}/balance` by otpCreditsToAdd using RTDB transaction(); set status=confirmed."
+          - "If action=reject: set status=rejected, no credit change."
+          - "Write adminUid, confirmedAt, adminNote to the request record."
+        verification:
+          - type: contains
+            file: "functions/src/billing/topupRequest.js"
+            patterns:
+              - "resolveTopupRequest"
+              - "transaction()"
+              - "confirmed\\|rejected"
+              - "adminUid"
+        depends_on: [BI-03]
+        priority: critical
+        notes: "Use RTDB transaction() for balance increment to prevent race conditions on concurrent confirmations."
+
+      - id: BI-05
+        task: "Build bKash top-up UI in admin dashboard (app owner side)"
+        files_to_create:
+          - "web/src/pages/Billing.jsx"
+        ui_requirements:
+          - "Form fields: Amount (BDT), OTP Credits to receive (auto-calculated or entered), TrxID."
+          - "Above the form: display bKash personal number (returned from server, not hardcoded in JS) and instructions."
+          - "On submit: call `submitTopupRequest` Cloud Function."
+          - "On success: show 'Your top-up is pending admin approval. Credits will appear once confirmed.'"
+          - "Table of past top-up requests with columns: Date, TrxID, Amount, Credits, Status (pending/confirmed/rejected)."
+          - "Credit balance shown prominently (read from /app_credits/{appId}/balance)."
+        verification:
+          - type: contains
+            file: "web/src/pages/Billing.jsx"
+            patterns:
+              - "submitTopupRequest"
+              - "pending"
+              - "trxId"
+        depends_on: [BI-03, AD-02]
+        priority: critical
+        notes: "bKash number must come from Cloud Function response — never from import.meta.env or any client bundle."
+
+      - id: BI-06
+        task: "Build Pending Payments admin panel (admin side)"
+        files_to_create:
+          - "web/src/pages/PendingPayments.jsx"
+        ui_requirements:
+          - "Table of all top-up requests with status=pending, columns: App ID, TrxID, Amount (BDT), Credits, Submitted At."
+          - "Each row has 'Confirm' (green) and 'Reject' (red) buttons."
+          - "Clicking Confirm: prompts admin 'Have you verified TrxID {trxId} for Tk {amount} in your bKash history?' → on OK, calls `resolveTopupRequest` with action=confirm."
+          - "Clicking Reject: optional note input → calls `resolveTopupRequest` with action=reject."
+          - "After action: row disappears from pending list; show toast 'Credits added' or 'Request rejected'."
+          - "Reminder text at top: 'Verify each TrxID against your bKash SMS or bKash app transaction history before confirming.'"
+        verification:
+          - type: contains
+            file: "web/src/pages/PendingPayments.jsx"
+            patterns:
+              - "resolveTopupRequest"
+              - "confirm\\|reject"
+              - "pending"
+        depends_on: [BI-04, AD-02]
+        priority: critical
+
+      - id: BI-07
+        task: "Add credit balance guard in `sendOtp`"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "After app validation, read `/app_credits/{appId}/balance`."
+          - "If balance <= 0: return 402 { error: 'insufficient_credits', message: 'Top up OTP credits via the admin dashboard.' }."
+          - "After successful OTP send, decrement balance by 1 using RTDB transaction()."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            pattern: "insufficient_credits\\|402"
+        depends_on: [BI-04]
+        priority: critical
+        notes: "Use transaction() not set() to safely handle concurrent sendOtp calls."
+
+      - id: BI-08
+        task: "Create test plan for bKash manual billing"
+        manual_test_steps:
+          - step: "App owner fills top-up form with a valid TrxID and amount, submits"
+            expected: "Request created in RTDB with status=pending. Success message shown."
+          - step: "App owner submits the same TrxID again"
+            expected: "Rejected — duplicate TrxID error returned."
+          - step: "Admin sees pending request in PendingPayments page, clicks Confirm"
+            expected: "resolveTopupRequest sets status=confirmed, balance incremented."
+          - step: "Admin clicks Reject with a note"
+            expected: "status=rejected, no balance change, note stored."
+          - step: "Call sendOtp with zero-balance app"
+            expected: "402 insufficient_credits returned."
+          - step: "Call sendOtp after credit confirmed"
+            expected: "OTP sent, balance decremented by 1."
+        verification:
+          - type: manual_check
+            description: "All 6 steps pass."
+        depends_on: [BI-07]
+        priority: critical
+
+  - id: 5
+    name: "Marketing Site — Public Landing, Pricing, and Documentation Pages"
+    blocking: false
+    description: >
+      Build the unauthenticated public-facing section of the React PWA: a landing page,
+      a pricing comparison table, and a documentation index linking to the language-specific
+      integration guides from Phase 3. These pages require no Firebase Auth and should be
+      SEO-friendly with proper meta tags.
+    platform_differentiation:
+      headline: "Stop Managing SMS Gateways. Focus on Your App."
+      key_selling_points:
+        - "Authentication as a Service: sell the complete OTP solution, not just the SMS pipe."
+        - "Webhooks First: server is notified on every OTP status change (sent/verified/failed)."
+        - "Developer-First API: REST API with ready-made code snippets for Laravel, Next.js, Dart, Python."
+        - "Multi-App Management: one account, unlimited apps, separate API keys per app."
+        - "API Playground: test your integration live before writing a single line of code."
+    items:
+      - id: MK-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build public landing page (Home)"
+        files_to_create:
+          - "web/src/pages/public/Home.jsx"
+        ui_requirements:
+          - "Hero section: headline + CTA buttons ('Get Started Free', 'View Pricing')."
+          - "Features section: highlight Webhooks, API Playground, Multi-App, Developer-first."
+          - "How It Works: 3-step graphic (Register App → Call API → Receive OTP Webhook)."
+          - "Competitor-style comparison table (vs MiMSMS, vs Khudebarta) emphasising your developer features."
+          - "CTA to sign up / log in."
+          - "No Firebase Auth required — page is fully public."
+        verification:
+          - type: file_exists
+            path: "web/src/pages/public/Home.jsx"
+          - type: contains
+            file: "web/src/pages/public/Home.jsx"
+            pattern: "API Playground\\|Webhooks"
+        depends_on: [AD-01]
+        priority: high
+
+      - id: MK-02
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build public Pricing page"
+        files_to_create:
+          - "web/src/pages/public/Pricing.jsx"
+        ui_requirements:
+          - "Display the active credit packages from Firestore (read via public Cloud Function or authenticated SDK) as pricing cards."
+          - "Each card shows: Package name, SMS Quota (e.g. 500 OTPs), Price in BDT, Validity (e.g. 30 days)."
+          - "Note under each card: 'Credits purchased via bKash manual transfer. Approved within 1 business day.'"
+          - "NO subscription tier — the billing system only supports credit packages. Do not advertise features not implemented."
+          - "Comparison table: Your Service vs MiMSMS vs Khudebarta, highlighting Webhooks, API Playground, Multi-App."
+          - "CTA: 'Get Started' links to /login. 'Buy Credits' links to /portal/buy-credits after login."
+        verification:
+          - type: file_exists
+            path: "web/src/pages/public/Pricing.jsx"
+          - type: contains
+            file: "web/src/pages/public/Pricing.jsx"
+            pattern: "bKash\\|packages"
+        depends_on: [MK-01]
+        priority: high
+        notes: "Pricing cards should show packages from Firestore. Use a public Cloud Function `getActivePackages` (or Firestore client SDK with auth) to fetch packages. Do not hardcode prices."
+
+      - id: MK-03
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build public Documentation index page"
+        files_to_create:
+          - "web/src/pages/public/Docs.jsx"
+        ui_requirements:
+          - "Overview: how sendOtp / verifyOtp work, request/response shapes."
+          - "Prerequisites box: 'Register your app to get appId and appSecret.'"
+          - "Security warning: 'NEVER embed appSecret in mobile or web frontend code — server-side only.'"
+          - "Language tabs: Laravel, WordPress, Next.js, Dart, Python — each shows ready-to-copy snippet (sourced from docs/examples/*.md)."
+          - "Error codes reference table."
+          - "Rate limits reference."
+          - "Link to live API Playground (requires login)."
+        verification:
+          - type: file_exists
+            path: "web/src/pages/public/Docs.jsx"
+          - type: contains
+            file: "web/src/pages/public/Docs.jsx"
+            pattern: "NEVER embed\\|appSecret"
+        depends_on: [MK-01]
+        priority: high
+        notes: "Snippets can be imported as raw strings from the docs/examples/ .md files via Vite's ?raw import or simply inlined."
+
+  - id: 6
+    name: "Billing Database & Firestore Setup"
+    blocking: true
+    description: >
+      Enable Cloud Firestore in the project and define the three billing collections:
+      packages (admin-seeded credit bundles), app_credits (per-app balance + expiry),
+      and transactions (audit log for every credit purchase request).
+      Write Firestore security rules to enforce Cloud-Functions-only writes on sensitive
+      collections, and create the necessary composite indexes.
+    items:
+      - id: BILL-ENV
+        task: "Verify billing environment variables in functions/.env.example (Phase 6 owns this — Phase 4 deprecated)"
+        files_to_modify:
+          - "functions/.env.example"
+        required_vars:
+          - "BKASH_PERSONAL_NUMBER=   # bKash Send Money number displayed to clients during credit purchase"
+          - "BKASH_MIN_TOPUP_AMOUNT=  # Minimum BDT per top-up (e.g. 500)"
+        verification:
+          - type: contains
+            file: "functions/.env.example"
+            patterns:
+              - "BKASH_PERSONAL_NUMBER"
+              - "BKASH_MIN_TOPUP_AMOUNT"
+          - type: anti_pattern_check
+            file: "functions/.env.example"
+            forbidden: "01613249520"
+            description: "Real bKash number must use a placeholder in the example file"
+        depends_on: [ENV-01]
+        priority: critical
+        notes: "ENV-01 (Phase 1) creates functions/.env.example. This task verifies the billing-specific vars are present. Phase 4 (BI-01) previously owned this — now Phase 6 owns it since Phase 4 is deprecated."
+
+      - id: FS-01
+        task: "Enable Firestore in the Firebase project and update firebase.js SDK init"
+        files_to_modify:
+          - "web/src/firebase.js"
+          - "functions/index.js"
+        changes:
+          - "Add getFirestore() initialisation alongside the existing RTDB getDatabase() call."
+          - "Export db (Firestore) from firebase.js alongside the RTDB ref."
+        verification:
+          - type: contains
+            file: "web/src/firebase.js"
+            pattern: "getFirestore"
+        depends_on: []
+        priority: critical
+
+      - id: FS-02
+        task: "Define `packages` Firestore collection schema and seed initial packages"
+        files_to_create:
+          - "functions/src/billing/seedPackages.js"
+          - "docs/FIRESTORE-SCHEMA.md"
+        schema:
+          collection: "packages"
+          fields:
+            id: "auto (Firestore document ID)"
+            name: "string  # e.g. 'Starter 500', 'Pro 2000'"
+            sms_quota: "integer  # number of OTP sends included"
+            price_bdt: "integer  # price in Bangladeshi Taka"
+            validity_days: "integer  # how many days the credits last from purchase"
+            is_active: "boolean  # soft-delete flag"
+            created_at: "timestamp"
+        seed_data:
+          - name: "Starter"
+            sms_quota: 500
+            price_bdt: 500
+            validity_days: 30
+            is_active: true
+          - name: "Pro"
+            sms_quota: 2000
+            price_bdt: 1800
+            validity_days: 60
+            is_active: true
+          - name: "Enterprise"
+            sms_quota: 10000
+            price_bdt: 8000
+            validity_days: 90
+            is_active: true
+        verification:
+          - type: file_exists
+            path: "functions/src/billing/seedPackages.js"
+          - type: contains
+            file: "functions/src/billing/seedPackages.js"
+            pattern: "packages.*set\\|firestore.*packages"
+        depends_on: [FS-01]
+        priority: critical
+
+      - id: FS-03
+        task: "Define `app_credits` Firestore collection schema"
+        files_to_modify:
+          - "docs/FIRESTORE-SCHEMA.md"
+        schema:
+          collection: "app_credits"
+          document_id: "{appId}  # same key as RTDB /registered_apps/{appId}"
+          fields:
+            appId: "string"
+            sms_remaining: "integer  # credits left; decremented by sendOtp"
+            expires_at: "timestamp  # when this credit bundle expires"
+            last_package_id: "string  # Firestore packages/{id}"
+            purchased_at: "timestamp"
+            updated_at: "timestamp"
+          sub_collections:
+            "app_credits/{appId}/usage":
+              fields:
+                deducted_at: "timestamp"
+                session_id: "string  # OTP sessionId that consumed the credit"
+                phone_number_hash: "string  # SHA-256 of phone, for privacy"
+        verification:
+          - type: contains
+            file: "docs/FIRESTORE-SCHEMA.md"
+            pattern: "app_credits"
+        depends_on: [FS-01]
+        priority: critical
+        architecture_notes:
+          - "The Firestore document ID is the appId (string) generated by registerApp CF (CF-01), NOT the Firebase Auth UID."
+          - "The Firestore security rule `request.auth.uid == resource.data.appId` therefore only works if the Firebase Auth UID happens to equal appId, which it does NOT."
+          - "CORRECT security approach: approveCredit CF (Admin SDK) writes the document. Client reads must be gated differently."
+          - "RECOMMENDED FIX for FS-05: store ownerUid in the app_credits document and use `request.auth.uid == resource.data.ownerUid` as the read rule."
+          - "approveCredit CF should write ownerUid into app_credits when creating the document (read ownerUid from RTDB /registered_apps/{appId}/ownerUid)."
+          - "Update FS-05 firestore.rules to use: `request.auth.uid == resource.data.ownerUid` not `resource.data.appId`."
+
+      - id: FS-04
+        task: "Define `transactions` Firestore collection schema"
+        files_to_modify:
+          - "docs/FIRESTORE-SCHEMA.md"
+        schema:
+          collection: "transactions"
+          document_id: "{transactionId}  # UUID generated by requestCredit CF"
+          fields:
+            appId: "string"
+            package_id: "string  # Firestore packages/{id}"
+            sms_quota: "integer  # copied from package at time of request"
+            validity_days: "integer  # copied from package at time of request"
+            amount_bdt: "integer  # copied from package at time of request"
+            trx_id: "string|null  # bKash TrxID submitted by client"
+            status: "enum: pending | approved | rejected"
+            requested_at: "timestamp"
+            approved_at: "timestamp|null"
+            admin_id: "string|null  # Firebase UID of approving admin"
+            admin_notes: "string|null"
+        verification:
+          - type: contains
+            file: "docs/FIRESTORE-SCHEMA.md"
+            pattern: "transactions"
+        depends_on: [FS-01]
+        priority: critical
+
+      - id: FS-05
+        task: "Write Firestore security rules for billing collections"
+        files_to_create:
+          - "firestore.rules"
+        rules:
+          packages:
+            read: "request.auth != null  # any authenticated user"
+            write: "false  # Cloud Functions (Admin SDK) only"
+          app_credits:
+            read: "request.auth != null && (request.auth.token.admin == true || request.auth.uid == resource.data.ownerUid)"
+            write: "false  # Cloud Functions (Admin SDK) only — never direct client write"
+          "app_credits/{appId}/usage":
+            read: "request.auth != null && request.auth.token.admin == true  # Admin-only reads"
+            write: "false"
+          transactions:
+            read: >
+              request.auth != null &&
+              (request.auth.token.admin == true || request.auth.uid == resource.data.ownerUid)
+            write: "false  # Cloud Functions only"
+        verification:
+          - type: file_exists
+            path: "firestore.rules"
+          - type: contains
+            file: "firestore.rules"
+            patterns:
+              - "packages"
+              - "app_credits"
+              - "transactions"
+              - "request.auth.token.admin"
+        depends_on: [FS-02, FS-03, FS-04]
+        priority: critical
+        security_notes:
+          - "All writes go through Cloud Functions using the Firebase Admin SDK, which bypasses security rules — but rules protect against direct client SDK manipulation."
+          - "Never grant write access to app_credits directly from the client."
+
+      - id: FS-06
+        task: "Create Firestore composite indexes for billing queries"
+        files_to_create:
+          - "firestore.indexes.json"
+        indexes:
+          - collection: "transactions"
+            fields: ["appId ASC", "requested_at DESC"]
+            description: "Client portal: list own transactions sorted by date"
+          - collection: "transactions"
+            fields: ["status ASC", "requested_at ASC"]
+            description: "Admin: list pending transactions in submission order"
+          - collection: "packages"
+            fields: ["is_active ASC", "price_bdt ASC"]
+            description: "Client portal: show active packages sorted by price"
+        verification:
+          - type: file_exists
+            path: "firestore.indexes.json"
+          - type: contains
+            file: "firestore.indexes.json"
+            pattern: "transactions\\|packages"
+        depends_on: [FS-04, FS-05]
+        priority: high
+
+  - id: 7
+    name: "Credit Check & Deduction in Cloud Functions"
+    blocking: true
+    description: >
+      Modify the existing `sendOtp` Cloud Function to gate OTP delivery on a valid,
+      non-expired credit balance from Firestore `app_credits`. After a successful SMS
+      queue, decrement `sms_remaining` inside a Firestore transaction and write a usage
+      audit record. Add a new `getCredits` function for clients to check their balance.
+    items:
+      - id: CR-01
+        task: "Modify `sendOtp` to read and validate app_credits before generating OTP"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "After app validation (appId + appSecret check), read Firestore `app_credits/{appId}`."
+          - "If document does not exist: return 402 { error: 'no_credits', message: 'No credit package purchased. Visit the dashboard to buy credits.' }."
+          - "If sms_remaining <= 0: return 402 { error: 'no_credits', message: 'Out of SMS credits. Please top up.' }."
+          - "If expires_at < Date.now(): return 402 { error: 'credits_expired', message: 'Credit package expired. Please purchase a new one.' }."
+          - "Only proceed to OTP generation and SMS queue if all checks pass."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            patterns:
+              - "app_credits"
+              - "sms_remaining"
+              - "credits_expired"
+              - "no_credits"
+              - "expires_at"
+        depends_on: [FS-03, WH-01]
+        priority: critical
+        notes: >
+          This modifies sendOtp in functions/index.js, which was already modified by WH-01
+          (webhook copy). Merge both changes carefully into one function body.
+          This Firestore-based guard supersedes the RTDB-based guard in BI-07 — do not implement both.
+
+      - id: CR-02
+        task: "Add Firestore transaction to decrement `sms_remaining` after successful OTP queue"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "After confirming SMS is queued to /pending_sms (RTDB), run a Firestore transaction on app_credits/{appId}."
+          - "Inside the transaction: read sms_remaining, verify still > 0 (double-check), write sms_remaining - 1 and updated_at = now()."
+          - "If the transaction fails (concurrent call raced to 0): return 402 no_credits."
+          - "Use runTransaction() — never use update() for this decrement."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            patterns:
+              - "runTransaction"
+              - "sms_remaining.*-.*1\\|sms_remaining - 1"
+        depends_on: [CR-01]
+        priority: critical
+        notes: "runTransaction provides optimistic locking — safe for concurrent sendOtp calls from the same app."
+
+      - id: CR-03
+        task: "Write usage audit record to `app_credits/{appId}/usage` sub-collection after deduction"
+        files_to_modify:
+          - "functions/index.js"
+        changes:
+          - "After successful Firestore transaction in CR-02, write a document to app_credits/{appId}/usage."
+          - "Fields: deducted_at (now()), session_id (the OTP sessionId), phone_number_hash (SHA-256 of the target phone number — never store raw phone here)."
+          - "This write is outside the transaction (eventual consistency is acceptable for audit logs)."
+        verification:
+          - type: contains
+            file: "functions/index.js"
+            patterns:
+              - "app_credits.*usage\\|usage.*collection"
+              - "createHash.*sha256\\|phone_number_hash"
+        depends_on: [CR-02]
+        priority: critical
+        security_notes:
+          - "Hash the phone number (SHA-256) — do not store PII in the audit log."
+
+      - id: CR-04
+        task: "Create `getCredits` Cloud Function (HTTPS GET) — client balance check"
+        files_to_create:
+          - "functions/src/billing/getCredits.js"
+        behaviour:
+          - "Authenticate via appId + appSecret (same validation as sendOtp)."
+          - "Read Firestore app_credits/{appId}."
+          - "Return: { sms_remaining, expires_at, last_package_id, purchased_at } or { sms_remaining: 0, expires_at: null } if no document."
+        verification:
+          - type: file_exists
+            path: "functions/src/billing/getCredits.js"
+          - type: contains
+            file: "functions/src/billing/getCredits.js"
+            patterns:
+              - "app_credits"
+              - "sms_remaining"
+              - "expires_at"
+        depends_on: [FS-03]
+        priority: high
+
+      - id: CR-05
+        task: "Write tests for credit check and deduction"
+        files_to_create:
+          - "functions/test/creditCheck.test.js"
+        test_cases:
+          - "sendOtp with no app_credits document: expect 402 no_credits."
+          - "sendOtp with sms_remaining = 0: expect 402 no_credits."
+          - "sendOtp with expires_at in the past: expect 402 credits_expired."
+          - "sendOtp with valid credits: expect OTP queued and sms_remaining decremented."
+          - "Concurrent sendOtp calls that drain last credit: only one succeeds, other gets 402."
+          - "getCredits with valid app: returns correct balance."
+        verification:
+          - type: command
+            run: "cd functions && npm test -- creditCheck.test.js"
+            expect_exit: 0
+        depends_on: [CR-01, CR-02, CR-03, CR-04]
+        priority: critical
+
+  - id: 8
+    name: "Manual bKash Credit Request & Admin Approval (Cloud Functions)"
+    blocking: false
+    description: >
+      Add four new Cloud Functions: `upsertPackage` (admin creates/edits packages — BK-00),
+      `requestCredit` (client initiates purchase, gets bKash payment instructions — BK-01),
+      `submitTrxId` (client attaches bKash TrxID to pending transaction — BK-02),
+      and `approveCredit` (admin approves or rejects, credits added via Firestore transaction — BK-03).
+      All writes use the Firebase Admin SDK. Idempotency enforced on approveCredit.
+    items:
+      - id: BK-00
+        task: "Create `upsertPackage` Cloud Function — admin creates or updates a credit package"
+        files_to_create:
+          - "functions/src/billing/upsertPackage.js"
+        behaviour:
+          - "Authenticate via Firebase Auth ID token (must have admin custom claim)."
+          - "Accept: { packageId?: string, name, sms_quota, price_bdt, validity_days, is_active }."
+          - "If packageId provided and document exists: update the document (partial merge)."
+          - "If no packageId: create a new document with auto-generated ID and set created_at=now()."
+          - "Return: { packageId, success: true }."
+          - "Validate inputs: sms_quota > 0, price_bdt > 0, validity_days > 0, name is non-empty string."
+        verification:
+          - type: file_exists
+            path: "functions/src/billing/upsertPackage.js"
+          - type: contains
+            file: "functions/src/billing/upsertPackage.js"
+            patterns:
+              - "admin.*claim\\|request.auth.token.admin"
+              - "packages"
+              - "sms_quota"
+              - "is_active"
+        depends_on: [FS-02, FS-05]
+        priority: critical
+        notes: >
+          Required because Firestore security rules set write=false on the packages collection
+          for all clients. The Admin SDK (used in Cloud Functions) bypasses rules — this is
+          the only safe write path. RM-01 (Package Manager UI) calls this function.
+
+      - id: BK-01
+        task: "Create `requestCredit` Cloud Function — client initiates credit purchase"
+        files_to_create:
+          - "functions/src/billing/requestCredit.js"
+        behaviour:
+          - "Authenticate via appId + appSecret."
+          - "Accept: { appId, appSecret, packageId }."
+          - "Read Firestore packages/{packageId}; if not found or is_active=false: return 404."
+          - "Generate transactionId (UUID v4)."
+          - "Write to Firestore transactions/{transactionId}: { appId, package_id, sms_quota, validity_days, amount_bdt, trx_id: null, status: 'pending', requested_at: now() }."
+          - "Return: { transactionId, paymentInstructions: { bkashNumber: process.env.BKASH_PERSONAL_NUMBER, amount: package.price_bdt, reference: transactionId, note: 'Send exact amount. Use transactionId as reference.' } }."
+        verification:
+          - type: file_exists
+            path: "functions/src/billing/requestCredit.js"
+          - type: contains
+            file: "functions/src/billing/requestCredit.js"
+            patterns:
+              - "transactions"
+              - "status.*pending"
+              - "BKASH_PERSONAL_NUMBER"
+              - "uuid\\|randomUUID"
+        depends_on: [FS-02, FS-04]
+        priority: critical
+        notes: "Snapshot the package fields (sms_quota, validity_days, price_bdt) into the transaction document at creation time — so package edits don't retroactively change pending transactions."
+
+      - id: BK-02
+        task: "Create `submitTrxId` Cloud Function — client attaches bKash TrxID to pending transaction"
+        files_to_create:
+          - "functions/src/billing/submitTrxId.js"
+        behaviour:
+          - "Authenticate via appId + appSecret."
+          - "Accept: { appId, appSecret, transactionId, trxId }."
+          - "Read Firestore transactions/{transactionId}; verify appId matches and status == 'pending'."
+          - "Check no other transaction document has the same trxId (duplicate TrxID guard)."
+          - "Update transaction: { trx_id: trxId, updated_at: now() } — status stays 'pending'."
+          - "Return: { message: 'TrxID submitted. Awaiting admin approval.' }."
+        verification:
+          - type: file_exists
+            path: "functions/src/billing/submitTrxId.js"
+          - type: contains
+            file: "functions/src/billing/submitTrxId.js"
+            patterns:
+              - "trxId\\|trx_id"
+              - "status.*pending"
+              - "duplicate\\|already.*used"
+        depends_on: [BK-01]
+        priority: critical
+        security_notes:
+          - "Query Firestore for existing trxId before writing to prevent double-crediting via TrxID reuse."
+
+      - id: BK-03
+        task: "Create `approveCredit` Cloud Function — admin approves or rejects transaction"
+        files_to_create:
+          - "functions/src/billing/approveCredit.js"
+        behaviour:
+          - "Authenticate via Firebase Auth ID token (must have admin custom claim)."
+          - "Accept: { transactionId, approve: boolean, rejectReason?: string }."
+          - "Read Firestore transactions/{transactionId}."
+          - "IDEMPOTENCY: if status != 'pending', return 409 { error: 'already_resolved', status: current_status }."
+          - "If approve=true:"
+          - "  Run Firestore transaction on app_credits/{appId}:"
+          - "    Read current doc (create if not exists with sms_remaining=0, expires_at=null)."
+          - "    new_sms_remaining = current.sms_remaining + transaction.sms_quota."
+          - "    new_expires_at = max(current.expires_at ?? 0, Date.now() + transaction.validity_days * 86400000)."
+          - "    Write: { sms_remaining: new_sms_remaining, expires_at: new_expires_at, last_package_id, purchased_at: now(), updated_at: now() }."
+          - "  Outside transaction: update transactions/{transactionId}: { status: 'approved', approved_at: now(), admin_id: caller.uid }."
+          - "If approve=false: update status='rejected', admin_notes=rejectReason, admin_id=caller.uid."
+          - "Return: { success: true, new_balance: new_sms_remaining } on approve; { success: true } on reject."
+        verification:
+          - type: file_exists
+            path: "functions/src/billing/approveCredit.js"
+          - type: contains
+            file: "functions/src/billing/approveCredit.js"
+            patterns:
+              - "already_resolved\\|status.*pending"
+              - "runTransaction"
+              - "sms_remaining.*sms_quota\\|sms_quota.*sms_remaining"
+              - "admin_id"
+              - "approved_at"
+        depends_on: [BK-01, FS-03, FS-04]
+        priority: critical
+        security_notes:
+          - "The 409 idempotency check (status != pending) prevents double-crediting even if the admin clicks Approve twice."
+          - "The Firestore transaction ensures the balance increment is atomic."
+
+      - id: BK-04
+        task: "Write tests for the bKash credit request and approval flow"
+        files_to_create:
+          - "functions/test/approveCredit.test.js"
+        test_cases:
+          - "requestCredit with valid package: returns transactionId and bKash instructions."
+          - "requestCredit with inactive package: returns 404."
+          - "submitTrxId with valid pending transaction: updates trx_id field."
+          - "submitTrxId with duplicate TrxID (used in another transaction): rejected."
+          - "approveCredit on pending transaction: app_credits balance incremented, status=approved."
+          - "approveCredit called twice on same transaction: second call returns 409 already_resolved."
+          - "approveCredit with reject=true: status=rejected, balance unchanged."
+          - "approveCredit by non-admin caller: rejected with 403."
+        verification:
+          - type: command
+            run: "cd functions && npm test -- approveCredit.test.js"
+            expect_exit: 0
+        depends_on: [BK-01, BK-02, BK-03]
+        priority: critical
+
+      - id: BK-05
+        task: "Write tests for `upsertPackage` Cloud Function"
+        files_to_create:
+          - "functions/test/upsertPackage.test.js"
+        test_cases:
+          - "Admin creates new package: Firestore document created with auto-ID, all fields set."
+          - "Admin updates existing package (packageId provided): only changed fields updated."
+          - "Admin deactivates package (is_active=false): package no longer returned in active-packages query."
+          - "Non-admin caller: rejected with 403."
+          - "Invalid inputs (sms_quota=0, price_bdt=-1): rejected with 400."
+          - "Name is empty string: rejected with 400."
+        verification:
+          - type: command
+            run: "cd functions && npm test -- upsertPackage.test.js"
+            expect_exit: 0
+        depends_on: [BK-00]
+        priority: critical
+
+      - id: TEST-E2E
+        task: "End-to-end integration test — full billing cycle (register → buy credits → send OTP)"
+        files_to_create:
+          - "functions/test/e2e-billing.test.js"
+        test_steps:
+          - "1. Admin seeds a test package via upsertPackage."
+          - "2. Client calls registerApp — receives appId + appSecret."
+          - "3. Client calls sendOtp — expect 402 no_credits (no credits yet)."
+          - "4. Client calls requestCredit with valid packageId — receives transactionId + bKash instructions."
+          - "5. Client calls submitTrxId with a fake TrxID — transaction updated."
+          - "6. Admin calls approveCredit — app_credits balance set to package.sms_quota."
+          - "7. Client calls sendOtp — expect success, OTP queued, sms_remaining decremented by 1."
+          - "8. Client calls getCredits — balance = sms_quota - 1."
+          - "9. Admin calls approveCredit again on same transactionId — expect 409 already_resolved."
+          - "10. Client calls sendOtp until sms_remaining = 0, then one more — expect 402 no_credits."
+        verification:
+          - type: command
+            run: "cd functions && firebase emulators:exec --only auth,functions,firestore,database 'npm test -- e2e-billing.test.js'"
+            expect_exit: 0
+        depends_on: [CR-05, BK-04, BK-05]
+        priority: critical
+        notes: "Run against the Firebase Emulator (INFRA-03). Never run e2e tests against production."
+
+  - id: 9
+    name: "React Dashboard — Package Management & Transaction Approval (UI)"
+    blocking: false
+    description: >
+      Extend the existing React PWA with four new pages covering the full billing workflow:
+      admin package CRUD, admin transaction approval queue, client buy-credits flow,
+      and client credits & usage overview. All pages use Firestore client SDK under
+      authenticated Firebase Auth sessions.
+    items:
+      - id: RM-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Package Management page (admin only)"
+        files_to_create:
+          - "web/src/pages/admin/PackageManager.jsx"
+        ui_requirements:
+          - "Route: /admin/packages. Guarded by admin custom claim."
+          - "Table of all packages with columns: Name, SMS Quota, Price (BDT), Validity (days), Active, Actions."
+          - "'Add Package' form (inline or modal): name, sms_quota, price_bdt, validity_days, is_active toggle."
+          - "On submit: call Firestore (or a Cloud Function `upsertPackage`) to write to packages collection."
+          - "Edit: pre-fill form from existing document."
+          - "Deactivate (soft-delete): toggle is_active=false — package disappears from client buy page."
+          - "No hard delete — keep audit history."
+        verification:
+          - type: contains
+            file: "web/src/pages/admin/PackageManager.jsx"
+            patterns:
+              - "packages"
+              - "sms_quota"
+              - "is_active"
+        depends_on: [FS-02, AD-02, BK-00]
+        priority: critical
+        notes: "Must call `upsertPackage` CF (BK-00) — direct Firestore writes to packages are blocked by security rules."
+
+      - id: RM-02
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Transaction Approval Queue page (admin only)"
+        files_to_create:
+          - "web/src/pages/admin/TransactionQueue.jsx"
+        ui_requirements:
+          - "Route: /admin/transactions. Guarded by admin custom claim."
+          - "Real-time Firestore listener (onSnapshot) on transactions where status='pending', ordered by requested_at ASC."
+          - "Table columns: Submitted At, App ID, Package Name, Amount (BDT), TrxID (submitted by client), Actions."
+          - "'Approve' button (green): opens confirmation dialog showing all transaction details. On confirm: calls `approveCredit` Cloud Function."
+          - "'Reject' button (red): opens modal with textarea for admin_notes. On confirm: calls `approveCredit` with approve=false."
+          - "On success: row disappears from queue (real-time listener removes it). Toast: 'Credits added' or 'Transaction rejected'."
+          - "If TrxID column is empty: warn admin 'Client has not submitted a TrxID yet'."
+          - "Reminder banner: 'Always verify TrxID and amount in your bKash app before approving.'"
+        verification:
+          - type: contains
+            file: "web/src/pages/admin/TransactionQueue.jsx"
+            patterns:
+              - "approveCredit"
+              - "onSnapshot"
+              - "pending"
+              - "admin_notes"
+        depends_on: [BK-03, FS-04, AD-02]
+        priority: critical
+
+      - id: RM-03
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Client 'Buy Credits' UI — package selection, payment instructions, TrxID submission"
+        files_to_create:
+          - "web/src/pages/client/BuyCredits.jsx"
+        ui_requirements:
+          - "Route: /portal/buy-credits. Requires authentication (client claim)."
+          - "Step 1 — Select Package: show active packages as cards (name, sms_quota, price_bdt, validity_days). On select: call `requestCredit` CF."
+          - "Step 2 — Payment Instructions: display bKash number (from CF response), exact amount, and the transactionId as the payment reference. Instruction: 'Send money to this bKash number. Use the reference as your bKash note.'."
+          - "Step 3 — Submit TrxID: input field for the bKash TrxID from the client's confirmation SMS. On submit: call `submitTrxId` CF."
+          - "Step 4 — Confirmation: 'Your payment is under review. Credits will appear once approved by our team (usually within 1 business day).' Show transaction status polling (every 10s)."
+          - "If transaction status becomes 'approved': show success banner with updated balance."
+          - "If status becomes 'rejected': show reason and offer to contact support."
+        verification:
+          - type: contains
+            file: "web/src/pages/client/BuyCredits.jsx"
+            patterns:
+              - "requestCredit"
+              - "submitTrxId"
+              - "trxId\\|trx_id"
+              - "pending.*approved\\|status"
+        depends_on: [BK-01, BK-02, CP-01]
+        priority: critical
+        notes: "bKash number comes from requestCredit CF response — never hardcoded in the bundle."
+
+      - id: RM-04
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Client 'Credits & Usage' page — balance overview and transaction history"
+        files_to_create:
+          - "web/src/pages/client/CreditsOverview.jsx"
+        ui_requirements:
+          - "Route: /portal/credits. Requires authentication (client claim)."
+          - "Balance card: sms_remaining (large number), expires_at (human-readable date), status badge (Active / Expired / No Credits)."
+          - "If no credits: prominent CTA 'Buy Credits' linking to /portal/buy-credits."
+          - "Transaction history table: columns Date, Package, Amount (BDT), TrxID, Status (pending/approved/rejected)."
+          - "Usage sub-section: list of recent OTP sends from app_credits/{appId}/usage (date, session ID truncated)."
+          - "Data fetched via Firestore client SDK (app_credits + transactions filtered by appId)."
+        verification:
+          - type: contains
+            file: "web/src/pages/client/CreditsOverview.jsx"
+            patterns:
+              - "sms_remaining"
+              - "expires_at"
+              - "transactions"
+              - "usage"
+        depends_on: [FS-03, FS-04, CP-01]
+        priority: critical
+
+  - id: 10
+    name: "Frontend Completion & Integration"
+    blocking: false
+    description: >
+      Build out the remaining frontend dashboard, admin, and authentication pages.
+      Integrate these components with the established Firebase backend (Auth, Firestore, Functions).
+    items:
+      - id: FE-01
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Authentication Pages"
+        files_to_create:
+          - "web/src/pages/auth/Login.jsx"
+          - "web/src/pages/auth/Register.jsx"
+        ui_requirements:
+          - "Login and Registration functionality using Firebase Auth."
+        depends_on: [AD-02]
+        priority: high
+
+      - id: FE-02
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Client Dashboard Pages"
+        files_to_create:
+          - "web/src/pages/dashboard/DashboardHome.jsx"
+          - "web/src/pages/dashboard/Apps.jsx"
+          - "web/src/pages/dashboard/BuyCredits.jsx"
+          - "web/src/pages/dashboard/Transactions.jsx"
+          - "web/src/pages/dashboard/Playground.jsx"
+          - "web/src/pages/dashboard/Settings.jsx"
+        ui_requirements:
+          - "Full client portal for managing apps, purchasing credits, and testing OTPs."
+        depends_on: [FE-01, CF-01, BK-02]
+        priority: high
+
+      - id: FE-03
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Build Admin Dashboard Pages"
+        files_to_create:
+          - "web/src/pages/admin/AdminHome.jsx"
+          - "web/src/pages/admin/Packages.jsx"
+          - "web/src/pages/admin/ApproveTransactions.jsx"
+          - "web/src/pages/admin/Metrics.jsx"
+        ui_requirements:
+          - "Admin interface for creating packages, approving bKash transactions, and viewing platform metrics."
+        depends_on: [FE-01, BK-00, CF-04]
+        priority: high
+
+      - id: FE-04
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Update Firebase Hosting Target & Deploy"
+        files_to_modify:
+          - "firebase.json"
+        task_details:
+          - "Ensure firebase.json points to web/dist for hosting."
+          - "Deploy the complete web application."
+        depends_on: [FE-02, FE-03]
+        priority: high
+
+      - id: FE-05
+        status: "complete"
+        note: "Frontend implemented – see web/ directory"
+        task: "Write Final Documentation"
+        files_to_create:
+          - "README.md"
+          - "docs/FIREBASE_SETUP.md"
+        task_details:
+          - "Document local development setup, emulator usage, and deployment steps."
+        depends_on: [FE-04]
+        priority: medium
+
+# Failure Conditions - deployment blockers
+failure_conditions:
+  - condition: "bKash personal number hardcoded in client-side JavaScript bundles"
+    check: "grep -r '01613249520' web/src --include='*.js' --include='*.jsx'"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Webhook signature verification missing"
+    check: "grep -L 'X-Webhook-Signature\\|verifySignature' functions/src/lib/webhook.js"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "sendOtp does not check Firestore app_credits before sending OTP"
+    check: "grep -L 'app_credits\\|sms_remaining' functions/index.js"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Credit deduction not wrapped in Firestore transaction (race condition risk)"
+    check: "grep -L 'runTransaction\\|firestore().runTransaction' functions/index.js"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "approveCredit allows double credit addition (no idempotency check on transaction status)"
+    check: "grep -L 'status.*pending\\|pending.*status' functions/src/billing/approveCredit.js"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "No audit trail written after credit deduction in sendOtp"
+    check: "grep -L 'app_credits.*usage\\|usage.*sub' functions/index.js"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "Missing per-OTP credit guard (could allow unlimited free OTP)"
+    check: "grep -L 'insufficient_credits\\|402' functions/index.js"
+    action: "BLOCK_DEPLOY"
+
+  - condition: "appSecret exposed in admin dashboard frontend"
+    check: "grep -r 'import.meta.env.*APP_SECRET\\|process.env.*APP_SECRET' web/src"
+    action: "BLOCK_DEPLOY"
+
+validation_commands:
+  dashboard_build: "cd web && npm run build"
+  webhook_test: "cd functions && npm test -- webhook.test.js"
+  credit_guard_test: "cd functions && npm test -- sendOtp.test.js"
+  topup_test: "cd functions && npm test -- topupRequest.test.js"
+  approve_credit_test: "cd functions && npm test -- approveCredit.test.js"
+  app_management_test: "cd functions && npm test -- registerApp.test.js revokeApp.test.js updateAppWebhook.test.js regenerateAppSecret.test.js"
+  upsert_package_test: "cd functions && npm test -- upsertPackage.test.js"
+  security_rules_test: "cd functions && firebase emulators:exec --only firestore,database 'npm test -- rtdb-rules.test.js firestore-rules.test.js'"
+  e2e_billing_test: "cd functions && firebase emulators:exec --only auth,functions,firestore,database 'npm test -- e2e-billing.test.js'"
+references:
+  main_checklist: "docs/Modification Plan 1/14-DEV-CHECKLIST.yaml"
+  bkash_merchant_number: "+8801613249520  # bKash personal/Send Money number (store in BKASH_PERSONAL_NUMBER env var)"
+  webhook_security: "https://webhook.dev/security"
+  firestore_transactions_docs: "https://firebase.google.com/docs/firestore/manage-data/transactions"
+  competitor_mimsms: "https://mimsms.com"
+  competitor_khudebarta: "https://khudebarta.com"

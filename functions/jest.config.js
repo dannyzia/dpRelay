@@ -1,11 +1,15 @@
 module.exports = {
   testEnvironment: 'node',
+  testTimeout: 20000,
+  setupFilesAfterEnv: ['./test/setup.js'],
+  testPathIgnorePatterns: ['/node_modules/', '/coverage/'],
   coverageDirectory: 'coverage',
   collectCoverageFrom: [
     '**/*.js',
     '!node_modules/**',
     '!coverage/**',
-    '!jest.config.js'
+    '!jest.config.js',
+    '!test/**'
   ],
   coverageThreshold: {
     global: {

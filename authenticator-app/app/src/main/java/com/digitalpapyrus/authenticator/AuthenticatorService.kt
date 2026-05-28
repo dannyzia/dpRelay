@@ -58,7 +58,9 @@ class AuthenticatorService : Service() {
     super.onCreate()
 
     auth = Firebase.auth
-    database = Firebase.database.apply {
+    database = FirebaseDatabase.getInstance(
+      "https://authenticator-15fb7-default-rtdb.asia-southeast1.firebasedatabase.app"
+    ).apply {
       setPersistenceEnabled(true)
     }
 
@@ -158,6 +160,7 @@ class AuthenticatorService : Service() {
 
   private var authRetryCount = 0
   private val maxAuthRetries = 5
+  private var authStateListenerRegistered = false
 
   // Health ping interval: 4 minutes (health endpoint uses 5-minute active window)
   private val HEALTH_PING_INTERVAL_MS = 4 * 60 * 1000L
@@ -180,17 +183,27 @@ class AuthenticatorService : Service() {
         // Reset retry count on success
         authRetryCount = 0
 
+        // Stop any existing listener before creating a new one.
+        // This prevents accumulation if authenticateWithFirebase() is called
+        // multiple times (e.g. after a transient auth drop).
+        stopPendingSmsListener()
+
         // Write initial health ping and start periodic updates
         startHealthPingLoop()
 
         // Start listening for pending outbound SMS jobs
         startPendingSmsListener()
 
-        // Listen for auth state changes
-        auth.addAuthStateListener { firebaseAuth ->
-          if (firebaseAuth.currentUser == null) {
-            // Re-authenticate if signed out
-            authenticateWithFirebase()
+        // Register auth state listener exactly ONCE.
+        // Previously this was added inside authenticateWithFirebase(), causing
+        // a new listener on every re-auth call and exponential growth.
+        if (!authStateListenerRegistered) {
+          authStateListenerRegistered = true
+          auth.addAuthStateListener { firebaseAuth ->
+            if (firebaseAuth.currentUser == null) {
+              // Re-authenticate if signed out
+              authenticateWithFirebase()
+            }
           }
         }
       } catch (e: Exception) {

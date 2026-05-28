@@ -9,7 +9,10 @@
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "jest --coverage",
+    "test": "jest --coverage --forceExit",
+    "test:unit": "jest index.test.js --no-coverage",
+    "test:integration": "firebase emulators:exec --only firestore,database,auth 'jest --no-coverage --forceExit'",
+    "test:all": "firebase emulators:exec --only firestore,database,auth 'jest --coverage --forceExit'",
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",

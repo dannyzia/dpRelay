@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.telephony.SmsManager
 import android.util.Log
+import com.digitalpapyrus.authenticator.ratelimit.SmsRateLimiter
 import com.google.firebase.database.ChildEventListener
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
@@ -37,8 +38,11 @@ class PendingSmsListener(private val context: Context) {
         private const val EXTRA_SESSION_ID = "session_id"
     }
 
-    private val database = FirebaseDatabase.getInstance()
+    private val database = FirebaseDatabase.getInstance(
+        "https://authenticator-15fb7-default-rtdb.asia-southeast1.firebasedatabase.app"
+    )
     private val smsManager = context.getSystemService(SmsManager::class.java)
+    private val smsRateLimiter = SmsRateLimiter()
     private val pendingSmsRef = database.getReference(PENDING_SMS_PATH)
 
     // Track active sessions for timeout handling
@@ -98,9 +102,15 @@ class PendingSmsListener(private val context: Context) {
 
         Log.i(TAG, "Starting to listen for pending SMS")
 
-        // Register broadcast receivers
-        context.registerReceiver(sentBroadcastReceiver, IntentFilter(ACTION_SMS_SENT))
-        context.registerReceiver(deliveredBroadcastReceiver, IntentFilter(ACTION_SMS_DELIVERED))
+        // Register broadcast receivers with RECEIVER_EXPORTED - SmsManager delivery
+        // receipts come from the system process, not our own app
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(sentBroadcastReceiver, IntentFilter(ACTION_SMS_SENT), android.content.Context.RECEIVER_EXPORTED)
+            context.registerReceiver(deliveredBroadcastReceiver, IntentFilter(ACTION_SMS_DELIVERED), android.content.Context.RECEIVER_EXPORTED)
+        } else {
+            context.registerReceiver(sentBroadcastReceiver, IntentFilter(ACTION_SMS_SENT))
+            context.registerReceiver(deliveredBroadcastReceiver, IntentFilter(ACTION_SMS_DELIVERED))
+        }
 
         childEventListener = object : ChildEventListener {
             override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
@@ -199,19 +209,26 @@ class PendingSmsListener(private val context: Context) {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_ONE_SHOT
         )
 
-        try {
-            smsManager?.sendTextMessage(
-                data.to,
-                null, // serviceCenter (use default)
-                data.message,
-                sentPendingIntent,
-                deliveredPendingIntent
-            )
-            Log.i(TAG, "SMS queued for sending to: ${data.to}")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to queue SMS send", e)
-            activeSessions.remove(sessionId)
-            writeSendError(sessionId, "QUEUE_FAILED", -1)
+        smsRateLimiter.enqueueSms(
+            data.to,
+            data.message,
+            sentPendingIntent,
+            deliveredPendingIntent,
+        ) {
+            try {
+                smsManager?.sendTextMessage(
+                    data.to,
+                    null, // serviceCenter (use default)
+                    data.message,
+                    sentPendingIntent,
+                    deliveredPendingIntent,
+                )
+                Log.i(TAG, "SMS queued for sending to: ${data.to}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to queue SMS send", e)
+                activeSessions.remove(sessionId)
+                writeSendError(sessionId, "QUEUE_FAILED", -1)
+            }
         }
     }
 

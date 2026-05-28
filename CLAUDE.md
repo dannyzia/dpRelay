@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Phone Authenticator v4** — A production-grade SMS-based phone number verification system using Firebase Cloud Functions and a dedicated Android authenticator device.
+**Phone Authenticator v4** — A production-grade SMS-based phone number verification system using Firebase Cloud Functions, a React web dashboard, and a dedicated Android authenticator device.
 
-- **Authenticator App** (`authenticator-app/`): Kotlin Android app that runs as a foreground service on a dedicated phone, receives SMS and writes receipts to Firebase RTDB.
+- **Web Dashboard** (`web/`): React + Vite + TailwindCSS app with marketing pages, auth, client dashboard (apps, credits, transactions, bulk campaigns, playground), and admin panel (package management, metrics, approvals).
 - **Cloud Functions** (`functions/`): Node.js 20, handles `startVerification`, `checkAuth`, `registerAuthenticator`, `health`, `cleanupOldRequests`.
-- **Firebase RTDB**: Stores verification requests and receipts with security rules enforcing `role=authenticator`.
+- **Authenticator App** (`authenticator-app/`): Kotlin Android app that runs as a foreground service on a dedicated phone, receives SMS and writes receipts to Firebase RTDB.
+- **Client Library** (`client/`): `PhoneAuthHelper.kt` — client-side library for integration into ecommerce/medical apps.
+- **Firebase RTDB**: Stores verification requests, receipts, registered apps, pending SMS, OTP requests, and health pings with security rules enforcing `role=authenticator`.
 
 The system targets Bangladesh carrier formats with E.164 normalization (`+880` prefix handling).
 
@@ -34,6 +36,23 @@ cd authenticator-app
 
 # Install to device
 ./gradlew installDebug
+```
+
+### Web Dashboard
+```bash
+cd web
+
+# Install dependencies
+npm install
+
+# Dev server (localhost:5173)
+npm run dev
+
+# Production build
+npm run build
+
+# Preview production build
+npm run preview
 ```
 
 ### Cloud Functions
@@ -67,7 +86,24 @@ firebase functions:secrets:set ACTIVE_DEDICATED_NUMBER
 
 # Deploy database rules
 firebase deploy --only database
+
+# Deploy hosting (web dashboard)
+firebase deploy --only hosting
+
+# Deploy everything
+firebase deploy
 ```
+
+### Local Emulators
+```bash
+# Start all emulators (functions, database, firestore, auth)
+firebase emulators:start
+
+# Start with specific services only
+firebase emulators:start --only functions,database,auth
+```
+
+The UI is available at http://localhost:4000, Functions at port 5001, RTDB at 9000, Firestore at 8080, Auth at 9099.
 
 ## High-Level Architecture
 
@@ -89,15 +125,18 @@ The v4 security model uses **server-issued challenges** — public clients never
 
 ### Data Flow
 ```
-Client App                    Authenticator Phone           Firebase
-┌──────────┐                  ┌──────────────────┐          ┌──────────────────┐
-│ start/   │──── SMS ────────>│ SmsReceiver      │          │                  │
-│ checkAuth│  (carrier)       │  ↓ validate shape │          │                  │
-│          │                  │  ↓ write receipt │── Wi-Fi ─>│  RTDB            │
-└──────────┘                  │  └────────────────┘          │  /verification_  │
-                               │ AuthFcmService   │          │  requests/       │
-                               │  ↓ health ping   │── Wi-Fi ─>│  /health/        │
-                               └──────────────────┘          └──────────────────┘
+Web Dashboard / Client Apps     Cloud Functions          Authenticator Phone       Firebase
+┌──────────────────┐          ┌──────────────────┐      ┌──────────────────┐     ┌──────────────────┐
+│ startVerification│─ HTTPS ─>│  Mint challenge  │      │                  │     │                  │
+│ checkAuth        │<── resp ─│  Verify receipt  │      │  SmsReceiver     │     │  RTDB            │
+└──────────────────┘          └──────────────────┘      │  ↓ validate SMS  │     │  ├ verification_ │
+                                                         │  ↓ write receipt │─>───>│  │  requests/     │
+                                                         └──────────────────┘     │  ├ health/        │
+                                                                                  │  ├ registered_   │
+                                                                                  │  │  apps/         │
+                                                                                  │  ├ pending_sms/   │
+                                                                                  │  └ otp_requests/  │
+                                                                                  └──────────────────┘
 ```
 
 ## Code Structure
@@ -117,9 +156,24 @@ Client App                    Authenticator Phone           Firebase
 
 > ⚠️ **NOTE:** `PhoneAuthHelper.kt` exists in this directory but is misplaced. It is a client-side library for verification requests (used by ecommerce/medical apps). Do not reference it from authenticator app code.
 
+### Web Dashboard (`web/`)
+- `App.jsx` — Router setup with marketing, auth, client dashboard, and admin routes
+- `pages/marketing/` — Home, Pricing, Docs, Contact
+- `pages/auth/` — Login, Register
+- `pages/dashboard/` — Apps, Credits, Transactions, Playground, Bulk Campaigns, Settings
+- `pages/admin/` — Packages, Transactions, Metrics, Bulk Campaigns
+- `components/` — Layout, navigation, shared UI components
+
 ### Cloud Functions (`functions/`)
 - `index.js` — All Cloud Functions endpoints (`startVerification`, `checkAuth`, `registerAuthenticator`, `health`, `cleanupOldRequests`)
 - `package.json` — Dependencies (firebase-admin, firebase-functions)
+
+### Client Library (`client/`)
+- `PhoneAuthHelper.kt` — Kotlin SDK for integrating verification into client apps
+- `test/OtpFlowTest.kt` — Integration test simulating the OTP flow
+
+### E2E Tests (`e2e/`)
+- `full-test.spec.js` — Playwright-based full-system test
 
 ## Important Conventions
 
@@ -194,6 +248,29 @@ cd functions && npm run lint       # ESLint
 cd functions && npm test           # Function tests
 ```
 
+Or run the full validation suite:
+```bash
+bash scripts/run-all-checks.sh     # Linters, audits, schema checks, security, tests
+```
+
+A pre-commit hook is available at `scripts/pre-commit.sh` — it runs ktlint, route audit, schema check, security audit, Android unit tests, and Cloud Functions tests. To install:
+```bash
+cp scripts/pre-commit.sh .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+## AI Engineering System
+
+The repository includes a modular multi-agent engineering system in `.claude/`:
+- **Agents** (`.claude/agents/`): 8 specialized agents (Orchestrator, Architect, Builder, Code Skeptic, Security, Testing, Documentation, DevOps)
+- **Rules** (`.claude/rules/`): 12 category-separated rule files covering architecture, security, testing, API, and more
+- **Workflows** (`.claude/workflows/`): 7 defined workflows with validation gates and approval conditions
+- **Memory** (`.claude/memory/`): Operational lessons, pitfalls, anti-patterns, and standards
+- **Tools** (`tools/`): 6 validation scripts (PRD drift, route audit, schema check, dependency analysis, env validation, security audit)
+- **Evaluations** (`evaluations/`): 7 quality checklists for reviews
+
+The old monolithic `Agent Prompts.md` has been archived to `docs/archive/`.
+
 ## Testing
 
 ### Android Unit Tests
@@ -207,6 +284,19 @@ cd functions && npm test           # Function tests
 ### Cloud Functions Tests
 ```bash
 cd functions && npm test
+```
+
+### E2E Tests (Playwright)
+```bash
+cd e2e
+npx playwright test               # Run all E2E tests
+npx playwright test full-test.spec.js  # Run specific test file
+```
+
+### Client Library Tests
+```bash
+cd client/test
+# Run OtpFlowTest.kt via Android Studio or gradle
 ```
 
 ### Integration Tests
@@ -229,3 +319,9 @@ The project uses universal AI coding rules defined in `.cursorrules` and `.githu
 - Never assume — ask questions with options (a/b/c/d)
 - No hardcoded values (use environment variables)
 - All new public functions need docblocks
+
+## Graph Maintenance
+
+After modifying any code files, run:
+- `code-review-graph update` — always (fast, <2s)
+- `graphify update .` — after large batches of changes only
