@@ -258,6 +258,33 @@ Check authenticator device liveness and system queue depth.
 
 ---
 
+### RTDB Trigger: onPaymentSmsReceived
+
+**Type:** RTDB `onCreate` trigger
+
+**Path:** `/payment_sms/{pushId}`
+
+**Secrets:** `RIDE_BACKEND_URL`, `DPRELAY_INBOUND_SECRET`
+
+**Outbound call:**
+- POST `{RIDE_BACKEND_URL}/api/payment/sms-confirm`
+- Headers: `Content-Type: application/json`, `x-dprelay-secret: {secret}`
+- Body: `{ txn_id, amount_bdt, provider, received_at }`
+
+**Response handling:**
+- `2xx` → delete RTDB node, return null
+- `404` → delete RTDB node (terminal — no matching payment event), return null
+- `409` → delete RTDB node (already confirmed), return null
+- `5xx` → retain RTDB node, throw → Cloud Functions retry policy fires
+
+**Validation (before outbound call):**
+- Discard and delete node if:
+  - `txn_id` not matching `/^[A-Z0-9]{10}$/`
+  - `amount_bdt` not a positive integer
+  - `provider` not in `{ "bkash", "nagad" }`
+
+---
+
 ### (Scheduled) cleanupOldRequests
 
 No external endpoint. Triggered by Firebase Scheduler every 24 hours.

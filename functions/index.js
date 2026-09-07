@@ -1,6 +1,7 @@
 // Deploy v5.0.0 - Billing + Webhooks + Credit Check
 const { onRequest, onCall } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onValueCreated } = require("firebase-functions/v2/database");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 const logger = require("firebase-functions/logger");
@@ -32,6 +33,8 @@ const AUTHENTICATOR_ENROLLMENT_SECRET =
 const HEALTH_ADMIN_SECRET = process.env.HEALTH_ADMIN_SECRET;
 const ACTIVE_DEDICATED_NUMBER = process.env.ACTIVE_DEDICATED_NUMBER;
 const APP_MASTER_SECRET = process.env.APP_MASTER_SECRET;
+const RIDE_BACKEND_URL = process.env.RIDE_BACKEND_URL;
+const DPRELAY_INBOUND_SECRET = process.env.DPRELAY_INBOUND_SECRET;
 // BKASH_PERSONAL_NUMBER and BKASH_MIN_TOPUP_AMOUNT are read directly from process.env
 // by the billing module files (requestCredit.js, seedPackages.js)
 
@@ -243,6 +246,97 @@ function fireWebhook(sessionId, status, details = {}) {
     logger.error(`[fireWebhook] Failed for sessionId=${sessionId}:`, err);
   });
 }
+
+async function processPaymentSmsPayload(event) {
+  const pushId = event.params?.pushId;
+  const data = event.data?.val();
+
+  if (!pushId || !data) {
+    return null;
+  }
+
+  const { txn_id, amount_bdt, provider, received_at } = data;
+  const paymentRef = admin.database().ref(`payment_sms/${pushId}`);
+
+  if (typeof txn_id !== "string" || !/^[A-Z0-9]{10}$/.test(txn_id)) {
+    logger.error("onPaymentSmsReceived: invalid txn_id", { pushId });
+    await paymentRef.delete();
+    return null;
+  }
+
+  if (!Number.isInteger(amount_bdt) || amount_bdt <= 0) {
+    logger.error("onPaymentSmsReceived: invalid amount_bdt", {
+      pushId,
+      amount_bdt,
+    });
+    await paymentRef.delete();
+    return null;
+  }
+
+  if (provider !== "bkash" && provider !== "nagad") {
+    logger.error("onPaymentSmsReceived: unknown provider", {
+      pushId,
+      provider,
+    });
+    await paymentRef.delete();
+    return null;
+  }
+
+  if (!RIDE_BACKEND_URL || !DPRELAY_INBOUND_SECRET) {
+    logger.error("onPaymentSmsReceived: missing required secret env");
+    throw new Error("Missing RIDE_BACKEND_URL or DPRELAY_INBOUND_SECRET");
+  }
+
+  const response = await fetch(`${RIDE_BACKEND_URL}/api/payment/sms-confirm`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-dprelay-secret": DPRELAY_INBOUND_SECRET,
+    },
+    body: JSON.stringify({ txn_id, amount_bdt, provider, received_at }),
+  });
+
+  if (response.ok) {
+    logger.info("onPaymentSmsReceived: confirmed by Ride backend", {
+      pushId,
+      provider,
+      txn_id_length: txn_id.length,
+    });
+    await paymentRef.delete();
+    return null;
+  }
+
+  if (response.status === 404) {
+    logger.warn(
+      "onPaymentSmsReceived: Ride backend returned 404 — no matching payment event",
+      { pushId, provider },
+    );
+    await paymentRef.delete();
+    return null;
+  }
+
+  if (response.status === 409) {
+    logger.info("onPaymentSmsReceived: already confirmed (409)", { pushId });
+    await paymentRef.delete();
+    return null;
+  }
+
+  logger.error("onPaymentSmsReceived: Ride backend error — will retry", {
+    pushId,
+    status: response.status,
+  });
+  throw new Error(`Ride backend returned ${response.status}`);
+}
+
+exports.processPaymentSmsPayload = processPaymentSmsPayload;
+
+exports.onPaymentSmsReceived = onValueCreated(
+  {
+    region: "asia-southeast1",
+    ref: "/payment_sms/{pushId}",
+  },
+  processPaymentSmsPayload,
+);
 
 // ============================================================
 // PHASE 1: Original Authenticator Device Functions

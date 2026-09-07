@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
 internal class SmsRateLimiter(
-    private val minIntervalMs: Long = 2000L,
+    private val minIntervalMs: Long = 5000L,
 ) {
 
     private data class SendRequest(

@@ -6,10 +6,14 @@ const logger = require("firebase-functions/logger");
 const firestore = admin.firestore();
 const rtdb = admin.database();
 
-const BULK_SMS_RATE_PER_MINUTE = Number(process.env.BULK_SMS_RATE_PER_MINUTE) || 30;
-const BULK_MAX_PENDING_QUEUE = Number(process.env.BULK_MAX_PENDING_QUEUE) || 100;
-const BULK_RETRY_MAX_ATTEMPTS = Number(process.env.BULK_RETRY_MAX_ATTEMPTS) || 3;
-const BULK_STALE_ENTRY_TIMEOUT_MS = Number(process.env.BULK_STALE_ENTRY_TIMEOUT_MS) || 300000;
+const BULK_SMS_RATE_PER_MINUTE =
+  Number(process.env.BULK_SMS_RATE_PER_MINUTE) || 30;
+const BULK_MAX_PENDING_QUEUE =
+  Number(process.env.BULK_MAX_PENDING_QUEUE) || 100;
+const BULK_RETRY_MAX_ATTEMPTS =
+  Number(process.env.BULK_RETRY_MAX_ATTEMPTS) || 3;
+const BULK_STALE_ENTRY_TIMEOUT_MS =
+  Number(process.env.BULK_STALE_ENTRY_TIMEOUT_MS) || 300000;
 
 function isBulkPendingEntry(entry) {
   return entry && entry.batchId;
@@ -36,7 +40,7 @@ async function isPhoneOnCooldown(phoneNumber) {
 
 exports.processBulkQueue = onSchedule(
   {
-    schedule: "every 1 minutes",
+    schedule: "every 15 minutes",
     region: "asia-southeast1",
     timeZone: "Asia/Dhaka",
   },
@@ -114,7 +118,9 @@ exports.processBulkQueue = onSchedule(
         }
       }
 
-      const updatedPendingSnapshot = await rtdb.ref("pending_sms").once("value");
+      const updatedPendingSnapshot = await rtdb
+        .ref("pending_sms")
+        .once("value");
       let currentBulkPending = 0;
       if (updatedPendingSnapshot.exists()) {
         updatedPendingSnapshot.forEach((childSnapshot) => {
@@ -149,7 +155,10 @@ exports.processBulkQueue = onSchedule(
       });
 
       const activeCampaignCount = activeCampaigns.length;
-      const retryBudget = Math.max(0, BULK_SMS_RATE_PER_MINUTE - retriesHandled);
+      const retryBudget = Math.max(
+        0,
+        BULK_SMS_RATE_PER_MINUTE - retriesHandled,
+      );
       const perCampaignBudget = Math.max(
         1,
         Math.floor(retryBudget / activeCampaignCount) || 1,
@@ -165,7 +174,9 @@ exports.processBulkQueue = onSchedule(
 
         const campaignId = campaign.id;
         const campaignData = campaign.data;
-        const campaignRef = firestore.collection("bulk_campaigns").doc(campaignId);
+        const campaignRef = firestore
+          .collection("bulk_campaigns")
+          .doc(campaignId);
 
         if (campaignData.status === "queued") {
           await campaignRef.update({
@@ -182,7 +193,10 @@ exports.processBulkQueue = onSchedule(
           0,
           BULK_SMS_RATE_PER_MINUTE - currentBulkPending,
         );
-        const campaignBudget = Math.max(1, Math.min(perCampaignBudget, remainingBudget));
+        const campaignBudget = Math.max(
+          1,
+          Math.min(perCampaignBudget, remainingBudget),
+        );
 
         const recipientsSnapshot = await campaignRef
           .collection("recipients")

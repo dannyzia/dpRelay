@@ -7,7 +7,7 @@ const logger = require("firebase-functions/logger");
 
 /**
  * Scheduled function to aggregate statistics and write to RTDB /stats.
- * Runs every 1 minute.
+ * Runs every 15 minutes.
  *
  * Computes:
  * - Total OTP requests today
@@ -20,7 +20,7 @@ const logger = require("firebase-functions/logger");
  */
 exports.aggregateStats = onSchedule(
   {
-    schedule: "every 1 minutes",
+    schedule: "every 15 minutes",
     region: "asia-southeast1",
     timeZone: "Asia/Dhaka",
   },
@@ -76,7 +76,11 @@ exports.aggregateStats = onSchedule(
 
       const bulkCampaignSnapshot = await firestore
         .collection("bulk_campaigns")
-        .where("createdAt", ">=", admin.firestore.Timestamp.fromMillis(oneDayAgo))
+        .where(
+          "createdAt",
+          ">=",
+          admin.firestore.Timestamp.fromMillis(oneDayAgo),
+        )
         .get();
 
       let bulkTotalToday = 0;

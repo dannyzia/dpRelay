@@ -158,4 +158,76 @@ class SmsReceiverTest {
         // Hyphens are not stripped - returns as-is to cause mismatch
         assertEquals("017-123-45678", result)
     }
+
+    @Test
+    fun `isPaymentSms returns true for all bKash sender variants`() {
+        assertTrue(SmsReceiver.Companion.isPaymentSms("bKash"))
+        assertTrue(SmsReceiver.Companion.isPaymentSms("BKASH"))
+        assertTrue(SmsReceiver.Companion.isPaymentSms("16247"))
+    }
+
+    @Test
+    fun `isPaymentSms returns true for all Nagad sender variants`() {
+        assertTrue(SmsReceiver.Companion.isPaymentSms("Nagad"))
+        assertTrue(SmsReceiver.Companion.isPaymentSms("NAGAD"))
+        assertTrue(SmsReceiver.Companion.isPaymentSms("16167"))
+    }
+
+    @Test
+    fun `isPaymentSms returns false for OTP senders`() {
+        assertFalse(SmsReceiver.Companion.isPaymentSms("+8801712345678"))
+        assertFalse(SmsReceiver.Companion.isPaymentSms("DPRELAY"))
+        assertFalse(SmsReceiver.Companion.isPaymentSms(""))
+    }
+
+    @Test
+    fun `parsePaymentSms extracts txnId and amount from bKash format 1`() {
+        val body = "TrxID 8AC3K2L9P1 received from 01712345678. Tk 500.00 paid. Fee Tk 0.00. Balance Tk 1000.00"
+        val parsed = smsReceiver.parsePaymentSms("bKash", body)
+
+        assertNotNull(parsed)
+        assertEquals("8AC3K2L9P1", parsed?.txnId)
+        assertEquals(50000, parsed?.amountPaisa)
+        assertEquals("bkash", parsed?.provider)
+    }
+
+    @Test
+    fun `parsePaymentSms extracts txnId and amount from bKash format 2`() {
+        val body = "You have received Tk 1200.50 from 01712345678. TrxID: 3F7E9A1B2C. Fee: Tk 0.00. Balance: Tk 2200.75"
+        val parsed = smsReceiver.parsePaymentSms("BKASH", body)
+
+        assertNotNull(parsed)
+        assertEquals("3F7E9A1B2C", parsed?.txnId)
+        assertEquals(120050, parsed?.amountPaisa)
+        assertEquals("bkash", parsed?.provider)
+    }
+
+    @Test
+    fun `parsePaymentSms extracts txnId and amount from Nagad format`() {
+        val body = "You have received Tk 750.00 from 01712345678 at your Nagad account. TrxID: 4D5E6F7A8B. Fee: Tk 0.00."
+        val parsed = smsReceiver.parsePaymentSms("NAGAD", body)
+
+        assertNotNull(parsed)
+        assertEquals("4D5E6F7A8B", parsed?.txnId)
+        assertEquals(75000, parsed?.amountPaisa)
+        assertEquals("nagad", parsed?.provider)
+    }
+
+    @Test
+    fun `parsePaymentSms returns null for unrecognised body`() {
+        val parsed = smsReceiver.parsePaymentSms("bKash", "This is not a payment confirmation message")
+        assertNull(parsed)
+    }
+
+    @Test
+    fun `amount converts correctly to paisa`() {
+        val parsedA = smsReceiver.parsePaymentSms("bKash", "TrxID ABCDE12345. Tk 500.00 paid.")
+        val parsedB = smsReceiver.parsePaymentSms("NAGAD", "You have received Tk 1200.50. TrxID: ZYXWV98765.")
+
+        assertNotNull(parsedA)
+        assertEquals(50000, parsedA?.amountPaisa)
+
+        assertNotNull(parsedB)
+        assertEquals(120050, parsedB?.amountPaisa)
+    }
 }

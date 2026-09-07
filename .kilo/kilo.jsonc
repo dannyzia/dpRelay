@@ -1,0 +1,256 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "environment": {
+        "DEFAULT_MINIMUM_TOKENS": ""
+      }
+    },
+    "mobile-mcp": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@mobilenext/mobile-mcp@latest"
+      ],
+      "enabled": true
+    },
+    "rivemcp": {
+      "type": "local",
+      "command": [
+        "rivemcp"
+      ]
+    },
+    "docker": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "mcp-server-docker"
+      ],
+      "enabled": false
+    },
+    "fetch": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "mcp-server-fetch"
+      ]
+    },
+    "filesystem": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/zia/Documents/My Projects/Authenticator"
+      ]
+    },
+    "git": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "mcp-server-git"
+      ],
+      "enabled": false
+    },
+    "github": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+      },
+      "enabled": false
+    },
+    "mcp-playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ],
+      "enabled": false
+    },
+    "memory": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "environment": {
+        "MEMORY_FILE_PATH": "/home/zia/.local/share/kilo/memory.json"
+      }
+    },
+    "mermaid": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@narasimhaponnada/mermaid-mcp-server"
+      ],
+      "enabled": false
+    },
+    "neon": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@neondatabase/mcp-server-neon"
+      ],
+      "environment": {
+        "NEON_API_KEY": "napi_o5q6h76n1wavbz6voz8stek7227w05t66kkgrniti1otrkxhgxwh0bn3vmcym13m",
+        "NEON_PROJECT_ID": "little-rain-06028780"
+      },
+      "enabled": false
+    },
+    "prisma": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "prisma",
+        "mcp"
+      ],
+      "enabled": false
+    },
+    "redis-official": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@redis/mcp-redis@latest"
+      ],
+      "environment": {
+        "REDIS_URL": "redis://:ASYrAAImcDJiMDA2YzA3N2IwNTk0ODE5ODg2ZTRkZWMzYTMyNjJiY3AyOTc3MQ@moved-ringtail-9771.upstash.io:6379"
+      },
+      "enabled": false
+    },
+    "lottiefiles-creator": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@lottiefiles/creator-mcp@latest"
+      ]
+    },
+    "sentry": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@sentry/mcp-server@latest"
+      ],
+      "environment": {
+        "SENTRY_ACCESS_TOKEN": "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"
+      }
+    },
+    "vercel": {
+      "type": "remote",
+      "url": "https://mcp.vercel.com",
+      "enabled": false
+    },
+    "context7-remote": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": false,
+      "headers": {
+        "Authorization": "Bearer ctx7sk-7252a6f3-afd5-4e92-b107-29d56953692c",
+        "CONTEXT7_API_KEY": "ctx7sk-d9f080a1-c543-45e6-916c-b339c9da5790"
+      }
+    },
+    "serena": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "ide-assistant",
+        "--project",
+        "/home/zia/Documents/My Projects/Authenticator"
+      ]
+    },
+    "sequential-thinking": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "brave-search": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@brave/search-mcp@latest"
+      ],
+      "environment": {
+        "BRAVE_API_KEY": "your-brave-search-api-key-here-if-you-have-one"
+      },
+      "enabled": false
+    },
+    "notion": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@notionhq/mcp-server-notion"
+      ],
+      "environment": {
+        "NOTION_API_KEY": "ntn_your_token_here"
+      },
+      "enabled": false
+    },
+    "firebase": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "firebase-tools",
+        "mcp"
+      ],
+      "enabled": true
+    },
+    "playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ],
+      "enabled": true
+    },
+    "android-emulator": {
+      "type": "local",
+      "command": [
+        "npx",
+        "mcp-android-emulator"
+      ],
+      "environment": {
+        "ADB_PATH": "/home/zia/Android/Sdk/platform-tools/adb"
+      },
+      "enabled": true
+    },
+    "maestro": {
+      "type": "local",
+      "command": [
+        "maestro",
+        "mcp"
+      ],
+      "enabled": true
+    }
+  }
+}

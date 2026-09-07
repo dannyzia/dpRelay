@@ -27,6 +27,7 @@ jest.mock("firebase-admin", () => ({
   },
 }));
 
+const admin = require("firebase-admin");
 const {
   generateHmac,
   generateSessionCode,
@@ -306,5 +307,182 @@ describe("App Registry - revokeApp", () => {
     // Verify that an inactive app would be rejected
     const active = false;
     expect(active).toBe(false);
+  });
+});
+
+describe("onPaymentSmsReceived", () => {
+  const snapshot = {
+    val: jest.fn(),
+  };
+  const deleteMock = jest.fn();
+  const event = {
+    params: { pushId: "push123" },
+    data: {
+      val: snapshot.val,
+    },
+  };
+
+  const loadIndex = () => {
+    jest.resetModules();
+    return require("./index");
+  };
+
+  beforeEach(() => {
+    snapshot.val.mockReset();
+    deleteMock.mockReset();
+    global.fetch = jest.fn();
+    jest.spyOn(admin.database(), "ref").mockImplementation(() => ({ delete: deleteMock }));
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    delete process.env.RIDE_BACKEND_URL;
+    delete process.env.DPRELAY_INBOUND_SECRET;
+  });
+
+  test("calls Ride backend with correct payload and headers for bkash", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "8AC3K2L9P1",
+      amount_bdt: 50000,
+      provider: "bkash",
+      received_at: 1712345678901,
+    });
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+    process.env.RIDE_BACKEND_URL = "https://ride.example.com";
+    process.env.DPRELAY_INBOUND_SECRET = "secret123";
+    const index = loadIndex();
+
+    await index.processPaymentSmsPayload(event);
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "https://ride.example.com/api/payment/sms-confirm",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-dprelay-secret": "secret123",
+        },
+        body: JSON.stringify({
+          txn_id: "8AC3K2L9P1",
+          amount_bdt: 50000,
+          provider: "bkash",
+          received_at: 1712345678901,
+        }),
+      }),
+    );
+  });
+
+  test("deletes RTDB node on 200 success", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "8AC3K2L9P1",
+      amount_bdt: 50000,
+      provider: "bkash",
+      received_at: 1712345678901,
+    });
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+    process.env.RIDE_BACKEND_URL = "https://ride.example.com";
+    process.env.DPRELAY_INBOUND_SECRET = "secret123";
+    const index = loadIndex();
+
+    await index.processPaymentSmsPayload(event);
+
+    expect(deleteMock).toHaveBeenCalled();
+  });
+
+  test("deletes RTDB node on 404", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "8AC3K2L9P1",
+      amount_bdt: 50000,
+      provider: "bkash",
+      received_at: 1712345678901,
+    });
+    global.fetch.mockResolvedValue({ ok: false, status: 404 });
+    process.env.RIDE_BACKEND_URL = "https://ride.example.com";
+    process.env.DPRELAY_INBOUND_SECRET = "secret123";
+    const index = loadIndex();
+
+    await index.processPaymentSmsPayload(event);
+
+    expect(deleteMock).toHaveBeenCalled();
+  });
+
+  test("deletes RTDB node on 409", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "8AC3K2L9P1",
+      amount_bdt: 50000,
+      provider: "bkash",
+      received_at: 1712345678901,
+    });
+    global.fetch.mockResolvedValue({ ok: false, status: 409 });
+    process.env.RIDE_BACKEND_URL = "https://ride.example.com";
+    process.env.DPRELAY_INBOUND_SECRET = "secret123";
+    const index = loadIndex();
+
+    await index.processPaymentSmsPayload(event);
+
+    expect(deleteMock).toHaveBeenCalled();
+  });
+
+  test("does NOT delete node on 500 and throws", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "8AC3K2L9P1",
+      amount_bdt: 50000,
+      provider: "bkash",
+      received_at: 1712345678901,
+    });
+    global.fetch.mockResolvedValue({ ok: false, status: 500 });
+    process.env.RIDE_BACKEND_URL = "https://ride.example.com";
+    process.env.DPRELAY_INBOUND_SECRET = "secret123";
+    const index = loadIndex();
+
+    await expect(index.processPaymentSmsPayload(event)).rejects.toThrow(
+      /Ride backend returned 500/,
+    );
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  test("discards and deletes node with bad txn_id", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "short",
+      amount_bdt: 50000,
+      provider: "bkash",
+      received_at: 1712345678901,
+    });
+    const index = loadIndex();
+
+    await index.processPaymentSmsPayload(event);
+
+    expect(deleteMock).toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test("discards and deletes node with amount_bdt = 0", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "8AC3K2L9P1",
+      amount_bdt: 0,
+      provider: "bkash",
+      received_at: 1712345678901,
+    });
+    const index = loadIndex();
+
+    await index.processPaymentSmsPayload(event);
+
+    expect(deleteMock).toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test("discards and deletes node with unknown provider", async () => {
+    snapshot.val.mockReturnValue({
+      txn_id: "8AC3K2L9P1",
+      amount_bdt: 50000,
+      provider: "stripe",
+      received_at: 1712345678901,
+    });
+    const index = loadIndex();
+
+    await index.processPaymentSmsPayload(event);
+
+    expect(deleteMock).toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

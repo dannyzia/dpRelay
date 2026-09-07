@@ -33,6 +33,7 @@ class PendingSmsListener(private val context: Context) {
         private const val TAG = "PendingSmsListener"
         private const val PENDING_SMS_PATH = "pending_sms"
         private const val SMS_TIMEOUT_MS = 60000L // 60 seconds
+        private const val SMS_STALE_THRESHOLD_MS = 5 * 60 * 1000L // 5 minutes
         private const val ACTION_SMS_SENT = "com.digitalpapyrus.authenticator.SMS_SENT"
         private const val ACTION_SMS_DELIVERED = "com.digitalpapyrus.authenticator.SMS_DELIVERED"
         private const val EXTRA_SESSION_ID = "session_id"
@@ -116,6 +117,17 @@ class PendingSmsListener(private val context: Context) {
             override fun onChildAdded(snapshot: DataSnapshot, previousChildName: String?) {
                 val sessionId = snapshot.key ?: return
                 val data = snapshot.getValue(PendingSmsData::class.java) ?: return
+
+                // Discard stale entries accumulated while the app was offline.
+                // onChildAdded fires for ALL existing RTDB entries on re-attach,
+                // not just new ones — without this check a backlog causes a burst
+                // of sends that triggers the Android "too many SMS" dialog.
+                val ageMs = System.currentTimeMillis() - data.createdAt
+                if (data.createdAt > 0L && ageMs > SMS_STALE_THRESHOLD_MS) {
+                    Log.w(TAG, "Discarding stale pending SMS (age=${ageMs}ms) for session: $sessionId")
+                    pendingSmsRef.child(sessionId).removeValue()
+                    return
+                }
 
                 Log.i(TAG, "New pending SMS for session: $sessionId")
 

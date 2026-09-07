@@ -159,6 +159,29 @@
       },
       ".indexOn": ["expiresAt"]
     },
+    "payment_sms": {
+      ".read": false,
+      "$pushId": {
+        ".write": "auth != null && auth.token.role == 'authenticator'",
+        ".validate": "newData.hasChildren(['txn_id', 'amount_bdt', 'provider', 'received_at'])",
+        "txn_id": {
+          ".validate": "newData.isString() && newData.val().matches(/^[A-Z0-9]{10}$/)"
+        },
+        "amount_bdt": {
+          ".validate": "newData.isNumber() && newData.val() > 0"
+        },
+        "provider": {
+          ".validate": "newData.isString() && (newData.val() === 'bkash' || newData.val() === 'nagad')"
+        },
+        "sender": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "received_at": {
+          ".validate": "newData.isNumber()"
+        }
+      },
+      ".indexOn": ["received_at"]
+    },
     "stats": {
       ".read": "auth != null",
       ".write": false

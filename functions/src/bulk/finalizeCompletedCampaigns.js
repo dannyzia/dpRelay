@@ -8,7 +8,7 @@ const rtdb = admin.database();
 
 exports.finalizeCompletedCampaigns = onSchedule(
   {
-    schedule: "every 1 minutes",
+    schedule: "every 15 minutes",
     region: "asia-southeast1",
     timeZone: "Asia/Dhaka",
   },
@@ -20,15 +20,21 @@ exports.finalizeCompletedCampaigns = onSchedule(
         .get();
 
       if (snapshot.empty) {
-        logger.info("[finalizeCompletedCampaigns] No sending bulk campaigns found");
+        logger.info(
+          "[finalizeCompletedCampaigns] No sending bulk campaigns found",
+        );
         return;
       }
 
       for (const doc of snapshot.docs) {
         const campaignId = doc.id;
         const campaignData = doc.data();
-        const progressSnapshot = await rtdb.ref(`bulk_progress/${campaignId}`).once("value");
-        const progress = progressSnapshot.exists() ? progressSnapshot.val() : null;
+        const progressSnapshot = await rtdb
+          .ref(`bulk_progress/${campaignId}`)
+          .once("value");
+        const progress = progressSnapshot.exists()
+          ? progressSnapshot.val()
+          : null;
         const sentCount = progress?.sentCount || 0;
         const failedCount = progress?.failedCount || 0;
         const totalCount = campaignData.totalRecipients || 0;
@@ -78,11 +84,14 @@ exports.finalizeCompletedCampaigns = onSchedule(
             `[finalizeCompletedCampaigns] Campaign completed campaignId=${campaignId} sent=${sentCount} failed=${failedCount}`,
           );
         } else {
-          await firestore.collection("bulk_campaigns").doc(campaignId).update({
-            sentCount,
-            failedCount,
-            queuedCount: campaignData.queuedCount || 0,
-          });
+          await firestore
+            .collection("bulk_campaigns")
+            .doc(campaignId)
+            .update({
+              sentCount,
+              failedCount,
+              queuedCount: campaignData.queuedCount || 0,
+            });
 
           logger.info(
             `[finalizeCompletedCampaigns] Synced campaign=${campaignId} sent=${sentCount} failed=${failedCount} queuedCount=${campaignData.queuedCount || 0}`,
@@ -95,4 +104,6 @@ exports.finalizeCompletedCampaigns = onSchedule(
   },
 );
 
-module.exports = { finalizeCompletedCampaigns: exports.finalizeCompletedCampaigns };
+module.exports = {
+  finalizeCompletedCampaigns: exports.finalizeCompletedCampaigns,
+};

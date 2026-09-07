@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlin.math.roundToInt
 
 /**
  * SMS receiver that filters for AUTH: prefixed messages and writes receipts to RTDB.
@@ -26,12 +27,24 @@ import kotlinx.coroutines.tasks.await
  * Non-normalizable addresses are still written so checkAuth returns "mismatch"
  * rather than "pending" indefinitely.
  */
+internal data class ParsedPaymentSms(
+    val txnId: String,
+    val amountPaisa: Int,
+    val provider: String,
+)
+
 class SmsReceiver : BroadcastReceiver() {
     
     companion object {
         private const val TAG = "SmsReceiver"
         private const val AUTH_PREFIX = "AUTH:"
         private const val DEFAULT_COUNTRY_CODE = "+880" // Bangladesh
+
+        private val BKASH_SENDERS = setOf("bKash", "BKASH", "16247")
+        private val NAGAD_SENDERS = setOf("Nagad", "NAGAD", "16167")
+
+        fun isPaymentSms(sender: String): Boolean =
+            sender in BKASH_SENDERS || sender in NAGAD_SENDERS
     }
     
     private val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -68,39 +81,60 @@ class SmsReceiver : BroadcastReceiver() {
     
     private fun processSms(context: Context, smsMessage: SmsMessage) {
         val messageBody = smsMessage.messageBody
-        val originatingAddress = smsMessage.originatingAddress
-        
+        val originatingAddress = smsMessage.originatingAddress ?: ""
+
+        if (isPaymentSms(originatingAddress)) {
+            val parsedPaymentSms = parsePaymentSms(originatingAddress, messageBody)
+            if (parsedPaymentSms == null) {
+                Log.w(
+                    TAG,
+                    "payment SMS parse failed — no TxID or amount. sender=$originatingAddress",
+                )
+                return
+            }
+
+            Log.i(
+                TAG,
+                "payment SMS parsed: provider=${parsedPaymentSms.provider} " +
+                    "txn_id_length=${parsedPaymentSms.txnId.length} " +
+                    "amount_paisa=${parsedPaymentSms.amountPaisa}",
+            )
+
+            handlePaymentSms(originatingAddress, parsedPaymentSms)
+            return
+        }
+
         // Filter by AUTH: prefix (case-insensitive)
         if (!messageBody.startsWith(AUTH_PREFIX, ignoreCase = true)) {
             // Silently discard non-AUTH messages - do not log body
             return
         }
-        
+
         // Parse the AUTH: payload
         val parts = messageBody.substring(AUTH_PREFIX.length).split(":")
         if (parts.size != 3) {
             Log.w(TAG, "Invalid AUTH payload format")
             return
         }
-        
+
         val sessionCode = parts[0]
         val expiresAt = parts[1].toLongOrNull()
         val challengeToken = parts[2]
-        
+
         if (expiresAt == null) {
             Log.w(TAG, "Invalid expiresAt in payload")
             return
         }
-        
+
         // Validate expiry (reject obviously expired messages)
         if (AuthCrypto.isExpired(expiresAt)) {
             Log.w(TAG, "SMS expired")
             return
         }
-        
+
         // Normalize originating address to E.164 (ADR-015, TD-10)
-        val normalizedSender = normalizeToE164(originatingAddress ?: "")
-        
+        val normalizedSender = normalizeToE164(originatingAddress)
+
         // Write receipt to RTDB
         writeReceipt(context, sessionCode, normalizedSender, challengeToken)
     }
@@ -126,23 +160,59 @@ class SmsReceiver : BroadcastReceiver() {
             // Contains non-digits and doesn't start with + - unrecognizable
             return raw
         }
-        
+
         if (raw.startsWith("+")) {
             return raw
         }
-        
+
         if (raw.startsWith("880")) {
             return "+$raw"
         }
-        
+
         if (raw.startsWith("0")) {
             return "$defaultCountryCode${raw.substring(1)}"
         }
-        
+
         // Unrecognizable format - return as-is so checkAuth returns mismatch
         return raw
     }
-    
+
+    internal fun parsePaymentSms(sender: String, body: String): ParsedPaymentSms? {
+        val txnId = Regex("\\b[A-Z0-9]{10}\\b").find(body)?.value ?: return null
+        val amountMatch = Regex("Tk (\\d+(?:\\.\\d{1,2})?)").find(body) ?: return null
+        val amountStr = amountMatch.groupValues[1]
+        val amountPaisa = (amountStr.toDouble() * 100).roundToInt()
+
+        val provider = if (sender in BKASH_SENDERS) {
+            "bkash"
+        } else {
+            "nagad"
+        }
+
+        return ParsedPaymentSms(txnId = txnId, amountPaisa = amountPaisa, provider = provider)
+    }
+
+    private fun handlePaymentSms(sender: String, parsed: ParsedPaymentSms) {
+        receiverScope.launch {
+            try {
+                val payload = mapOf(
+                    "txn_id" to parsed.txnId,
+                    "amount_bdt" to parsed.amountPaisa,
+                    "provider" to parsed.provider,
+                    "sender" to sender,
+                    "received_at" to com.google.firebase.database.ServerValue.TIMESTAMP,
+                )
+
+                database.getReference("payment_sms")
+                    .push()
+                    .setValue(payload)
+                    .await()
+            } catch (e: Exception) {
+                Log.e("SmsReceiver", "payment_sms RTDB write failed: ${e.message}")
+            }
+        }
+    }
+
     private fun writeReceipt(
         context: Context,
         sessionCode: String,
