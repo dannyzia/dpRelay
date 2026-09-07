@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> ⚠️ **MANDATORY FIRST READ:** This project uses **rhizome-mcp** for all task tracking. **Do not start work without `open_project` + `get_planning_graph` or `list_issues`.** See the "Rhizome Task Coordination" section at the bottom of this file. No work is silent — if it isn't in Rhizome, it didn't happen.
+
 ## Project Overview
 
 **Phone Authenticator v4** — A production-grade SMS-based phone number verification system using Firebase Cloud Functions, a React web dashboard, and a dedicated Android authenticator device.
@@ -325,3 +327,183 @@ The project uses universal AI coding rules defined in `.cursorrules` and `.githu
 After modifying any code files, run:
 - `code-review-graph update` — always (fast, <2s)
 - `graphify update .` — after large batches of changes only
+
+---
+
+## 🧠 Rhizome Task Coordination (MANDATORY)
+
+This project uses **rhizome-mcp** as the single source of truth for task tracking. Every coding agent session (Claude Code, Kilo, Codex, etc.) MUST use it. **No work is silent** — if it isn't in Rhizome, it didn't happen.
+
+The server is installed (`~/.local/bin/rhizome-mcp`, project DB at `~/.local/share/rhizome-mcp/projects/<id>/tasks.db`) and registered in `.kilo/kilo.jsonc`. CLI: `npx rhizome-mcp <command>`.
+
+### 0. Boot — orient every session
+
+**First call in every session, before any other tool:**
+
+```
+rhizome-mcp open_project  (project_root = absolute repo path)
+```
+
+Retain the returned `project_ref` and pass it on every subsequent project-scoped call. The server is stateless; omitting `project_ref` only works if a default project is configured.
+
+Then call `get_project` with that `project_ref` to load project-level instructions, supported values, limits, and the latest event ID. Use `get_changes(since_event_id=N)` to pick up what other sessions did while you were offline.
+
+**Attribution (optional but recommended):** `create_agent_session` once → returns an `agent_session_handle` → pass it to every mutating call → `end_agent_session` at the end. Omitting it is supported; it just records `NULL` attribution.
+
+### 1. Find work — never invent it
+
+| Tool | Use when |
+|---|---|
+| `get_planning_graph(project_ref)` | You need to see dependencies, blockers, and the entry-point queue. |
+| `list_issues(project_ref, is_claimable=true)` | You want a narrow "ready" queue with no graph reasoning. |
+| `search(query)` | You're looking for historical knowledge, not current state. |
+
+**Do not** use `list_issues` without filters and pick the first row. **Do not** start work on a blocked issue. **Do not** open two issues for the same intent.
+
+If you have an idea that's not yet in Rhizome, **create an issue first** (`create_issue`) with type `task` or `bug`, acceptance criteria, and labels — then claim it. Don't start coding the idea and file the issue later; that loses the audit trail.
+
+### 2. Load context — every claim
+
+Before `claim_issue`, call `get_work_context(issue_id)` with the **default compact** context, then request only the additional sections you need:
+
+```
+get_work_context(issue_id, include=[
+  "parent_epic", "relations", "related_issue_summaries",
+  "recent_comments", "recent_attempt_notes", "decision_content",
+  "attempt_history", "artifacts", "project_instructions",
+  "changes_since_previous_attempt", "resource_reservations",
+  "reservation_conflicts"
+])
+```
+
+- Read **active decisions** and **acceptance criteria** as durable constraints. They override your assumptions.
+- If the criteria are missing or contradictory, **add a comment or record a decision** before guessing.
+- For an epic, request `parent_epic` and `related_issue_summaries`.
+
+### 3. Claim — atomic, with a lease
+
+```
+claim_issue(issue_id, resources=[...], lease_seconds=1800)
+```
+
+- Only `ready` or `review` are claimable. Never `in_progress` (derived, not stored).
+- **Keep `attempt_id` and `lease_token` private and reusable** until the attempt ends.
+- For long work, call `renew_attempt` before expiry. A lost lease is NOT ownership.
+- **Always pass `resources`** if the work edits specific files, modules, or has logical dependencies. Reservation is all-or-nothing; a conflict fails the whole claim with `RESOURCE_RESERVATION_CONFLICT`.
+
+**Resource conventions for this repo:**
+
+| Task type | Reserve |
+|---|---|
+| Modify `functions/index.js` | `{"kind":"file","path":"functions/index.js"}` |
+| Modify `authenticator-app/app/src/main/java/com/digitalpapyrus/authenticator/SmsReceiver.kt` | `{"kind":"file","path":"..."}` |
+| Edit Cloud Functions security rules | `{"kind":"file","path":"firestore.rules"}` and/or `{"kind":"file","path":"database.rules.json"}` |
+| Deploy to Firebase | `{"kind":"logical","namespace":"deploy","name":"authenticator-15fb7"}` |
+| Edit a whole subtree | `{"kind":"directory","path":"functions/"}` |
+
+### 4. Execute — durably, with checkpoints
+
+**Checkpoint cadence:** every 10–15 minutes of active work, or before any risky operation (deploy, schema change, secret rotation).
+
+```
+save_attempt_note(
+  attempt_id, lease_token,
+  kind="checkpoint",   # or "progress" / "finding" / "warning"
+  content="""
+    Done: ...    ## Self-contained, what is done
+    Remaining: ...  ## What is left
+    Verify: ...   ## How a successor can check
+  """,
+  artifacts=[...]
+)
+```
+
+Other rules:
+
+- **Use comments for collaboration** (`add_comment`).
+- **Use decisions for durable choices** (`record_decision`). Decisions are supersedable; mark old ones `superseded`.
+- **Use `update_issue`** with the current `expected_version`. On `VERSION_CONFLICT`, refetch, reconcile, retry.
+- **Validate multi-issue plans** with `validate_issue_plan` before `apply_issue_plan`. Atomic = all-or-nothing.
+
+### 5. Review — request, approve, supersede
+
+When work completes, call `finish_attempt(attempt_id, lease_token, outcome="completed", target_issue_status="review" | "done", result_summary, verification, artifacts)`.
+
+Then, **separately**, open a review request:
+
+```
+create_review_request(
+  issue_id, target_issue_version=N, target_event_id=<from finish_attempt>,
+  purposes=["implementation", ...]
+)
+```
+
+`target_issue_version` and `target_event_id` freeze what the reviewer verifies. Stale approvals are structurally impossible.
+
+To supersede an open request whose target has moved: `replace_review_request(predecessor_request_id, ...)`. Resolved requests cannot be replaced.
+
+Reviewers complete with `finish_attempt(outcome="completed", review_outcome="approved" | "changes_requested" | "blocked")`. `changes_requested` returns the issue to `ready`; a re-review needs a fresh `create_review_request` against the new target.
+
+### 6. Handoff — never leave an attempt active
+
+**Every attempt MUST end with `finish_attempt` — exactly once.** No silent abandonment, no leaving the lease to expire.
+
+| Outcome | Use |
+|---|---|
+| `completed` | Work done. `target_issue_status` to `review` (default) or `done`. |
+| `failed` | Could not complete. `failure_reason_code` + `reason_details`. |
+| `interrupted` | Handing off. `interruption_reason_code: handoff` + `next_steps`. |
+| `blocked` | External blocker. `blocked_reason`. |
+
+`finish_attempt` returns the new `latest_event_id` and `target_issue_version` for the review request.
+
+### 7. The "I died mid-task" guarantee
+
+This is the whole point of Rhizome. If a session crashes, times out, or hits a context limit:
+
+- The lease expires (default 60 min, renewable up to 60 min).
+- The issue becomes claimable again.
+- A new session claims it, calls `get_work_context(include=["changes_since_previous_attempt"])`, reads the last `checkpoint`, and resumes.
+
+**This works only if checkpoints are written.** If you do checkpoint-less work for 90 minutes and die, your successor has nothing to resume from. Treat `save_attempt_note(kind="checkpoint")` as a 10-minute alarm.
+
+---
+
+### Quick reference card
+
+```
+BOOT:
+  open_project(project_root=<abs>)
+  get_project(project_ref)
+
+FIND:
+  get_planning_graph(project_ref)
+  list_issues(project_ref, is_claimable=true)
+
+LOAD:
+  get_work_context(issue_id, include=[...])
+
+CLAIM:
+  claim_issue(issue_id, resources=[...], lease_seconds=1800)
+  -> keeps attempt_id, lease_token private
+
+EXECUTE:
+  save_attempt_note(attempt_id, lease_token, kind="checkpoint", content=...)
+  add_comment(issue_id, content=...)
+  record_decision(issue_id, title, summary, content, status="active")
+
+FINISH:
+  finish_attempt(attempt_id, lease_token, outcome="completed", target_issue_status="review", ...)
+  create_review_request(issue_id, target_issue_version, target_event_id, purposes=[...])
+```
+
+---
+
+## 🌿 House style for this project
+
+- **Open a Rhizome issue before touching code** for any non-trivial change (>1 file, >10 lines, or anything that ships). The issue title becomes the commit subject.
+- **Cross-reference commits to issues** in the commit body: `Refs: ISSUE-12` or `Closes: ISSUE-12`.
+- **Never edit a file another agent has reserved.** Run `get_work_context(include=["resource_reservations"])` first if unsure.
+- **End every session with `finish_attempt`** — no exceptions, no "I'll do it next time."
+- **If you discover out-of-scope work**, create a separate Rhizome issue and link it (`blocks`/`related_to`), don't expand the current one.
+- **Pre-merge gate**: lint + tests + Rhizome-linked commits. The CI run-script is `bash scripts/run-all-checks.sh`.
