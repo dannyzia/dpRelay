@@ -1,0 +1,13 @@
+# Litestream config — env-vars substituted by Litestream at runtime (${VAR} syntax).
+# Env vars set in Render dashboard → Environment tab (see server/.env.example).
+dbs:
+  - path: ./data/dprelay.db
+    replicas:
+      - type: s3
+        bucket: ${R2_BUCKET_LITESTREAM}
+        endpoint: ${R2_ENDPOINT}
+        region: auto
+        access-key-id: ${R2_ACCESS_KEY_ID}
+        secret-access-key: ${R2_SECRET_ACCESS_KEY}
+        retention: 168h
+        sync-interval: 15s

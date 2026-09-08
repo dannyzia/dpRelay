@@ -9,8 +9,8 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json && node scripts/copy-migrations.mjs",
-    "start": "node dist/index.js",
+    "build": "node scripts/download-litestream.mjs && tsc -p tsconfig.json",
+    "start": "./bin/litestream restore -if-db-not-exists && ./bin/litestream replicate -exec \"node dist/index.js\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
