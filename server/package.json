@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "node scripts/download-litestream.mjs && tsc -p tsconfig.json",
-    "start": "./bin/litestream restore -if-db-not-exists && ./bin/litestream replicate -exec \"node dist/index.js\"",
+    "start": "./bin/litestream -config litestream.yml restore -if-db-not-exists && ./bin/litestream -config litestream.yml replicate -exec \"node dist/index.js\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
