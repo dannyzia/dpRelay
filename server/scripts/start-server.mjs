@@ -49,12 +49,19 @@ if (!hasReplica) {
 console.log("Config validation: OK (db path + S3 replica present)");
 console.log("Starting Litestream...");
 
-// Exec Litestream with the validated config
+// Litestream v0.3.x CLI: global -config flag must come AFTER the subcommand,
+// and restore takes the DB path as a positional arg matched against the config.
+//   litestream restore  -config <file> -if-db-not-exists <db_path>
+//   litestream replicate -config <file> -exec "<command>"
 const litestreamPath = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "litestream");
+const serverRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
 const child = spawn(litestreamPath, [
+  "restore",
   "-config", "litestream.yml",
-  "restore", "-if-db-not-exists"
-], { stdio: "inherit", cwd: join(dirname(fileURLToPath(import.meta.url)), "..") });
+  "-if-db-not-exists",
+  "./data/dprelay.db",
+], { stdio: "inherit", cwd: serverRoot });
 
 child.on("close", (code) => {
   if (code !== 0) {
@@ -63,9 +70,10 @@ child.on("close", (code) => {
   }
   // Restore succeeded, start replication + server
   const replicate = spawn(litestreamPath, [
+    "replicate",
     "-config", "litestream.yml",
-    "replicate", "-exec", "node dist/index.js"
-  ], { stdio: "inherit", cwd: join(dirname(fileURLToPath(import.meta.url)), "..") });
+    "-exec", "node dist/index.js",
+  ], { stdio: "inherit", cwd: serverRoot });
   replicate.on("close", (c) => process.exit(c));
 });
 
