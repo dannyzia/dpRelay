@@ -1,0 +1,15 @@
+# Litestream config — ENABLE IN M1 FOLLOW-UP (Render boot is ephemeral; R1-R2 constraints)
+# Render start command becomes:
+#   litestream restore -if-db-not-exists ${DB_PATH} && litestream replicate -exec "node dist/index.js" ./${CONFIG}
+# Binary is pulled in the Render build command (static Go release), see server/README.md.
+dbs:
+  - path: ./data/dprelay.db
+    replicas:
+      - type: s3
+        bucket: dprelay-litestream
+        endpoint: https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com
+        region: auto
+        access-key-id: YOUR_R2_ACCESS_KEY_ID
+        secret-access-key: YOUR_R2_SECRET_ACCESS_KEY
+        retention: 168h
+        sync-interval: 15s
