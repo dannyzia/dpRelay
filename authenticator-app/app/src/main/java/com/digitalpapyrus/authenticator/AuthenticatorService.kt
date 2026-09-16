@@ -102,6 +102,7 @@ class AuthenticatorService : Service() {
 
     acquireWakeLock()
     authenticateWithFirebase()
+    startV5PlaneIfEnabled()
   }
 
   private fun createNotificationChannel() {
@@ -241,6 +242,10 @@ class AuthenticatorService : Service() {
    * All three are required by the RTDB validation rules — omitting any one causes a silent
    * rejection. The Cloud Function health endpoint counts entries whose lastPing is within
    * the last 5 minutes, so we ping every 4 minutes to stay inside that window.
+   *
+   * v5 parallel run (M2): each tick ALSO posts a v5 heartbeat (feeds the v5
+   * watchdog, R1 keep-alive) and pulls outstanding messages, so the phone
+   * reports to both planes while they run side by side (PLAN §9).
    */
   private fun startHealthPingLoop() {
     serviceScope.launch {
@@ -252,6 +257,21 @@ class AuthenticatorService : Service() {
 
       while (true) {
         try {
+          if (V5ApiClient.isEnabled()) {
+            if (EncryptedPrefsHelper.getDeviceApiKey(applicationContext) == null) {
+              // Retry enrollment from here — the service may start before
+              // enrollment succeeded.
+              V5ApiClient.enrollIfNeeded(applicationContext)
+            }
+            if (V5ApiClient.heartbeat(applicationContext)) {
+              Log.i(TAG, "v5 heartbeat ok")
+              // Post-heartbeat fetch: the no-FCM wake path (R1 semantics).
+              OutstandingFetcher.fetchAndSend(applicationContext)
+            } else {
+              Log.w(TAG, "v5 heartbeat failed (legacy RTDB ping continues)")
+            }
+          }
+
           val pingData = mapOf(
             "lastPing" to com.google.firebase.database.ServerValue.TIMESTAMP,
             "battery" to getBatteryLevel(),
@@ -275,6 +295,37 @@ class AuthenticatorService : Service() {
       it.startListening()
     }
     Log.i(TAG, "PendingSmsListener started")
+  }
+
+  /** Guards against re-enrollment churn when the service restarts. */
+  private var v5PlaneStarted = false
+
+  /**
+   * Starts the v5 device plane (M2 parallel run, PLAN §9) when compiled in:
+   * enrolls against the v5 server (idempotent — only when no key is stored) and
+   * kicks the first outstanding fetch. Subsequent fetches ride the heartbeat
+   * loop and FCM wakes.
+   */
+  private fun startV5PlaneIfEnabled() {
+    if (!V5ApiClient.isEnabled() || v5PlaneStarted) return
+    v5PlaneStarted = true
+    serviceScope.launch {
+      val enrolled = V5ApiClient.enrollIfNeeded(applicationContext)
+      if (!enrolled) {
+        Log.w(TAG, "v5 enrollment failed — will retry from the heartbeat loop")
+        v5PlaneStarted = false
+        return@launch
+      }
+      // Register the current FCM token so the M3 server-side wake sender can
+      // reach this device (storage-only on the server in M2).
+      try {
+        val token = com.google.firebase.messaging.FirebaseMessaging.getInstance().token.await()
+        V5ApiClient.postFcmToken(applicationContext, token)
+      } catch (e: Exception) {
+        Log.w(TAG, "v5 fcm-token registration failed: ${e.javaClass.simpleName}")
+      }
+      OutstandingFetcher.fetchAndSend(applicationContext)
+    }
   }
 
   /**

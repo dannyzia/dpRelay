@@ -10,7 +10,8 @@ import { constantTimeEquals, sha256Hex } from "./services/crypto.js";
 /** Shape of a verified device, attached to the request by requireDevice. */
 export interface AuthenticatedDevice {
   id: string;
-  userId: string;
+  /** Null for phone-enrolled devices (M2 /enroll creates devices without a user account). */
+  userId: string | null;
   label: string;
 }
 
