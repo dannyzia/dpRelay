@@ -32,6 +32,10 @@ export interface Config {
   alertWebhookSecret: string;
   /** Idle seconds after which the next request counts as a wake (Render guard). */
   wakeIdleThresholdSec: number;
+  /** Shared secret for phone enrollment (POST /v5/device/enroll). Empty = enrollment disabled. */
+  deviceEnrollmentSecret: string;
+  /** Claimed pending_sms older than this are re-offered to the next fetch (at-least-once). */
+  outstandingRequeueSec: number;
 }
 
 /**
@@ -95,6 +99,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       env.WAKE_IDLE_THRESHOLD_SEC,
       "WAKE_IDLE_THRESHOLD_SEC",
       15 * 60,
+    ),
+    deviceEnrollmentSecret: env.DEVICE_ENROLLMENT_SECRET ?? "",
+    outstandingRequeueSec: parsePositiveInt(
+      env.OUTSTANDING_REQUEUE_SEC,
+      "OUTSTANDING_REQUEUE_SEC",
+      120,
     ),
   };
 }

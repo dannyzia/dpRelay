@@ -28,6 +28,17 @@ npm start       # scripts/start-server.mjs → litestream restore → litestream
 Device API keys: 32 random bytes, **returned once** at registration, stored as SHA-256 hash only.
 All authorization flows through the `requireAuth` (JWT) / `requireDevice` (API key) middleware — the single authz choke point (PLAN §5). Every failure response is structured: `{ ok: false, error, code }`.
 
+## Device plane (M2, PLAN §7)
+
+- `POST /v5/device/enroll` — `Authorization: Bearer <DEVICE_ENROLLMENT_SECRET>`, `{ "label" }` → `{ deviceId, apiKey }` (403 when unconfigured; secret compared in constant time)
+- `GET /v5/device/outstanding` — claims up to 50 pending messages; at-least-once via `OUTSTANDING_REQUEUE_SEC` requeue
+- `POST /v5/device/results` — `{ "results": [{ "id", "status": "sent"|"failed", "error"? }] }` → terminal update
+- `POST /v5/device/payment-sms` — `{ sender, provider: 'bkash'|'nagad', txnId (10 alnum), amountPaisa }` → idempotent by unique `txn_id`
+- `POST /v5/device/fcm-token` — `{ "token" }` → stored on the device row (M3 wake sender consumes it)
+- `POST /v5/device/heartbeat` — updates `last_seen_at` (feeds the watchdog, doubles as Render keep-alive)
+
+The gateway phone authenticates with its device API key (EncryptedSharedPreferences, ADR-016) on every route except `/enroll`, which takes the enrollment secret.
+
 ## Background jobs (R3, R5)
 
 Single Fastify process hosts the node-cron job runner (constraint R3 — one process):
