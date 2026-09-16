@@ -43,6 +43,12 @@ android {
         buildConfigField "String", "CF_VERIFY_OTP_URL", "\"https://verifyotp-giwymuyuka-as.a.run.app\""
         buildConfigField "String", "CF_OTP_STATUS_URL", "\"https://otpstatus-giwymuyuka-as.a.run.app\""
         buildConfigField "String", "CF_APP_ID", "\"\""
+        // dP Relay v5 server (M2 parallel run, PLAN §9). V5_API_ENABLED is the
+        // compile-time toggle: false keeps the legacy Firebase plane as the only
+        // active one; flip to true for the cutover build. Base URL is a
+        // non-secret (server URL, per 11-ENV-VARS.md public-client rules).
+        buildConfigField "String", "V5_API_BASE_URL", "\"https://dprelay-api-hug8.onrender.com\""
+        buildConfigField "boolean", "V5_API_ENABLED", "false"
     }
 
     buildTypes {

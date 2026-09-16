@@ -14,14 +14,16 @@ Human reviews this: NO — but every variable must be accounted for here before 
 - Public client apps must not contain a long-lived verification signing secret.
 - Validate all variables at startup. Fail fast if any required variable is missing.
 
-## Authenticator App
-
-> **`CF_URL` is the only `BuildConfig` field in the authenticator APK.** `AUTHENTICATOR_ENROLLMENT_SECRET` is entered at first run and stored in `EncryptedSharedPreferences` — never compiled into the APK (ADR-016 / T-09).
+## Authenticator App> The only `BuildConfig` fields in the authenticator APK are the non-secret URLs/toggles: `CF_URL` (v4), `V5_API_BASE_URL`, and `V5_API_ENABLED` (v5, M2 parallel-run toggle, default false). All secrets — `AUTHENTICATOR_ENROLLMENT_SECRET`, the v5 `DEVICE_API_KEY` — live in `EncryptedSharedPreferences`, never compiled into the APK (ADR-016 / T-09).
 
 | Variable | Where | Required | Description | How to get it |
 |----------|-------|----------|-------------|---------------|
 | CF_URL | `BuildConfig` | yes | Base Cloud Functions URL used for `registerAuthenticator`, `startVerification`, and `checkAuth`. | `firebase deploy` output |
+| V5_API_BASE_URL | `BuildConfig` | yes (M2+) | dP Relay v5 server base URL (non-secret; device plane REST). | Deployed server URL (e.g. Render service) |
+| V5_API_ENABLED | `BuildConfig` | no (default false) | M2 parallel-run toggle: false = legacy Firebase plane only; true = also enroll + heartbeat + outstanding/results + payment-SMS via REST. | Flip in `app/build.gradle` for the cutover build |
 | AUTHENTICATOR_ENROLLMENT_SECRET | `EncryptedSharedPreferences` (first-run prompt) | yes | Authenticator-only bootstrap secret used to obtain a Firebase custom token. Min 32 chars. Never in `buildConfigField`. | `openssl rand -base64 32` |
+| DEVICE_API_KEY (v5) | `EncryptedSharedPreferences` (via POST /v5/device/enroll) | M2+ | v5 device API key minted by the server; raw key shown/returned once, never logged. | Server-issued at enrollment |
+| V5_FCM_TOKEN (v5) | `EncryptedSharedPreferences`-adjacent (device → POST /v5/device/fcm-token) | M2+ | FCM registration token registered with the v5 server for wake+fetch. | Firebase SDK at runtime |
 
 ## Cloud Functions (Environment Variables - Spark Plan Compatible)
 | Variable | Required | Default | Description | How to get it |
@@ -52,6 +54,8 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | ALERT_WEBHOOK_URL | no | — (empty = log-only) | Watchdog alert delivery endpoint. | Your webhook receiver (e.g. Discord/Slack-compatible) |
 | ALERT_WEBHOOK_SECRET | no | — | Sent as `Authorization: Bearer` on alert webhooks. | `openssl rand -base64 32` |
 | WAKE_IDLE_THRESHOLD_SEC | no | 900 | Idle seconds before the next request counts as a wake (R5 catch-up sweep). | — |
+| DEVICE_ENROLLMENT_SECRET | for M2 | — (empty = enrollment disabled) | Enrollment secret for `POST /v5/device/enroll` (ADR-016 exchange → device API key). Compared in constant time. | `openssl rand -base64 32` |
+| OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |
 | LITESTREAM_ENABLED | no | false | start-server.mjs flag: false = serve without litestream supervision. | — |
 | R2_ACCOUNT_ID | for litestream | — | Cloudflare account ID (R2 endpoint). | Cloudflare dashboard → R2 |
 | R2_ENDPOINT | for litestream | — | S3-compatible endpoint. | `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` |

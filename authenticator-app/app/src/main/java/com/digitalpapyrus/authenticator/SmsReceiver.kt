@@ -100,7 +100,7 @@ class SmsReceiver : BroadcastReceiver() {
                     "amount_paisa=${parsedPaymentSms.amountPaisa}",
             )
 
-            handlePaymentSms(originatingAddress, parsedPaymentSms)
+            handlePaymentSms(context, originatingAddress, parsedPaymentSms)
             return
         }
 
@@ -192,9 +192,23 @@ class SmsReceiver : BroadcastReceiver() {
         return ParsedPaymentSms(txnId = txnId, amountPaisa = amountPaisa, provider = provider)
     }
 
-    private fun handlePaymentSms(sender: String, parsed: ParsedPaymentSms) {
+    private fun handlePaymentSms(context: Context, sender: String, parsed: ParsedPaymentSms) {
         receiverScope.launch {
             try {
+                // v5 parallel run (M2, PLAN §7 #6): post to the REST ingest first.
+                // Server is idempotent per unique txn_id, so retries never double-count.
+                if (V5ApiClient.isEnabled() && EncryptedPrefsHelper.getDeviceApiKey(context.applicationContext) != null) {
+                    val posted = V5ApiClient.postPaymentSms(
+                        context.applicationContext,
+                        sender = sender,
+                        provider = parsed.provider,
+                        txnId = parsed.txnId,
+                        amountPaisa = parsed.amountPaisa,
+                        receivedAtMs = System.currentTimeMillis(),
+                    )
+                    Log.i(TAG, "payment_sms v5 post: ok=$posted")
+                }
+
                 val payload = mapOf(
                     "txn_id" to parsed.txnId,
                     "amount_bdt" to parsed.amountPaisa,

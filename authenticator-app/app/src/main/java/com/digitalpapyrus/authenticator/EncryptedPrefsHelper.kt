@@ -18,6 +18,7 @@ object EncryptedPrefsHelper {
 
   private const val PREFS_FILE_NAME = "authenticator_encrypted_prefs"
   private const val KEY_ENROLLMENT_SECRET = "enrollment_secret"
+  private const val KEY_DEVICE_API_KEY = "device_api_key_v5"
 
   private var encryptedPrefs: SharedPreferences? = null
 
@@ -122,5 +123,36 @@ object EncryptedPrefsHelper {
     encryptedPrefs?.edit()
       ?.remove(KEY_ENROLLMENT_SECRET)
       ?.apply()
+  }
+
+  /**
+   * Stores the v5 device API key (issued by POST /v5/device/enroll).
+   * Per ADR-016 this lives in EncryptedSharedPreferences, never in BuildConfig.
+   *
+   * @param context Application context
+   * @param apiKey Raw device API key (returned exactly once by the server)
+   */
+  fun storeDeviceApiKey(context: Context, apiKey: String) {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    encryptedPrefs?.edit()
+      ?.putString(KEY_DEVICE_API_KEY, apiKey)
+      ?.apply()
+  }
+
+  /**
+   * Retrieves the v5 device API key.
+   *
+   * @param context Application context
+   * @return The API key, or null if not enrolled
+   */
+  fun getDeviceApiKey(context: Context): String? {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    return encryptedPrefs?.getString(KEY_DEVICE_API_KEY, null)
   }
 }

@@ -56,11 +56,23 @@ class AuthFcmService : FirebaseMessagingService() {
         
         // Report health
         reportHealth()
+
+        // v5 parallel run (M2, PLAN §7 #2): FCM wake → pull outstanding from
+        // the v5 server. No-op unless V5_API_ENABLED is compiled in and the
+        // device is enrolled.
+        OutstandingFetcher.fetchAndSend(applicationContext)
     }
     
     override fun onNewToken(token: String) {
         Log.i(TAG, "FCM token refreshed")
-        // In production, you might want to send this to your server
+        // v5 parallel run: register the fresh token with the v5 server so the
+        // M3 wake sender can reach this device. No-op unless enabled + enrolled.
+        if (V5ApiClient.isEnabled()) {
+            serviceScope.launch {
+                val ok = V5ApiClient.postFcmToken(applicationContext, token)
+                if (!ok) Log.w(TAG, "v5 fcm-token registration failed (will re-register on next refresh)")
+            }
+        }
     }
     
     /**
