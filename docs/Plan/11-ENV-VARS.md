@@ -14,7 +14,8 @@ Human reviews this: NO — but every variable must be accounted for here before 
 - Public client apps must not contain a long-lived verification signing secret.
 - Validate all variables at startup. Fail fast if any required variable is missing.
 
-## Authenticator App> The only `BuildConfig` fields in the authenticator APK are the non-secret URLs/toggles: `CF_URL` (v4), `V5_API_BASE_URL`, and `V5_API_ENABLED` (v5, M2 parallel-run toggle, default false). All secrets — `AUTHENTICATOR_ENROLLMENT_SECRET`, the v5 `DEVICE_API_KEY` — live in `EncryptedSharedPreferences`, never compiled into the APK (ADR-016 / T-09).
+## Authenticator App> The only `BuildConfig` fields in the authenticator APK are the non-secret URLs/toggles: `CF_URL` (v4), `V5_API_BASE_URL`, and `V5_API_ENABLED` (v5, M2 parallel-run toggle, default false). All secrets — `AUTHENTICATOR_ENROLLMENT_SECRET`, the v5 `DEVICE_API_KEY` — live in `EncryptedSharedPreferences`, never compiled into the APK (ADR-016 / T-09).
+
 
 | Variable | Where | Required | Description | How to get it |
 |----------|-------|----------|-------------|---------------|
@@ -56,6 +57,8 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | WAKE_IDLE_THRESHOLD_SEC | no | 900 | Idle seconds before the next request counts as a wake (R5 catch-up sweep). | — |
 | DEVICE_ENROLLMENT_SECRET | for M2 | — (empty = enrollment disabled) | Enrollment secret for `POST /v5/device/enroll` (ADR-016 exchange → device API key). Compared in constant time. | `openssl rand -base64 32` |
 | OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |
+| ENROLL_RATE_MAX_PER_HOUR | no | 10 | Max `/v5/device/enroll` attempts per client IP inside the sliding window (brute-force guard; counts failures too). | server |
+| ENROLL_RATE_WINDOW_SEC | no | 3600 | Sliding window for the enrollment rate limiter, in seconds. | server |
 | LITESTREAM_ENABLED | no | false | start-server.mjs flag: false = serve without litestream supervision. | — |
 | R2_ACCOUNT_ID | for litestream | — | Cloudflare account ID (R2 endpoint). | Cloudflare dashboard → R2 |
 | R2_ENDPOINT | for litestream | — | S3-compatible endpoint. | `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` |

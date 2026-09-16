@@ -395,3 +395,45 @@ describe("POST /v5/device/fcm-token", () => {
     expect(oversized.statusCode).toBe(400);
   });
 });
+
+describe("POST /v5/device/enroll rate limit", () => {
+  it("429s with Retry-After after ENROLL_RATE_MAX_PER_HOUR attempts from one IP", async () => {
+    app = makeApp({ DEVICE_ENROLLMENT_SECRET: TEST_ENROLLMENT_SECRET, ENROLL_RATE_MAX_PER_HOUR: "3" });
+    for (let i = 0; i < 3; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/v5/device/enroll",
+        headers: { authorization: `Bearer ${TEST_ENROLLMENT_SECRET}` },
+        payload: { label: `phone-${i}` },
+      });
+      expect(res.statusCode).toBe(201);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url: "/v5/device/enroll",
+      payload: { label: "over-the-line" },
+    });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toMatchObject({ ok: false, code: "rate_limited" });
+    expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+  });
+
+  it("counts failed attempts toward the limit (brute-force guard)", async () => {
+    app = makeApp({ DEVICE_ENROLLMENT_SECRET: TEST_ENROLLMENT_SECRET, ENROLL_RATE_MAX_PER_HOUR: "2" });
+    for (let i = 0; i < 2; i++) {
+      const bad = await app.inject({
+        method: "POST",
+        url: "/v5/device/enroll",
+        headers: { authorization: "Bearer wrong-secret" },
+        payload: {},
+      });
+      expect(bad.statusCode).toBe(401);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url: "/v5/device/enroll",
+      payload: { label: "should-be-limited" },
+    });
+    expect(limited.statusCode).toBe(429);
+  });
+});

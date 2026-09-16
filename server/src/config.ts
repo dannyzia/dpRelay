@@ -36,6 +36,10 @@ export interface Config {
   deviceEnrollmentSecret: string;
   /** Claimed pending_sms older than this are re-offered to the next fetch (at-least-once). */
   outstandingRequeueSec: number;
+  /** Max enrollment attempts per client IP inside the sliding window (brute-force guard). */
+  enrollRateMaxPerHour: number;
+  /** Sliding window for the enrollment rate limiter, in seconds. */
+  enrollRateWindowSec: number;
 }
 
 /**
@@ -106,5 +110,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "OUTSTANDING_REQUEUE_SEC",
       120,
     ),
+    enrollRateMaxPerHour: parsePositiveInt(env.ENROLL_RATE_MAX_PER_HOUR, "ENROLL_RATE_MAX_PER_HOUR", 10),
+    enrollRateWindowSec: parsePositiveInt(env.ENROLL_RATE_WINDOW_SEC, "ENROLL_RATE_WINDOW_SEC", 3600),
   };
 }

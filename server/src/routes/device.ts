@@ -81,6 +81,32 @@ function asString(value: unknown, maxLen: number): string | null {
 
 const deviceRoutes: FastifyPluginAsync = async (app) => {
   /**
+   * Per-IP sliding-window limiter for enrollment (brute-force guard — v4
+   * parity with registerAuthenticator's per-IP limits). All attempts count,
+   * success or failure: the guard exists to stop secret guessing, not just
+   * key farming. State is per-app-instance, so tests isolate naturally.
+   */
+  const enrollAttempts = new Map<string, number[]>();
+  const enrollWindowMs = app.config.enrollRateWindowSec * 1000;
+  const enrollRateMax = app.config.enrollRateMaxPerHour;
+
+  function enrollRateCheck(ip: string): { allowed: boolean; retryAfterSec: number } {
+    const now = Date.now();
+    const stamps = (enrollAttempts.get(ip) ?? []).filter((t) => now - t < enrollWindowMs);
+    if (stamps.length >= enrollRateMax) {
+      const oldest = stamps[0] ?? now;
+      enrollAttempts.set(ip, stamps);
+      return {
+        allowed: false,
+        retryAfterSec: Math.max(1, Math.ceil((oldest + enrollWindowMs - now) / 1000)),
+      };
+    }
+    stamps.push(now);
+    enrollAttempts.set(ip, stamps);
+    return { allowed: true, retryAfterSec: 0 };
+  }
+
+  /**
    * M1: registers a device for the JWT-authenticated caller and issues its API key.
    */
   app.post("/v5/device/register", { onRequest: [app.requireAuth] }, async (request, reply) => {
@@ -114,6 +140,14 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
    * DEVICE_ENROLLMENT_SECRET is configured; compared in constant time.
    */
   app.post("/v5/device/enroll", async (request, reply) => {
+    const verdict = enrollRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many enrollment attempts", code: "rate_limited" });
+    }
+
     const expected = app.config.deviceEnrollmentSecret;
     if (expected === "") {
       return reply.code(403).send({ ok: false, error: "Device enrollment is disabled", code: "enrollment_disabled" });
