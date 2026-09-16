@@ -73,7 +73,9 @@ jobs:
       - name: Run ESLint
         run: npm run lint
       - name: Run Tests
-        run: npm test
+        # test:unit = no-emulator scope (index.test.js). Bare `npm test` needs
+        # Firebase emulators (test/setup.js) and cannot pass on the runner.
+        run: npm run test:unit
       - name: Upload Coverage
         uses: codecov/codecov-action@v5
         with:
