@@ -48,6 +48,10 @@ export interface Config {
   otpLockoutSec: number;
   /** Firebase service-account JSON (stringified) — FCM wake sender only. Empty = wake disabled. */
   fcmServiceAccountJson: string;
+  /** Per-attempt timeout for webhook dispatch POSTs, in ms. */
+  webhookTimeoutMs: number;
+  /** Comma-separated backoff delays (ms) between webhook retry attempts. */
+  webhookRetryDelaysMs: string;
 }
 
 /**
@@ -124,5 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     otpMaxAttempts: parsePositiveInt(env.OTP_MAX_ATTEMPTS, "OTP_MAX_ATTEMPTS", 5),
     otpLockoutSec: parsePositiveInt(env.OTP_LOCKOUT_SEC, "OTP_LOCKOUT_SEC", 900),
     fcmServiceAccountJson: env.FCM_SERVICE_ACCOUNT_JSON ?? "",
+    webhookTimeoutMs: parsePositiveInt(env.WEBHOOK_TIMEOUT_MS, "WEBHOOK_TIMEOUT_MS", 5_000),
+    webhookRetryDelaysMs: env.WEBHOOK_RETRY_DELAYS_MS ?? "30000,120000",
   };
 }

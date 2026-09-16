@@ -14,6 +14,7 @@
  */
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { constantTimeEquals, newId } from "../services/crypto.js";
+import { dispatchOtpStatusWebhooks } from "../services/webhooks.js";
 
 interface DeviceRegisterBody {
   label?: unknown;
@@ -234,9 +235,15 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * M2: delivery results from the phone (§7 #3). 'sent' and 'failed' are both
-   * terminal here; failed rows keep their error for otpStatus/webhooks (M3).
-   * Unknown ids are ignored (idempotent retries, requeued duplicates).
+   * M2: delivery results from the phone (§7 #3); M3 tail: OTP webhook dispatch.
+   * 'sent' and 'failed' are both terminal here; failed rows keep their error for
+   * debugging. Unknown ids are ignored (idempotent retries, requeued duplicates).
+   *
+   * Accepted results whose message belongs to an otp_session (via
+   * otp_sessions.message_id) trigger a signed webhook to the owning app
+   * (services/webhooks.ts). Dispatch is awaited before responding so tests and
+   * clients see a consistent state, but webhook failure never fails this POST:
+   * the queue state is already committed and dispatch is a notification.
    */
   app.post("/v5/device/results", { onRequest: [app.requireDevice] }, async (request, reply) => {
     const body = asRecord(request.body) ?? {};
@@ -249,17 +256,15 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const markSent = app.db.prepare(
-      "UPDATE pending_sms SET status = 'sent', result_at = unixepoch(), error = NULL " +
-        "WHERE id = ? AND status IN ('claimed', 'pending')",
-    );
-    const markFailed = app.db.prepare(
-      "UPDATE pending_sms SET status = 'failed', result_at = unixepoch(), error = ? " +
+    const updateStatus = app.db.prepare(
+      "UPDATE pending_sms SET status = ?, result_at = unixepoch(), error = ? " +
         "WHERE id = ? AND status IN ('claimed', 'pending')",
     );
 
     let accepted = 0;
     let unknown = 0;
+    const acceptedIds: string[] = [];
+    const acceptedStatuses = new Map<string, "sent" | "failed">();
     for (const item of rawResults as ResultItem[]) {
       const entry = asRecord(item);
       if (!entry) {
@@ -279,13 +284,25 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       if (status === "sent") {
-        accepted += markSent.run(id).changes;
+        if (updateStatus.run("sent", null, id).changes > 0) {
+          accepted += 1;
+          acceptedIds.push(id);
+          acceptedStatuses.set(id, "sent");
+        }
       } else {
         const error = asString(entry.error, MAX_ERROR_LEN) ?? "send_failed";
-        accepted += markFailed.run(error, id).changes;
+        if (updateStatus.run("failed", error, id).changes > 0) {
+          accepted += 1;
+          acceptedIds.push(id);
+          acceptedStatuses.set(id, "failed");
+        }
       }
     }
     unknown = rawResults.length - accepted;
+
+    // M3 tail: notify owning apps about OTP-linked results (no-op when the
+    // app has no webhook_url/webhook_secret configured).
+    await dispatchOtpStatusWebhooks(app, acceptedIds, acceptedStatuses);
 
     return reply.code(200).send({ ok: true, accepted, unknown });
   });

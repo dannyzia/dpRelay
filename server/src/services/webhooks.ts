@@ -1,0 +1,239 @@
+/**
+ * Signed webhook dispatch for the OTP plane (M3 tail, Rhizome ISSUE-7): when a
+ * delivery result lands on POST /v5/device/results for a message that belongs
+ * to an otp_session, notify the owning app at its registered webhook_url.
+ *
+ * Contract (own field names, per the payload-naming rule):
+ * - Payload: { kind: "otp.status", appId, sessionId, phone, status, timestamp }
+ * - Auth: X-DP-Signature: hex(HMAC-SHA256(rawBody, apps.webhook_secret)) — the
+ *   app verifies with the secret returned at registration; the server must
+ *   hold the key, which is why the plaintext column exists (005).
+ * - Retry: up to WEBHOOK_RETRY_ATTEMPTS (3) attempts on non-2xx/transport
+ *   errors with WEBHOOK_RETRY_DELAYS_MS backoff between them; every attempt is
+ *   appended to webhook_deliveries (attempt number, response code, last error).
+ * - Dispatch is fire-and-forget from the caller's perspective: route latency
+ *   must not depend on the receiving app's availability.
+ */
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import type { FastifyInstance } from "fastify";
+import { hmacSha256Hex, newId } from "./crypto.js";
+
+/** Payload status values match pending_sms.result outcomes + final OTP verify state. */
+export type OtpWebhookStatus = "sent" | "failed" | "verified";
+
+export interface OtpWebhookPayload {
+  kind: "otp.status";
+  appId: string;
+  sessionId: string;
+  phone: string;
+  status: OtpWebhookStatus;
+  timestamp: number;
+}
+
+/** Retry attempts are counted per dispatch, including the first try. */
+const WEBHOOK_RETRY_ATTEMPTS = 3;
+/** Upper bound on URLs accepted for dispatch — SSRF blast-radius containment. */
+const WEBHOOK_URL_MAX_LEN = 2048;
+/** Cap on stored error text per attempt (matches other bounded columns). */
+const MAX_WEBHOOK_ERROR_LEN = 256;
+
+/** A dispatchable session: joined from otp_sessions + the owning apps row. */
+interface SessionDispatchInfo {
+  sessionId: string;
+  /** Public appId — what receiving apps identify with (goes in the payload). */
+  appId: string;
+  /** Internal apps.id — satisfies webhook_deliveries.app_id's FK in audit rows. */
+  appRowId: string;
+  phone: string;
+  webhookUrl: string | null;
+  webhookSecret: string | null;
+}
+
+/** One recorded attempt (also the shape of a webhook_deliveries row). */
+export interface DeliveryAttemptRecord {
+  attempt: number;
+  responseCode: number | null;
+  lastError: string | null;
+  status: "delivered" | "failed";
+}
+
+/**
+ * Resolves a pending_sms message to its OTP session and the owning app's
+ * webhook config. Returns null when the message is not OTP-linked, the session
+ * is gone, or the app has no webhook configured — "no webhook configured =
+ * no dispatch" is enforced here, at the resolution boundary.
+ */
+export function resolveSessionDispatch(
+  app: FastifyInstance,
+  messageId: string,
+): SessionDispatchInfo | null {
+  const row = app.db
+    .prepare(
+      "SELECT s.id AS sessionId, a.app_id AS appId, a.id AS appRowId, s.phone AS phone, " +
+        "a.webhook_url AS webhookUrl, a.webhook_secret AS webhookSecret " +
+        "FROM otp_sessions s " +
+        "JOIN apps a ON a.id = s.app_id " +
+        "WHERE s.message_id = ? LIMIT 1",
+    )
+    .get(messageId) as SessionDispatchInfo | undefined;
+  if (!row) return null;
+  // No webhook configured = no dispatch (task constraint).
+  if (!row.webhookUrl || !row.webhookSecret) return null;
+  return row;
+}
+
+/**
+ * Single POST with a hard per-attempt timeout. Rejects on transport errors and
+ * timeouts; resolves with the HTTP status otherwise. The signature is computed
+ * over the exact serialized body, so the receiver can verify byte-for-byte.
+ */
+function postWebhook(
+  url: string,
+  body: string,
+  signature: string,
+  timeoutMs: number,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let target: URL;
+    try {
+      target = new URL(url);
+    } catch {
+      reject(new Error(`invalid webhook_url: ${url.slice(0, WEBHOOK_URL_MAX_LEN)}`));
+      return;
+    }
+    const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const req = send(
+      target,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body).toString(),
+          "x-dp-signature": signature,
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        // Drain the response so the socket is released back to the pool.
+        res.resume();
+        res.on("end", () => resolve(res.statusCode ?? 0));
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy(new Error(`webhook timeout after ${timeoutMs}ms`));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+/**
+ * Dispatches one OTP status webhook with retry, recording every attempt.
+ * @returns All attempt records (at least one), plus the final disposition.
+ */
+export async function dispatchWebhook(
+  app: FastifyInstance,
+  info: SessionDispatchInfo,
+  status: OtpWebhookStatus,
+): Promise<{ delivered: boolean; attempts: DeliveryAttemptRecord[] }> {
+  const payload: OtpWebhookPayload = {
+    kind: "otp.status",
+    appId: info.appId,
+    sessionId: info.sessionId,
+    phone: info.phone,
+    status,
+    timestamp: Math.floor(Date.now() / 1000),
+  };
+  const rawBody = JSON.stringify(payload);
+  const signature = hmacSha256Hex(info.webhookSecret!, rawBody);
+  const retryDelays = app.config.webhookRetryDelaysMs
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 0);
+
+  const insertRow = app.db.prepare(
+    "INSERT INTO webhook_deliveries (id, session_id, app_id, webhook_url, status, attempt, attempts_max, " +
+      "created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, unixepoch())",
+  );
+  const finalizeRow = app.db.prepare(
+    "UPDATE webhook_deliveries SET status = ?, response_code = ?, last_error = ?, delivered_at = ? WHERE id = ?",
+  );
+
+  const attempts: DeliveryAttemptRecord[] = [];
+  let delivered = false;
+  for (let attempt = 1; attempt <= WEBHOOK_RETRY_ATTEMPTS; attempt++) {
+    const deliveryId = newId();
+    insertRow.run(deliveryId, info.sessionId, info.appRowId, info.webhookUrl!.slice(0, WEBHOOK_URL_MAX_LEN), attempt, WEBHOOK_RETRY_ATTEMPTS);
+    let responseCode: number | null = null;
+    let lastError: string | null = null;
+    try {
+      responseCode = await postWebhook(
+        info.webhookUrl!,
+        rawBody,
+        signature,
+        app.config.webhookTimeoutMs,
+      );
+      delivered = responseCode >= 200 && responseCode < 300;
+    } catch (err) {
+      lastError =
+        err instanceof Error ? err.message.slice(0, MAX_WEBHOOK_ERROR_LEN) : "unknown webhook error";
+    }
+
+    finalizeRow.run(
+      delivered ? "delivered" : "failed",
+      responseCode,
+      lastError,
+      delivered ? Math.floor(Date.now() / 1000) : null,
+      deliveryId,
+    );
+    attempts.push({ attempt, responseCode, lastError, status: delivered ? "delivered" : "failed" });
+
+    if (delivered) break;
+    if (attempt < WEBHOOK_RETRY_ATTEMPTS && retryDelays.length > 0) {
+      const delay = retryDelays[Math.min(attempt - 1, retryDelays.length - 1)] ?? 0;
+      await sleep(delay);
+    }
+  }
+
+  if (!delivered) {
+    app.log.error(
+      { appId: info.appId, sessionId: info.sessionId, attempts: attempts.length },
+      "webhook dispatch failed after all retries",
+    );
+  }
+  return { delivered, attempts };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Entry point used by the results route: resolves the session for each accepted
+ * message and dispatches when an app webhook is configured. Never throws — a
+ * webhook failure must not fail the phone's results POST (the queue state is
+ * already committed; dispatch is a notification, not a transaction step).
+ */
+export async function dispatchOtpStatusWebhooks(
+  app: FastifyInstance,
+  acceptedMessageIds: string[],
+  statuses: Map<string, OtpWebhookStatus>,
+): Promise<void> {
+  for (const messageId of acceptedMessageIds) {
+    const info = resolveSessionDispatch(app, messageId);
+    if (!info) continue;
+    const status = statuses.get(messageId) ?? "sent";
+    try {
+      const result = await dispatchWebhook(app, info, status);
+      app.log.info(
+        { appId: info.appId, sessionId: info.sessionId, status, delivered: result.delivered },
+        "otp status webhook dispatched",
+      );
+    } catch (err) {
+      // Defensive: dispatchWebhook catches transport errors internally; this
+      // guards the DB-audit path against unexpected failures.
+      app.log.error({ err }, "unexpected webhook dispatch failure");
+    }
+  }
+}
