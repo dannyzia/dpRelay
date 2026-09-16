@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 
+/** Test-only secret — the server fail-fasts at boot without JWT_SECRET (M1). */
+const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
+
 function makeApp() {
   const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-test-")), "test.db");
-  return buildApp({ dbPath });
+  return buildApp({ dbPath, env: { JWT_SECRET: TEST_JWT_SECRET } });
 }
 
 describe("health endpoints", () => {
@@ -25,7 +28,7 @@ describe("health endpoints", () => {
     const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-test-")), "t.db");
     const app1 = makeApp();
     await app1.close();
-    const app2 = buildApp({ dbPath }); // second boot on same file
+    const app2 = buildApp({ dbPath, env: { JWT_SECRET: TEST_JWT_SECRET } }); // second boot on same file
     const res = await app2.inject({ method: "GET", url: "/health" });
     expect(res.statusCode).toBe(200);
     await app2.close();
