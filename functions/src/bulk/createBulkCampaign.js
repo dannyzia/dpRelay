@@ -6,7 +6,6 @@ const {
   validateE164,
   validateBulkMessage,
   deduplicatePhones,
-  checkBulkCreditBalance,
   checkDailyAppQuota,
 } = require("./bulkHelpers");
 
@@ -197,7 +196,7 @@ exports.createBulkCampaign = onCall(
       }
     }
 
-    const { unique, duplicates, duplicateCount } = deduplicatePhones(resolvedPhones);
+    const { unique, duplicateCount } = deduplicatePhones(resolvedPhones);
     const uniqueCount = unique.length;
 
     const now = Date.now();
