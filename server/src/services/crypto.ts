@@ -5,6 +5,7 @@
  */
 import {
   createHash,
+  createHmac,
   randomBytes,
   randomUUID,
   timingSafeEqual,
@@ -54,6 +55,16 @@ export function generateDeviceApiKey(): string {
  */
 export function sha256Hex(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
+}
+
+/**
+ * HMAC-SHA256 signature over a webhook raw body.
+ * @param secret The app's plaintext webhook secret (apps.webhook_secret).
+ * @param body The exact request body bytes that will be sent.
+ * @returns Hex-encoded digest for the X-DP-Signature header.
+ */
+export function hmacSha256Hex(secret: string, body: string): string {
+  return createHmac("sha256", secret).update(body, "utf8").digest("hex");
 }
 
 /**

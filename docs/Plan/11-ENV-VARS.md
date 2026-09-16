@@ -63,6 +63,8 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | OTP_MAX_ATTEMPTS | no | 5 | Failed verify attempts before an OTP session locks. | server |
 | OTP_LOCKOUT_SEC | no | 900 | Lockout duration after hitting OTP_MAX_ATTEMPTS, in seconds. | server |
 | FCM_SERVICE_ACCOUNT_JSON | no* | — | Stringified Firebase service-account JSON; enables the FCM wake sender. Empty = wake disabled (reconcile fetch covers delivery). *Required in production once M3 OTP traffic is live. | server |
+| WEBHOOK_TIMEOUT_MS | no | 5000 | Hard timeout per OTP webhook delivery attempt, in milliseconds. | server |
+| WEBHOOK_RETRY_DELAYS_MS | no | 30000,120000 | Comma-separated backoff delays (ms) between OTP webhook retry attempts (last value repeats; 3 attempts total). | server |
 | LITESTREAM_ENABLED | no | false | start-server.mjs flag: false = serve without litestream supervision. | — |
 | R2_ACCOUNT_ID | for litestream | — | Cloudflare account ID (R2 endpoint). | Cloudflare dashboard → R2 |
 | R2_ENDPOINT | for litestream | — | S3-compatible endpoint. | `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` |
