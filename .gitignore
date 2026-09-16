@@ -38,6 +38,9 @@ local.properties
 .cursorrules
 .windsurfrules
 .kilo.jsonc
+.kilo/
+.agent-tracker.json
+.freebuff/
 skills-lock.json
 project-flow.yml
 
