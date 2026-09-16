@@ -5,7 +5,7 @@ Fastify + TypeScript + SQLite (WAL). See `docs/httpsms vs dprelay/Modification 6
 ## Run
 
 ```bash
-cp .env.example .env   # adjust locally
+cp .env.example .env   # adjust locally — JWT_SECRET is required (min 32 chars)
 npm ci
 npm run dev            # tsx watch, http://localhost:3000/health
 ```
@@ -14,9 +14,28 @@ npm run dev            # tsx watch, http://localhost:3000/health
 
 ```bash
 npm test        # vitest (uses temp DBs, no env needed)
-npm run build   # tsc → dist/
-npm start       # node dist/index.js
+npm run build   # tsc → dist/ (+ litestream binary + migrations)
+npm start       # scripts/start-server.mjs → litestream restore → litestream replicate -exec "node dist/index.js"
 ```
+
+## Auth (M1)
+
+- `POST /v5/auth/register` — `{ "email", "password" }` → creates user (Argon2id hash)
+- `POST /v5/auth/login` — `{ "email", "password" }` → `{ accessToken, refreshToken }`
+- `POST /v5/auth/refresh` — `{ "refreshToken" }` → rotated `{ accessToken, refreshToken }`
+- `POST /v5/device/heartbeat` — `Authorization: Bearer <device API key>` → updates `last_seen_at`
+
+Device API keys: 32 random bytes, **returned once** at registration, stored as SHA-256 hash only.
+All authorization flows through the `requireAuth` (JWT) / `requireDevice` (API key) middleware — the single authz choke point (PLAN §5). Every failure response is structured: `{ ok: false, error, code }`.
+
+## Background jobs (R3, R5)
+
+Single Fastify process hosts the node-cron job runner (constraint R3 — one process):
+
+- `heartbeat_watchdog` — devices with `last_seen_at` older than `WATCHDOG_STALE_SEC` (default 15 min) trigger a webhook alert (`ALERT_WEBHOOK_URL`) and a structured log line; log-only when no webhook is configured.
+- `catch_up_sweep` — runs on boot and on the **first request after each wake** (Render spin-down guard, constraint R5), so scheduled work cannot be silently skipped while asleep.
+
+All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `WATCHDOG_CRON`, `CATCH_UP_CRON`.
 
 ## Render deployment (free web service)
 
@@ -28,4 +47,4 @@ npm start       # node dist/index.js
 
 ## Durability (R1–R2 constraints from the plan)
 
-Render's free disk is ephemeral. Until the Litestream entrypoint ships, this service may lose data on restart — do not point real traffic at it before `litestream.yml.example` is wired into the start command.
+`npm start` runs `scripts/start-server.mjs`: it validates `litestream.yml` + env vars, runs `litestream restore -if-db-not-exists ./data/dprelay.db`, then boots the API under `litestream replicate -exec` supervision — fresh boot on an empty dir restores the DB from R2 or creates it via migrations. Litestream then streams WAL segments back to R2 continuously.

@@ -1,5 +1,3 @@
-const admin = require("firebase-admin");
-
 /**
  * ⚠️  DEPRECATED — DO NOT RUN THIS SCRIPT.
  *
@@ -13,8 +11,6 @@ const admin = require("firebase-admin");
  * If you need to create packages, use the Admin Panel instead:
  *   https://authenticator-15fb7.web.app/admin/packages
  */
-
-const db = admin.firestore();
 
 async function seedPackages() {
   console.warn(

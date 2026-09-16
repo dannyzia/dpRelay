@@ -1,7 +1,6 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
-const logger = require("firebase-functions/logger");
 
 const APP_MASTER_SECRET = process.env.APP_MASTER_SECRET;
 

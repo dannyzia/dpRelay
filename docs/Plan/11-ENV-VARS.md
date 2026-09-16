@@ -36,6 +36,30 @@ Human reviews this: NO — but every variable must be accounted for here before 
 |----------|----------|---------|-------------|---------------|
 | CF_URL | yes | — | Cloud Function checkAuth URL. | `firebase deploy` output |
 
+## dP Relay v5 Server (server/ — Modification 6, M1+)
+| Variable | Required | Default | Description | How to get it |
+|----------|----------|---------|-------------|---------------|
+| PORT | no | 3000 | HTTP port (0 = ephemeral, tests). | — |
+| HOST | no | 0.0.0.0 | Bind address (Render needs 0.0.0.0). | — |
+| LOG_LEVEL | no | info | pino level. | — |
+| DB_PATH | no | ./data/dprelay.db | SQLite file path (Litestream-managed). | — |
+| JWT_SECRET | yes | — | HS256 signing secret for access tokens. Min 32 chars; server refuses to boot without it. | `openssl rand -base64 32` |
+| JWT_ACCESS_TTL_SEC | no | 900 | Access-token lifetime (seconds). | — |
+| JWT_REFRESH_TTL_SEC | no | 2592000 | Refresh-token lifetime (seconds, default 30 days). | — |
+| WATCHDOG_STALE_SEC | no | 900 | Devices stale when last_seen_at is older than this (default 15 min). | — |
+| WATCHDOG_CRON | no | */5 * * * * | Watchdog schedule (node-cron). | — |
+| CATCH_UP_CRON | no | */10 * * * * | Catch-up sweep schedule (node-cron). | — |
+| ALERT_WEBHOOK_URL | no | — (empty = log-only) | Watchdog alert delivery endpoint. | Your webhook receiver (e.g. Discord/Slack-compatible) |
+| ALERT_WEBHOOK_SECRET | no | — | Sent as `Authorization: Bearer` on alert webhooks. | `openssl rand -base64 32` |
+| WAKE_IDLE_THRESHOLD_SEC | no | 900 | Idle seconds before the next request counts as a wake (R5 catch-up sweep). | — |
+| LITESTREAM_ENABLED | no | false | start-server.mjs flag: false = serve without litestream supervision. | — |
+| R2_ACCOUNT_ID | for litestream | — | Cloudflare account ID (R2 endpoint). | Cloudflare dashboard → R2 |
+| R2_ENDPOINT | for litestream | — | S3-compatible endpoint. | `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` |
+| R2_ACCESS_KEY_ID | for litestream | — | R2 token access key (see SETUP-R2.md §4). | Cloudflare R2 API token |
+| R2_SECRET_ACCESS_KEY | for litestream | — | R2 token secret (never in git). | Cloudflare R2 API token |
+| R2_BUCKET_LITESTREAM | for litestream | dprelay-litestream | Backup bucket for Litestream. | Created per SETUP-R2.md §3 |
+| R2_BUCKET_ATTACHMENTS | for litestream | dprelay-attachments | MMS attachments bucket (M5). | Created per SETUP-R2.md §3 |
+
 ### Firebase Project Configuration
 - **Project ID**: `authenticator-15fb7`
 - **Region**: `asia-southeast1`
