@@ -59,6 +59,10 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |
 | ENROLL_RATE_MAX_PER_HOUR | no | 10 | Max `/v5/device/enroll` attempts per client IP inside the sliding window (brute-force guard; counts failures too). | server |
 | ENROLL_RATE_WINDOW_SEC | no | 3600 | Sliding window for the enrollment rate limiter, in seconds. | server |
+| OTP_TTL_SEC | no | 300 | OTP session lifetime, in seconds. | server |
+| OTP_MAX_ATTEMPTS | no | 5 | Failed verify attempts before an OTP session locks. | server |
+| OTP_LOCKOUT_SEC | no | 900 | Lockout duration after hitting OTP_MAX_ATTEMPTS, in seconds. | server |
+| FCM_SERVICE_ACCOUNT_JSON | no* | — | Stringified Firebase service-account JSON; enables the FCM wake sender. Empty = wake disabled (reconcile fetch covers delivery). *Required in production once M3 OTP traffic is live. | server |
 | LITESTREAM_ENABLED | no | false | start-server.mjs flag: false = serve without litestream supervision. | — |
 | R2_ACCOUNT_ID | for litestream | — | Cloudflare account ID (R2 endpoint). | Cloudflare dashboard → R2 |
 | R2_ENDPOINT | for litestream | — | S3-compatible endpoint. | `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com` |

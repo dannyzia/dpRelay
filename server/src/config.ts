@@ -40,6 +40,14 @@ export interface Config {
   enrollRateMaxPerHour: number;
   /** Sliding window for the enrollment rate limiter, in seconds. */
   enrollRateWindowSec: number;
+  /** OTP session lifetime, in seconds. */
+  otpTtlSec: number;
+  /** Failed verify attempts before an OTP session locks. */
+  otpMaxAttempts: number;
+  /** Lockout duration after hitting otpMaxAttempts, in seconds. */
+  otpLockoutSec: number;
+  /** Firebase service-account JSON (stringified) — FCM wake sender only. Empty = wake disabled. */
+  fcmServiceAccountJson: string;
 }
 
 /**
@@ -112,5 +120,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ),
     enrollRateMaxPerHour: parsePositiveInt(env.ENROLL_RATE_MAX_PER_HOUR, "ENROLL_RATE_MAX_PER_HOUR", 10),
     enrollRateWindowSec: parsePositiveInt(env.ENROLL_RATE_WINDOW_SEC, "ENROLL_RATE_WINDOW_SEC", 3600),
+    otpTtlSec: parsePositiveInt(env.OTP_TTL_SEC, "OTP_TTL_SEC", 300),
+    otpMaxAttempts: parsePositiveInt(env.OTP_MAX_ATTEMPTS, "OTP_MAX_ATTEMPTS", 5),
+    otpLockoutSec: parsePositiveInt(env.OTP_LOCKOUT_SEC, "OTP_LOCKOUT_SEC", 900),
+    fcmServiceAccountJson: env.FCM_SERVICE_ACCOUNT_JSON ?? "",
   };
 }

@@ -15,6 +15,17 @@ export interface AuthenticatedDevice {
   label: string;
 }
 
+/** Shape of a verified consumer app, attached to the request by requireApp (M3 OTP plane). */
+export interface AuthenticatedApp {
+  id: string;
+  appId: string;
+  name: string;
+  webhookUrl: string | null;
+  webhookSecretHash: string | null;
+  rateMaxPerPhone: number;
+  rateWindowSec: number;
+}
+
 declare module "fastify" {
   interface FastifyInstance {
     /** Guard: requires a valid `Authorization: Bearer <JWT>` access token. */
@@ -24,10 +35,17 @@ declare module "fastify" {
      * request.device. Rejects revoked keys. Constant-time hash comparison.
      */
     requireDevice: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /**
+     * Guard (M3 OTP plane): requires `X-App-Id` + `X-App-Secret` headers and
+     * attaches request.app. Rejects revoked apps. Constant-time hash comparison.
+     */
+    requireApp: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
   interface FastifyRequest {
     /** Populated by requireDevice; absent on user-plane routes. */
     device?: AuthenticatedDevice;
+    /** Populated by requireApp; absent on non-OTP routes. */
+    appRow?: AuthenticatedApp;
   }
 }
 
@@ -110,6 +128,57 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
       id: row.id,
       userId: row.user_id,
       label: row.label,
+    };
+  });
+
+  app.decorate("requireApp", async (request, reply) => {
+    const appId = request.headers["x-app-id"];
+    const appSecret = request.headers["x-app-secret"];
+    if (typeof appId !== "string" || appId.length === 0 || typeof appSecret !== "string" || appSecret.length === 0) {
+      await unauthorized(reply, "missing_app_credentials", "X-App-Id and X-App-Secret headers required");
+      return;
+    }
+    const row = app.db
+      .prepare(
+        "SELECT id, app_id, app_secret_hash, name, webhook_url, webhook_secret_hash, " +
+          "rate_max_per_phone, rate_window_sec, revoked_at FROM apps WHERE app_id = ?",
+      )
+      .get(appId) as
+      | {
+          id: string;
+          app_id: string;
+          app_secret_hash: string;
+          name: string;
+          webhook_url: string | null;
+          webhook_secret_hash: string | null;
+          rate_max_per_phone: number;
+          rate_window_sec: number;
+          revoked_at: number | null;
+        }
+      | undefined;
+    if (!row) {
+      await unauthorized(reply, "unknown_app", "Unknown X-App-Id");
+      return;
+    }
+    // Constant-time compare of the stored hash against the digest of the
+    // presented secret — same policy as every other secret material.
+    const digest = sha256Hex(appSecret);
+    if (!constantTimeEquals(row.app_secret_hash, digest)) {
+      await unauthorized(reply, "invalid_app_secret", "X-App-Secret mismatch");
+      return;
+    }
+    if (row.revoked_at !== null) {
+      await unauthorized(reply, "app_revoked", "This app has been revoked");
+      return;
+    }
+    request.appRow = {
+      id: row.id,
+      appId: row.app_id,
+      name: row.name,
+      webhookUrl: row.webhook_url,
+      webhookSecretHash: row.webhook_secret_hash,
+      rateMaxPerPhone: row.rate_max_per_phone,
+      rateWindowSec: row.rate_window_sec,
     };
   });
 };
