@@ -12,4 +12,4 @@ dbs:
         access-key-id: YOUR_R2_ACCESS_KEY_ID
         secret-access-key: YOUR_R2_SECRET_ACCESS_KEY
         retention: 168h
-        sync-interval: 15s
+        sync-interval: 5s         # payment rows deserve a ≤5s loss window; still far under R2 free Class-A ops

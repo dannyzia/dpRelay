@@ -10,4 +10,4 @@ dbs:
         access-key-id: ${R2_ACCESS_KEY_ID}
         secret-access-key: ${R2_SECRET_ACCESS_KEY}
         retention: 168h
-        sync-interval: 15s
+        sync-interval: 5s
