@@ -41,12 +41,11 @@ The gateway phone authenticates with its device API key (EncryptedSharedPreferen
 
 ## OTP webhook dispatch (M3 tail)
 
-When a gateway phone reports a result for an OTP-linked message, the server POSTs a signed notification to the owning app's `webhook_url` (or silently skips apps without one — no webhook configured = no dispatch):
+When a gateway phone reports a result for an OTP-linked message, or an app verifies an OTP via `POST /v5/otp/verify`, the server POSTs a signed notification to the owning app's `webhook_url` (or silently skips apps without one — no webhook configured = no dispatch):
 
 - **Payload** (own field names, not mirrored from any third-party API): `{ kind: "otp.status", appId, sessionId, phone, status: "sent" | "failed" | "verified", timestamp }`
 - **Auth**: `X-DP-Signature: hex(HMAC-SHA256(rawBody, webhook_secret))` — verify with the app's webhook secret over the exact raw body. The server must hold the key to sign, which is why `apps.webhook_secret` is plaintext (migration 005).
-- **Retry**: 3 attempts total with `WEBHOOK_RETRY_DELAYS_MS` backoff on non-2xx/transport errors; every attempt is recorded in `webhook_deliveries` (attempt number, response code, last error).
-- Dispatch failure never fails the phone's results POST — the queue state is already committed; dispatch is a notification.
+- **Retry**: 3 attempts total with `WEBHOOK_RETRY_DELAYS_MS` backoff on non-2xx/transport errors; every attempt is recorded in `webhook_deliveries` (attempt number, response code, last error) and logged — a structured `warn` per failed attempt (status code or error object) and an `info` on success. Dispatch failures never fail the triggering request.
 
 ## Background jobs (R3, R5)
 
