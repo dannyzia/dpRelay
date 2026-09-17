@@ -363,3 +363,207 @@ describe("POST /v5/device/results — OTP webhook dispatch", () => {
     expect(JSON.parse(sink.requests[0].rawBody)).toMatchObject(expectedPayload("sent"));
   });
 });
+
+/** Sends an app-authenticated OTP verify request for PHONE. */
+async function postVerify(
+  a: FastifyInstance,
+  otp: string,
+): Promise<{ statusCode: number; body: unknown }> {
+  const res = await a.inject({
+    method: "POST",
+    url: "/v5/otp/verify",
+    headers: { "x-app-id": TEST_APP_ID, "x-app-secret": TEST_APP_SECRET },
+    payload: { phone: PHONE, otp },
+  });
+  return { statusCode: res.statusCode, body: res.json() };
+}
+
+/** Finds a loopback port with no listener — deterministic connection-refused target. */
+async function findClosedPort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
+/**
+ * Points the seeded session's OTP hash at a known code (the seed uses a fake
+ * constant hash) so POST /v5/otp/verify accepts `otp`.
+ */
+function makeVerifiable(a: FastifyInstance, otp: string): void {
+  a.db
+    .prepare("UPDATE otp_sessions SET otp_hash = ? WHERE id = 'sess-1'")
+    .run(sha256Hex(`otp-salt${otp}`));
+}
+
+describe("POST /v5/otp/verify — verified-status webhook + dispatch logging", () => {
+  it("dispatches a signed otp.status webhook with status 'verified' on successful verification", async () => {
+    const sink = await startSink([200]);
+    cleanup.push(sink.close);
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, sink.url);
+    makeVerifiable(app, "654321");
+
+    const res = await postVerify(app, "654321");
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ ok: true, verified: true });
+
+    expect(sink.requests).toHaveLength(1);
+    const received = sink.requests[0];
+    const parsed = JSON.parse(received.rawBody) as Record<string, unknown>;
+    expect(parsed).toMatchObject(expectedPayload("verified"));
+    expect(typeof parsed.timestamp).toBe("number");
+
+    // Independent verification: HMAC-SHA256 over the exact raw body with the
+    // app's plaintext secret (not the server's own helper).
+    const expectedSig = createHmac("sha256", WEBHOOK_SECRET)
+      .update(received.rawBody, "utf8")
+      .digest("hex");
+    expect(received.signature).toBe(expectedSig);
+
+    const rows = deliveryRows(app);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      session_id: "sess-1",
+      app_id: "app-row-1",
+      webhook_url: sink.url,
+      status: "delivered",
+      attempt: 1,
+      attempts_max: 3,
+      response_code: 200,
+      last_error: null,
+    });
+
+    const session = app.db
+      .prepare("SELECT status FROM otp_sessions WHERE id = 'sess-1'")
+      .get() as { status: string };
+    expect(session.status).toBe("verified");
+  });
+
+  it("does not dispatch 'verified' when the app has no webhook configured", async () => {
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, null);
+    makeVerifiable(app, "654321");
+
+    const res = await postVerify(app, "654321");
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ ok: true, verified: true });
+    expect(deliveryRows(app)).toHaveLength(0);
+  });
+
+  it("does not dispatch when verification fails", async () => {
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, null);
+    makeVerifiable(app, "654321");
+
+    const res = await postVerify(app, "000000");
+    expect(res.statusCode).toBe(401);
+    expect(deliveryRows(app)).toHaveLength(0);
+
+    const session = app.db
+      .prepare("SELECT status, attempts FROM otp_sessions WHERE id = 'sess-1'")
+      .get() as { status: string; attempts: number };
+    expect(session.status).toBe("pending");
+    expect(session.attempts).toBe(1);
+  });
+
+  it("records failed attempts with last_error populated on transport failure", async () => {
+    const port = await findClosedPort();
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);
+    makeVerifiable(app, "654321");
+
+    const res = await postVerify(app, "654321");
+    // Verification must still succeed — dispatch failure is never fatal.
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ ok: true, verified: true });
+
+    const rows = deliveryRows(app);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.status === "failed")).toBe(true);
+    expect(
+      rows.every((r) => r.last_error !== null && r.last_error.length > 0),
+    ).toBe(true);
+    expect(rows.every((r) => r.response_code === null)).toBe(true);
+  });
+
+  it("logs a structured warn per failed attempt and an info on success", async () => {
+    const sink = await startSink([500, 200]);
+    cleanup.push(sink.close);
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, sink.url);
+    makeVerifiable(app, "654321");
+
+    // Capture pino events by wrapping the logger methods (pass-through so
+    // normal test output is unchanged). The saved originals must be invoked
+    // with the logger as `this` — pino reads instance symbols off it.
+    const warnings: Array<{ obj: Record<string, unknown>; msg?: string }> = [];
+    const infos: Array<{ obj: Record<string, unknown>; msg?: string }> = [];
+    const log = app.log as unknown as {
+      warn: (this: unknown, obj: unknown, msg?: string) => void;
+      info: (this: unknown, obj: unknown, msg?: string) => void;
+    };
+    const origWarn = log.warn;
+    const origInfo = log.info;
+    log.warn = function (obj: unknown, msg?: string) {
+      warnings.push({ obj: obj as Record<string, unknown>, msg });
+      origWarn.call(this, obj, msg);
+    };
+    log.info = function (obj: unknown, msg?: string) {
+      infos.push({ obj: obj as Record<string, unknown>, msg });
+      origInfo.call(this, obj, msg);
+    };
+
+    const res = await postVerify(app, "654321");
+    expect(res.statusCode).toBe(200);
+
+    // Attempt 1 (500) → warn with status code and attempt number; attempt 2
+    // (200) → info with the same correlation fields.
+    expect(
+      warnings.some(
+        (w) =>
+          w.msg?.includes("non-2xx") &&
+          w.obj.attempt === 1 &&
+          w.obj.responseCode === 500 &&
+          w.obj.sessionId === "sess-1",
+      ),
+    ).toBe(true);
+    expect(
+      infos.some(
+        (i) =>
+          i.msg?.includes("succeeded") &&
+          i.obj.attempt === 2 &&
+          i.obj.responseCode === 200,
+      ),
+    ).toBe(true);
+  });
+
+  it("logs the error object for transport failures", async () => {
+    const port = await findClosedPort();
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);
+    makeVerifiable(app, "654321");
+
+    const warnings: Array<{ obj: Record<string, unknown>; msg?: string }> = [];
+    const log = app.log as unknown as {
+      warn: (this: unknown, obj: unknown, msg?: string) => void;
+    };
+    const origWarn = log.warn;
+    log.warn = function (obj: unknown, msg?: string) {
+      warnings.push({ obj: obj as Record<string, unknown>, msg });
+      origWarn.call(this, obj, msg);
+    };
+
+    await postVerify(app, "654321");
+
+    expect(
+      warnings.some(
+        (w) =>
+          w.msg?.includes("transport error") &&
+          w.obj.err instanceof Error &&
+          w.obj.attempt === 1,
+      ),
+    ).toBe(true);
+  });
+});

@@ -10,7 +10,9 @@
  *   hold the key, which is why the plaintext column exists (005).
  * - Retry: up to WEBHOOK_RETRY_ATTEMPTS (3) attempts on non-2xx/transport
  *   errors with WEBHOOK_RETRY_DELAYS_MS backoff between them; every attempt is
- *   appended to webhook_deliveries (attempt number, response code, last error).
+ *   appended to webhook_deliveries (attempt number, response code, last error)
+ *   and logged (warn per failed attempt with the error object or status code,
+ *   info on success) — the audit table and the log stream must agree.
  * - Dispatch is fire-and-forget from the caller's perspective: route latency
  *   must not depend on the receiving app's availability.
  */
@@ -167,6 +169,7 @@ export async function dispatchWebhook(
     insertRow.run(deliveryId, info.sessionId, info.appRowId, info.webhookUrl!.slice(0, WEBHOOK_URL_MAX_LEN), attempt, WEBHOOK_RETRY_ATTEMPTS);
     let responseCode: number | null = null;
     let lastError: string | null = null;
+    let transportError: unknown;
     try {
       responseCode = await postWebhook(
         info.webhookUrl!,
@@ -176,6 +179,7 @@ export async function dispatchWebhook(
       );
       delivered = responseCode >= 200 && responseCode < 300;
     } catch (err) {
+      transportError = err;
       lastError =
         err instanceof Error ? err.message.slice(0, MAX_WEBHOOK_ERROR_LEN) : "unknown webhook error";
     }
@@ -189,7 +193,27 @@ export async function dispatchWebhook(
     );
     attempts.push({ attempt, responseCode, lastError, status: delivered ? "delivered" : "failed" });
 
-    if (delivered) break;
+    if (delivered) {
+      app.log.info(
+        { appId: info.appId, sessionId: info.sessionId, status, attempt, responseCode },
+        "webhook delivery attempt succeeded",
+      );
+      break;
+    }
+    // Structured failure log per attempt: the webhook_deliveries row is the
+    // durable audit record, but the same outcome must be visible in the log
+    // stream with full context — never swallowed silently.
+    if (lastError !== null) {
+      app.log.warn(
+        { appId: info.appId, sessionId: info.sessionId, status, attempt, err: transportError },
+        "webhook delivery attempt failed with transport error",
+      );
+    } else {
+      app.log.warn(
+        { appId: info.appId, sessionId: info.sessionId, status, attempt, responseCode },
+        "webhook delivery attempt rejected with non-2xx status",
+      );
+    }
     if (attempt < WEBHOOK_RETRY_ATTEMPTS && retryDelays.length > 0) {
       const delay = retryDelays[Math.min(attempt - 1, retryDelays.length - 1)] ?? 0;
       await sleep(delay);
@@ -231,9 +255,21 @@ export async function dispatchOtpStatusWebhooks(
         "otp status webhook dispatched",
       );
     } catch (err) {
-      // Defensive: dispatchWebhook catches transport errors internally; this
-      // guards the DB-audit path against unexpected failures.
-      app.log.error({ err }, "unexpected webhook dispatch failure");
+      // The results POST must not fail on dispatch problems, so this catch
+      // remains — but it is loud and structured: unexpected errors are logged
+      // as full error objects with the dispatch target attached, and every
+      // attempt that got past resolution is already recorded in
+      // webhook_deliveries (last_error included). Nothing drops silently.
+      app.log.error(
+        {
+          err,
+          messageId,
+          appId: info.appId,
+          sessionId: info.sessionId,
+          webhookUrl: info.webhookUrl,
+        },
+        "unexpected webhook dispatch failure — audit rows record any attempts",
+      );
     }
   }
 }

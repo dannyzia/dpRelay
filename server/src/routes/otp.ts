@@ -17,6 +17,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { randomBytes, randomInt } from "node:crypto";
 import { constantTimeEquals, newId, sha256Hex } from "../services/crypto.js";
 import { asRecord, asString } from "../services/parse.js";
+import { dispatchOtpStatusWebhooks, type OtpWebhookStatus } from "../services/webhooks.js";
 
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
 const OTP_LENGTH = 6;
@@ -242,6 +243,16 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
         .immediate(session);
 
       if (verifyTx.verified) {
+        // M3 gap fix: the otp.status contract advertises "verified" — apps
+        // opted into webhooks get the same signed notification the results
+        // route sends. Dispatch is best-effort by contract (never throws), so
+        // verification semantics cannot be affected by the receiver.
+        const messageId = session.message_id;
+        if (messageId !== null) {
+          const statuses = new Map<string, OtpWebhookStatus>();
+          statuses.set(messageId, "verified");
+          await dispatchOtpStatusWebhooks(app, [messageId], statuses);
+        }
         return { ok: true, verified: true };
       }
 
