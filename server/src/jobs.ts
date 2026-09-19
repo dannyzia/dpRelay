@@ -24,6 +24,24 @@ export interface WatchdogAlert {
   detected_at: string;
 }
 
+/**
+ * Fired when an app's webhook receiver exhausts all dispatch retries
+ * WEBHOOK_EXHAUSTION_ALERT_THRESHOLD times in a row — the receiver is very
+ * likely down (dead receiver). Reset by any successful delivery.
+ */
+export interface WebhookExhaustionAlert {
+  type: "webhook_exhaustion";
+  appId: string;
+  consecutiveFailures: number;
+  threshold: number;
+  lastSessionId: string;
+  lastError: string;
+  detected_at: string;
+}
+
+/** Every alert shape routed through the shared alert webhook channel. */
+export type OpsAlert = WatchdogAlert | WebhookExhaustionAlert;
+
 /** Registers the watchdog on the app for tests to call directly. */
 declare module "fastify" {
   interface FastifyInstance {
@@ -51,16 +69,27 @@ export function findStaleDevices(db: FastifyInstance["db"], staleSec: number): S
 }
 
 /**
- * Dispatches the watchdog alert. Webhook is best-effort: alerting must never take
- * the job runner (or the API) down. When no webhook is configured, alerting is
- * log-only (G6 gate: email/webhook parity is M6; webhook is the P0 channel).
+ * Dispatches an ops alert (watchdog stale-devices or webhook exhaustion) to the
+ * shared ALERT_WEBHOOK_URL channel. Webhook is best-effort: alerting must never
+ * take the job runner (or the API) down. When no webhook is configured,
+ * alerting is log-only (G6 gate: email/webhook parity is M6; webhook is the P0
+ * channel).
  */
 export async function dispatchAlert(
   log: FastifyBaseLogger,
   config: Config,
-  alert: WatchdogAlert,
+  alert: OpsAlert,
 ): Promise<"webhook" | "log-only"> {
-  log.warn({ alert }, "watchdog_alert");
+  // Per-type log line: the log stream must name the alert kind explicitly so a
+  // log-only deployment still distinguishes the two alert sources.
+  switch (alert.type) {
+    case "device_heartbeat_stale":
+      log.warn({ alert }, "watchdog_alert");
+      break;
+    case "webhook_exhaustion":
+      log.warn({ alert }, "webhook_exhaustion_alert");
+      break;
+  }
   if (config.alertWebhookUrl === "") {
     return "log-only";
   }

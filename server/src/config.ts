@@ -58,6 +58,11 @@ export interface Config {
   webhookTimeoutMs: number;
   /** Comma-separated backoff delays (ms) between webhook retry attempts. */
   webhookRetryDelaysMs: string;
+  /**
+   * Consecutive exhausted webhook dispatches per app before the watchdog alert
+   * channel fires. Any successful delivery resets the count. 1 = alert on first.
+   */
+  webhookExhaustionAlertThreshold: number;
 }
 
 /**
@@ -147,5 +152,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     fcmServiceAccountJson: env.FCM_SERVICE_ACCOUNT_JSON ?? "",
     webhookTimeoutMs: parsePositiveInt(env.WEBHOOK_TIMEOUT_MS, "WEBHOOK_TIMEOUT_MS", 5_000),
     webhookRetryDelaysMs: env.WEBHOOK_RETRY_DELAYS_MS ?? "30000,120000",
+    webhookExhaustionAlertThreshold: parsePositiveInt(
+      env.WEBHOOK_EXHAUSTION_ALERT_THRESHOLD,
+      "WEBHOOK_EXHAUSTION_ALERT_THRESHOLD",
+      3,
+    ),
   };
 }
