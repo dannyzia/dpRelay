@@ -20,6 +20,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { FastifyInstance } from "fastify";
 import { hmacSha256Hex, newId } from "./crypto.js";
+import { dispatchAlert, type WebhookExhaustionAlert } from "../jobs.js";
 
 /** Payload status values match pending_sms.result outcomes + final OTP verify state. */
 export type OtpWebhookStatus = "sent" | "failed" | "verified";
@@ -131,6 +132,61 @@ function postWebhook(
 }
 
 /**
+ * Consecutive exhausted dispatches per app (keyed by internal apps.id), tracked
+ * across dispatches. Held per Fastify instance in a WeakMap:
+ * - In-memory by design — it is a re-armable alarm, not durable state. After a
+ *   process restart the next exhaustion re-triggers the alert, which is the
+ *   safe failure direction (at-least-once alerting on a channel that is itself
+ *   about outages).
+ * - Single-process deployment (constraint R3) makes a process-local counter
+ *   the correct scope; DB-backed counts would couple alerting to migrations.
+ * - Per-instance keying keeps independent app builds (tests) isolated.
+ * Any success resets the app's count (re-arms the alert for the next outage).
+ */
+const exhaustionCounters = new WeakMap<FastifyInstance, Map<string, number>>();
+
+/**
+ * Runs once per exhausted dispatch: bumps the app's consecutive-exhaustion
+ * count and fires the ops alert channel (log + ALERT_WEBHOOK_URL) when the
+ * threshold is crossed. Alerting is best-effort and awaited like dispatch
+ * itself; it must never fail the triggering request.
+ */
+async function onDispatchExhausted(app: FastifyInstance, info: SessionDispatchInfo, lastError: string | null): Promise<void> {
+  let counters = exhaustionCounters.get(app);
+  if (!counters) {
+    counters = new Map();
+    exhaustionCounters.set(app, counters);
+  }
+  const previous = counters.get(info.appRowId) ?? 0;
+  const consecutive = previous + 1;
+  counters.set(info.appRowId, consecutive);
+
+  const threshold = app.config.webhookExhaustionAlertThreshold;
+  if (consecutive < threshold) {
+    return;
+  }
+
+  // Re-alert on every threshold-and-beyond exhaustion: a dead receiver keeps
+  // ringing while it stays dead. Any successful delivery resets the counter
+  // (re-arms the alert for the next outage episode).
+  try {
+    await dispatchAlert(app.log, app.config, {
+      type: "webhook_exhaustion",
+      appId: info.appId,
+      consecutiveFailures: consecutive,
+      threshold,
+      lastSessionId: info.sessionId,
+      lastError: lastError ?? `all ${WEBHOOK_RETRY_ATTEMPTS} attempts rejected (no transport error)`,
+      detected_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    // dispatchAlert already logs its own failures; this guard only keeps an
+    // alerting bug from ever propagating into the dispatch path.
+    app.log.error({ err, appId: info.appId }, "exhaustion alert channel threw unexpectedly");
+  }
+}
+
+/**
  * Dispatches one OTP status webhook with retry, recording every attempt.
  * @returns All attempt records (at least one), plus the final disposition.
  */
@@ -198,6 +254,8 @@ export async function dispatchWebhook(
         { appId: info.appId, sessionId: info.sessionId, status, attempt, responseCode },
         "webhook delivery attempt succeeded",
       );
+      // Any success re-arms the exhaustion alert for the next outage episode.
+      exhaustionCounters.get(app)?.delete(info.appRowId);
       break;
     }
     // Structured failure log per attempt: the webhook_deliveries row is the
@@ -225,6 +283,9 @@ export async function dispatchWebhook(
       { appId: info.appId, sessionId: info.sessionId, attempts: attempts.length },
       "webhook dispatch failed after all retries",
     );
+    // Best-effort dead-receiver notice on the shared alert channel; never fails
+    // the dispatch (and therefore never the triggering request either).
+    await onDispatchExhausted(app, info, attempts[attempts.length - 1]?.lastError ?? null);
   }
   return { delivered, attempts };
 }

@@ -567,3 +567,108 @@ describe("POST /v5/otp/verify — verified-status webhook + dispatch logging", (
     ).toBe(true);
   });
 });
+
+describe("webhook exhaustion alerts", () => {
+  /** Captures warn logs (the exhaustion alert's log-only leg) on the app. */
+  function captureWarns(a: FastifyInstance): Array<{ obj: Record<string, unknown>; msg?: string }> {
+    const warnings: Array<{ obj: Record<string, unknown>; msg?: string }> = [];
+    const log = a.log as unknown as {
+      warn: (this: unknown, obj: unknown, msg?: string) => void;
+    };
+    const origWarn = log.warn;
+    log.warn = function (obj: unknown, msg?: string) {
+      warnings.push({ obj: obj as Record<string, unknown>, msg });
+      origWarn.call(this, obj, msg);
+    };
+    return warnings;
+  }
+
+  /** Resets the seeded session so verify can succeed (and dispatch) again. */
+  function rearmSession(a: FastifyInstance): void {
+    a.db
+      .prepare("UPDATE otp_sessions SET status = 'pending', verified_at = NULL WHERE id = 'sess-1'")
+      .run();
+  }
+
+  function exhaustionAlerts(warnings: Array<{ obj: Record<string, unknown>; msg?: string }>): Array<Record<string, unknown>> {
+    return warnings
+      .filter((w) => w.msg === "webhook_exhaustion_alert")
+      .map((w) => w.obj.alert as Record<string, unknown>);
+  }
+
+  it("alerts at the threshold and re-alerts while the receiver stays dead", async () => {
+    const port = await findClosedPort();
+    app = makeApp({
+      WEBHOOK_RETRY_DELAYS_MS: "10,10",
+      WEBHOOK_EXHAUSTION_ALERT_THRESHOLD: "2",
+      ALERT_WEBHOOK_URL: `http://127.0.0.1:${port}/nowhere`,
+    });
+    seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);
+    makeVerifiable(app, "654321");
+    const warnings = captureWarns(app);
+
+    // Exhaustion #1: below threshold, no alert.
+    await postVerify(app, "654321");
+    expect(exhaustionAlerts(warnings)).toHaveLength(0);
+
+    // Exhaustion #2: threshold crossed, first alert.
+    rearmSession(app);
+    await postVerify(app, "654321");
+    expect(exhaustionAlerts(warnings)).toHaveLength(1);
+
+    // Exhaustion #3: receiver still dead → re-alert.
+    rearmSession(app);
+    await postVerify(app, "654321");
+    const alerts = exhaustionAlerts(warnings);
+    expect(alerts).toHaveLength(2);
+
+    const alert = alerts[1] as {
+      type: string;
+      appId: string;
+      consecutiveFailures: number;
+      threshold: number;
+      lastSessionId: string;
+      lastError: string;
+    };
+    expect(alert.type).toBe("webhook_exhaustion");
+    expect(alert.appId).toBe(TEST_APP_ID);
+    expect(alert.consecutiveFailures).toBe(3);
+    expect(alert.threshold).toBe(2);
+    expect(alert.lastSessionId).toBe("sess-1");
+    // Closed-port transport error text, proving the payload carries the real failure.
+    expect(alert.lastError).toContain("ECONNREFUSED");
+  });
+
+  it("does not alert below the threshold and resets after a successful delivery", async () => {
+    const sink = await startSink([200]);
+    cleanup.push(sink.close);
+    const deadPort1 = await findClosedPort();
+    const deadPort2 = await findClosedPort();
+    app = makeApp({
+      WEBHOOK_RETRY_DELAYS_MS: "10,10",
+      WEBHOOK_EXHAUSTION_ALERT_THRESHOLD: "2",
+    });
+    seedOtpPending(app, `http://127.0.0.1:${deadPort1}/otp-status`);
+    makeVerifiable(app, "654321");
+    const warnings = captureWarns(app);
+
+    // Exhaustion #1 below threshold: no alert.
+    await postVerify(app, "654321");
+    expect(exhaustionAlerts(warnings)).toHaveLength(0);
+
+    // Receiver comes back up: dispatch succeeds and re-arms the alert.
+    app.db.prepare("UPDATE apps SET webhook_url = ? WHERE id = 'app-row-1'").run(sink.url);
+    rearmSession(app);
+    await postVerify(app, "654321");
+    expect(sink.requests).toHaveLength(1);
+    expect(exhaustionAlerts(warnings)).toHaveLength(0);
+
+    // New outage: exhaustion #1 again — must NOT alert (counter was reset).
+    app.db
+      .prepare("UPDATE apps SET webhook_url = ? WHERE id = 'app-row-1'")
+      .run(`http://127.0.0.1:${deadPort2}/otp-status`);
+    rearmSession(app);
+    await postVerify(app, "654321");
+    expect(exhaustionAlerts(warnings)).toHaveLength(0);
+  });
+});

@@ -52,6 +52,7 @@ When a gateway phone reports a result for an OTP-linked message, or an app verif
 - **Payload** (own field names, not mirrored from any third-party API): `{ kind: "otp.status", appId, sessionId, phone, status: "sent" | "failed" | "verified", timestamp }`
 - **Auth**: `X-DP-Signature: hex(HMAC-SHA256(rawBody, webhook_secret))` — verify with the app's webhook secret over the exact raw body. The server must hold the key to sign, which is why `apps.webhook_secret` is plaintext (migration 005).
 - **Retry**: 3 attempts total with `WEBHOOK_RETRY_DELAYS_MS` backoff on non-2xx/transport errors; every attempt is recorded in `webhook_deliveries` (attempt number, response code, last error) and logged — a structured `warn` per failed attempt (status code or error object) and an `info` on success. Dispatch failures never fail the triggering request.
+- **Dead-receiver alerts**: after `WEBHOOK_EXHAUSTION_ALERT_THRESHOLD` (default 3) **consecutive** exhausted dispatches for one app, the shared `ALERT_WEBHOOK_URL` channel fires a `webhook_exhaustion` alert (`appId`, `consecutiveFailures`, `lastSessionId`, `lastError`) — the same channel the heartbeat watchdog uses, and it re-alerts on every further exhaustion while the receiver stays dead. Any successful delivery resets the count (re-arms the alert). With no `ALERT_WEBHOOK_URL` configured the alert is log-only, like watchdog alerts.
 
 ## Background jobs (R3, R5)
 
