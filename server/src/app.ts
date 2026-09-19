@@ -4,6 +4,7 @@ import { openDb, type Db } from "./db.js";
 import authService from "./services/auth.js";
 import middleware from "./middleware.js";
 import authRoutes from "./routes/auth.js";
+import appRoutes from "./routes/apps.js";
 import deviceRoutes from "./routes/device.js";
 import otpRoutes from "./routes/otp.js";
 import { registerJobs } from "./jobs.js";
@@ -68,6 +69,7 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   app.register(authRoutes);
   app.register(deviceRoutes);
   app.register(otpRoutes);
+  app.register(appRoutes);
 
   // Jobs (R3) + wake guard (R5). Decorators must exist before hooks run.
   registerJobs(app, config, startCron);

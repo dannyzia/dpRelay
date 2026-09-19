@@ -39,6 +39,12 @@ All authorization flows through the `requireAuth` (JWT) / `requireDevice` (API k
 
 The gateway phone authenticates with its device API key (EncryptedSharedPreferences, ADR-016) on every route except `/enroll`, which takes the enrollment secret.
 
+## App provisioning (operator)
+
+- `POST /v5/apps/register` — `Authorization: Bearer <APP_PROVISIONING_SECRET>`, `{ "appId", "appSecret", "name"?, "webhookUrl"?, "rateMaxPerPhone"?, "rateWindowSec"? }` → `201 { appId, name, webhookUrl, webhookSecret }`
+
+Closes the last hand-INSERT step of the OTP plane: the operator onboards a consumer app in one call. `appSecret` (caller-supplied, min 32 chars) is stored **hash-only**; `webhookSecret` (server-minted) is returned **once** and stored plaintext because the server signs HMAC deliveries (migration 005) — its SHA-256 hash is kept in sync for verifiers. Duplicate `appId` → 409 (never silently overwritten); unset secret → 403 `provisioning_disabled`; per-IP limiter like `/enroll`; `webhookUrl` must be https. Provisioned credentials work immediately on all `requireApp` routes (`X-App-Id` / `X-App-Secret`).
+
 ## OTP webhook dispatch (M3 tail)
 
 When a gateway phone reports a result for an OTP-linked message, or an app verifies an OTP via `POST /v5/otp/verify`, the server POSTs a signed notification to the owning app's `webhook_url` (or silently skips apps without one — no webhook configured = no dispatch):
