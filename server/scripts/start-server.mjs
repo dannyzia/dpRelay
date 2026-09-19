@@ -11,6 +11,10 @@ const configPath = join(root, "litestream.yml");
 const litestreamPath = join(root, "bin", "litestream");
 const dbPath = "./data/dprelay.db";
 
+// Spawn the downloaded binary by absolute path: Render's Node image has no
+// `litestream` on PATH (and the binary lives in server/bin), so a bare spawn
+// fails with ENOENT and kills the boot before the API ever starts.
+
 function fail(msg) {
   console.error(`STARTUP FAILED: ${msg}`);
   process.exit(1);
@@ -65,11 +69,11 @@ console.log("Config validation: OK (db path + s3 replica)");
 // 3. Restore-on-boot (R2 constraint: ephemeral disk — restore BEFORE the API starts).
 // On the very first boot the R2 bucket is empty, so restore has nothing to pull —
 // treat that as non-fatal (fresh DB via migrations) and let replicate surface any
-// real credential/config problem.
-const restoreCode = await run([
-  "litestream",
+// real credential/config problem.const restoreCode = await run([
+  litestreamPath,
   "restore",
-  "-config", "litestream.yml",
+  "-config",
+  "litestream.yml",
   "-if-db-not-exists",
   dbPath,
 ]);
@@ -83,11 +87,12 @@ if (restoreCode !== 0) {
   console.log("restore: ok");
 }
 
-// 4. Replicate + run the API server under litestream supervision.
-const replicateCode = await run([
-  "litestream",
+// 4. Replicate + run the API server under litestream supervision.const replicateCode = await run([
+  litestreamPath,
   "replicate",
-  "-config", "litestream.yml",
-  "-exec", "node dist/index.js",
+  "-config",
+  "litestream.yml",
+  "-exec",
+  "node dist/index.js",
 ]);
 process.exit(replicateCode ?? 0);

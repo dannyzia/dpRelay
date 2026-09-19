@@ -70,6 +70,10 @@ All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `
 - **Start Command:** `npm start`
 - **Health Check Path:** `/health`
 - Node version pinned by `.node-version` (20)
+- Auto-deploy on `master` pushes is enabled — a deploy failing there means the
+  boot chain broke, not the push chain. `GET /health` reports the running
+  `package.json` `version`, so "is production current?" is one curl against
+  master's version (ISSUE-13).
 
 ## Durability (R1–R2 constraints from the plan)
 
