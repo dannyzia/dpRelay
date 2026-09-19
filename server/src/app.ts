@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import { createRequire } from "node:module";
 import { loadConfig } from "./config.js";
 import { openDb, type Db } from "./db.js";
 import authService from "./services/auth.js";
@@ -9,6 +10,9 @@ import deviceRoutes from "./routes/device.js";
 import otpRoutes from "./routes/otp.js";
 import { registerJobs } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
+
+/** ESM-compatible require — reads package.json for the /health version field. */
+const require = createRequire(import.meta.url);
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -56,6 +60,10 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
     return {
       status: "healthy",
       service: "dprelay-server",
+      // package.json version, so "is production current?" is one curl — this is
+      // how 3 merges shipped to master while Render kept serving a pre-M1 build
+      // undetected (ISSUE-13).
+      version: require("../package.json").version as string,
       db: "ok",
       timestamp: Date.now(),
     };
