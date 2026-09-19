@@ -59,6 +59,9 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |
 | ENROLL_RATE_MAX_PER_HOUR | no | 10 | Max `/v5/device/enroll` attempts per client IP inside the sliding window (brute-force guard; counts failures too). | server |
 | ENROLL_RATE_WINDOW_SEC | no | 3600 | Sliding window for the enrollment rate limiter, in seconds. | server |
+| APP_PROVISIONING_SECRET | for M4 | — (empty = provisioning disabled) | Operator secret for `POST /v5/apps/register` — registers appId/appSecret and mints `webhook_secret` once (returned only in that response). Compared in constant time. Operator-only: never expose to clients. | `openssl rand -base64 32` |
+| APP_PROVISIONING_RATE_MAX_PER_HOUR | no | 10 | Max `/v5/apps/register` attempts per client IP inside the sliding window (brute-force guard; counts failures too). | server |
+| APP_PROVISIONING_RATE_WINDOW_SEC | no | 3600 | Sliding window for the provisioning rate limiter, in seconds. | server |
 | OTP_TTL_SEC | no | 300 | OTP session lifetime, in seconds. | server |
 | OTP_MAX_ATTEMPTS | no | 5 | Failed verify attempts before an OTP session locks. | server |
 | OTP_LOCKOUT_SEC | no | 900 | Lockout duration after hitting OTP_MAX_ATTEMPTS, in seconds. | server |

@@ -50,6 +50,17 @@ export function generateDeviceApiKey(): string {
 }
 
 /**
+ * Generates a new app webhook secret.
+ * 32 random bytes, hex-encoded — same entropy policy as device API keys.
+ * @returns Raw secret for the provisioning response ONLY; the server also
+ *          persists the plaintext (it signs HMAC deliveries — migration 005)
+ *          plus its SHA-256 hash for verifier-side comparison.
+ */
+export function generateWebhookSecret(): string {
+  return randomBytes(DEVICE_KEY_BYTES).toString("hex");
+}
+
+/**
  * SHA-256 hex digest used to store device keys and refresh tokens.
  * @param secret Raw secret material (device key, refresh token).
  */

@@ -5,7 +5,7 @@
  */
 
 /** Secrets below this length are brute-forceable; policy constant, not env-tunable. */
-const MIN_SECRET_LENGTH = 32;
+export const MIN_SECRET_LENGTH = 32;
 
 export interface Config {
   port: number;
@@ -34,6 +34,12 @@ export interface Config {
   wakeIdleThresholdSec: number;
   /** Shared secret for phone enrollment (POST /v5/device/enroll). Empty = enrollment disabled. */
   deviceEnrollmentSecret: string;
+  /** Shared secret for operator app provisioning (POST /v5/apps/register). Empty = provisioning disabled. */
+  appProvisioningSecret: string;
+  /** Max provisioning attempts per client IP inside the sliding window (brute-force guard). */
+  appProvisioningRateMaxPerHour: number;
+  /** Sliding window for the provisioning rate limiter, in seconds. */
+  appProvisioningRateWindowSec: number;
   /** Claimed pending_sms older than this are re-offered to the next fetch (at-least-once). */
   outstandingRequeueSec: number;
   /** Max enrollment attempts per client IP inside the sliding window (brute-force guard). */
@@ -117,6 +123,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       15 * 60,
     ),
     deviceEnrollmentSecret: env.DEVICE_ENROLLMENT_SECRET ?? "",
+    appProvisioningSecret: env.APP_PROVISIONING_SECRET ?? "",
+    appProvisioningRateMaxPerHour: parsePositiveInt(
+      env.APP_PROVISIONING_RATE_MAX_PER_HOUR,
+      "APP_PROVISIONING_RATE_MAX_PER_HOUR",
+      10,
+    ),
+    appProvisioningRateWindowSec: parsePositiveInt(
+      env.APP_PROVISIONING_RATE_WINDOW_SEC,
+      "APP_PROVISIONING_RATE_WINDOW_SEC",
+      3600,
+    ),
     outstandingRequeueSec: parsePositiveInt(
       env.OUTSTANDING_REQUEUE_SEC,
       "OUTSTANDING_REQUEUE_SEC",
