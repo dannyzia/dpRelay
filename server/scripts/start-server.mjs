@@ -69,7 +69,8 @@ console.log("Config validation: OK (db path + s3 replica)");
 // 3. Restore-on-boot (R2 constraint: ephemeral disk — restore BEFORE the API starts).
 // On the very first boot the R2 bucket is empty, so restore has nothing to pull —
 // treat that as non-fatal (fresh DB via migrations) and let replicate surface any
-// real credential/config problem.const restoreCode = await run([
+// real credential/config problem.
+const restoreCode = await run([
   litestreamPath,
   "restore",
   "-config",
@@ -87,7 +88,8 @@ if (restoreCode !== 0) {
   console.log("restore: ok");
 }
 
-// 4. Replicate + run the API server under litestream supervision.const replicateCode = await run([
+// 4. Replicate + run the API server under litestream supervision.
+const replicateCode = await run([
   litestreamPath,
   "replicate",
   "-config",
