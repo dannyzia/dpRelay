@@ -63,6 +63,10 @@ export interface Config {
    * channel fires. Any successful delivery resets the count. 1 = alert on first.
    */
   webhookExhaustionAlertThreshold: number;
+  /** Shared secret for operator/admin routes (requireOperator). Empty = admin routes disabled. */
+  operatorSecret: string;
+  /** bKash destination shown to customers on credit request. Empty = requests fail fast. */
+  bkashPersonalNumber: string;
 }
 
 /**
@@ -157,5 +161,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "WEBHOOK_EXHAUSTION_ALERT_THRESHOLD",
       3,
     ),
+    operatorSecret: env.OPERATOR_SECRET ?? "",
+    bkashPersonalNumber: env.BKASH_PERSONAL_NUMBER ?? "",
   };
 }

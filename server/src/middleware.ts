@@ -40,6 +40,12 @@ declare module "fastify" {
      * attaches request.app. Rejects revoked apps. Constant-time hash comparison.
      */
     requireApp: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /**
+     * Guard (M4 admin plane): requires `Authorization: Bearer <OPERATOR_SECRET>`.
+     * Empty secret configured → 503 admin_disabled (fail closed). Constant-time
+     * comparison even when the header is missing (no timing leak of header presence).
+     */
+    requireOperator: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
   interface FastifyRequest {
     /** Populated by requireDevice; absent on user-plane routes. */
@@ -129,6 +135,23 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
       userId: row.user_id,
       label: row.label,
     };
+  });
+
+  app.decorate("requireOperator", async (request, reply) => {
+    const expected = app.config.operatorSecret;
+    if (expected === "") {
+      await reply
+        .code(503)
+        .send({ ok: false, error: "Admin routes are disabled", code: "admin_disabled" });
+      return;
+    }
+    const authHeader = request.headers.authorization;
+    const provided = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
+    // Constant-time even when the header is missing: compare against the real
+    // secret with a dummy so timing does not leak header presence (ISSUE-11 parity).
+    if (provided === "" || !constantTimeEquals(provided, expected)) {
+      await unauthorized(reply, "invalid_operator_secret", "Invalid operator secret");
+    }
   });
 
   app.decorate("requireApp", async (request, reply) => {
