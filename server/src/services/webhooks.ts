@@ -53,6 +53,20 @@ interface SessionDispatchInfo {
   webhookSecret: string | null;
 }
 
+/** Who a webhook delivery belongs to, for audit rows and exhaustion alerts. */
+interface DispatchSubject {
+  /** Public appId — goes in the payload. */
+  appId: string;
+  /** Internal apps.id — satisfies webhook_deliveries.app_id's FK in audit rows. */
+  appRowId: string;
+  webhookUrl: string;
+  webhookSecret: string;
+  /** otp_sessions.id when this is an OTP dispatch (audit FK); else null. */
+  sessionId: string | null;
+  /** Campaign id when this is a bulk completion dispatch; else null. */
+  campaignId: string | null;
+}
+
 /** One recorded attempt (also the shape of a webhook_deliveries row). */
 export interface DeliveryAttemptRecord {
   attempt: number;
@@ -151,15 +165,15 @@ const exhaustionCounters = new WeakMap<FastifyInstance, Map<string, number>>();
  * threshold is crossed. Alerting is best-effort and awaited like dispatch
  * itself; it must never fail the triggering request.
  */
-async function onDispatchExhausted(app: FastifyInstance, info: SessionDispatchInfo, lastError: string | null): Promise<void> {
+async function onDispatchExhausted(app: FastifyInstance, subject: DispatchSubject, lastError: string | null): Promise<void> {
   let counters = exhaustionCounters.get(app);
   if (!counters) {
     counters = new Map();
     exhaustionCounters.set(app, counters);
   }
-  const previous = counters.get(info.appRowId) ?? 0;
+  const previous = counters.get(subject.appRowId) ?? 0;
   const consecutive = previous + 1;
-  counters.set(info.appRowId, consecutive);
+  counters.set(subject.appRowId, consecutive);
 
   const threshold = app.config.webhookExhaustionAlertThreshold;
   if (consecutive < threshold) {
@@ -172,18 +186,119 @@ async function onDispatchExhausted(app: FastifyInstance, info: SessionDispatchIn
   try {
     await dispatchAlert(app.log, app.config, {
       type: "webhook_exhaustion",
-      appId: info.appId,
+      appId: subject.appId,
       consecutiveFailures: consecutive,
       threshold,
-      lastSessionId: info.sessionId,
+      lastSessionId: subject.sessionId ?? subject.campaignId ?? "unknown",
       lastError: lastError ?? `all ${WEBHOOK_RETRY_ATTEMPTS} attempts rejected (no transport error)`,
       detected_at: new Date().toISOString(),
     });
   } catch (err) {
     // dispatchAlert already logs its own failures; this guard only keeps an
     // alerting bug from ever propagating into the dispatch path.
-    app.log.error({ err, appId: info.appId }, "exhaustion alert channel threw unexpectedly");
+    app.log.error({ err, appId: subject.appId }, "exhaustion alert channel threw unexpectedly");
   }
+}
+
+/**
+ * Shared delivery core: signs the exact serialized body, retries non-2xx/
+ * transport failures with configured backoff, records every attempt in
+ * webhook_deliveries (campaign_id NULL for OTP rows), and runs the exhaustion
+ * alarm. Both the OTP status and the bulk completion dispatches ride this.
+ */
+async function deliverSigned(
+  app: FastifyInstance,
+  subject: DispatchSubject,
+  rawBody: string,
+  logContext: Record<string, unknown>,
+): Promise<{ delivered: boolean; attempts: DeliveryAttemptRecord[] }> {
+  const signature = hmacSha256Hex(subject.webhookSecret, rawBody);
+  const retryDelays = app.config.webhookRetryDelaysMs
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 0);
+
+  const insertRow = app.db.prepare(
+    "INSERT INTO webhook_deliveries (id, session_id, app_id, webhook_url, status, attempt, attempts_max, campaign_id, " +
+      "created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, unixepoch())",
+  );
+  const finalizeRow = app.db.prepare(
+    "UPDATE webhook_deliveries SET status = ?, response_code = ?, last_error = ?, delivered_at = ? WHERE id = ?",
+  );
+
+  const attempts: DeliveryAttemptRecord[] = [];
+  let delivered = false;
+  for (let attempt = 1; attempt <= WEBHOOK_RETRY_ATTEMPTS; attempt++) {
+    const deliveryId = newId();
+    insertRow.run(
+      deliveryId,
+      subject.sessionId,
+      subject.appRowId,
+      subject.webhookUrl.slice(0, WEBHOOK_URL_MAX_LEN),
+      attempt,
+      WEBHOOK_RETRY_ATTEMPTS,
+      subject.campaignId,
+    );
+    let responseCode: number | null = null;
+    let lastError: string | null = null;
+    let transportError: unknown;
+    try {
+      responseCode = await postWebhook(subject.webhookUrl, rawBody, signature, app.config.webhookTimeoutMs);
+      delivered = responseCode >= 200 && responseCode < 300;
+    } catch (err) {
+      transportError = err;
+      lastError =
+        err instanceof Error ? err.message.slice(0, MAX_WEBHOOK_ERROR_LEN) : "unknown webhook error";
+    }
+
+    finalizeRow.run(
+      delivered ? "delivered" : "failed",
+      responseCode,
+      lastError,
+      delivered ? Math.floor(Date.now() / 1000) : null,
+      deliveryId,
+    );
+    attempts.push({ attempt, responseCode, lastError, status: delivered ? "delivered" : "failed" });
+
+    if (delivered) {
+      app.log.info(
+        { ...logContext, attempt, responseCode },
+        "webhook delivery attempt succeeded",
+      );
+      // Any success re-arms the exhaustion alert for the next outage episode.
+      exhaustionCounters.get(app)?.delete(subject.appRowId);
+      break;
+    }
+    // Structured failure log per attempt: the webhook_deliveries row is the
+    // durable audit record, but the same outcome must be visible in the log
+    // stream with full context — never swallowed silently.
+    if (lastError !== null) {
+      app.log.warn(
+        { ...logContext, attempt, err: transportError },
+        "webhook delivery attempt failed with transport error",
+      );
+    } else {
+      app.log.warn(
+        { ...logContext, attempt, responseCode },
+        "webhook delivery attempt rejected with non-2xx status",
+      );
+    }
+    if (attempt < WEBHOOK_RETRY_ATTEMPTS && retryDelays.length > 0) {
+      const delay = retryDelays[Math.min(attempt - 1, retryDelays.length - 1)] ?? 0;
+      await sleep(delay);
+    }
+  }
+
+  if (!delivered) {
+    app.log.error(
+      { ...logContext, attempts: attempts.length },
+      "webhook dispatch failed after all retries",
+    );
+    // Best-effort dead-receiver notice on the shared alert channel; never fails
+    // the dispatch (and therefore never the triggering request either).
+    await onDispatchExhausted(app, subject, attempts[attempts.length - 1]?.lastError ?? null);
+  }
+  return { delivered, attempts };
 }
 
 /**
@@ -203,91 +318,70 @@ export async function dispatchWebhook(
     status,
     timestamp: Math.floor(Date.now() / 1000),
   };
-  const rawBody = JSON.stringify(payload);
-  const signature = hmacSha256Hex(info.webhookSecret!, rawBody);
-  const retryDelays = app.config.webhookRetryDelaysMs
-    .split(",")
-    .map((s) => Number(s.trim()))
-    .filter((n) => Number.isInteger(n) && n >= 0);
-
-  const insertRow = app.db.prepare(
-    "INSERT INTO webhook_deliveries (id, session_id, app_id, webhook_url, status, attempt, attempts_max, " +
-      "created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, unixepoch())",
+  return deliverSigned(
+    app,
+    {
+      appId: info.appId,
+      appRowId: info.appRowId,
+      webhookUrl: info.webhookUrl!,
+      webhookSecret: info.webhookSecret!,
+      sessionId: info.sessionId,
+      campaignId: null,
+    },
+    JSON.stringify(payload),
+    { appId: info.appId, sessionId: info.sessionId, status },
   );
-  const finalizeRow = app.db.prepare(
-    "UPDATE webhook_deliveries SET status = ?, response_code = ?, last_error = ?, delivered_at = ? WHERE id = ?",
+}
+
+/** Bulk completion dispatch subject (joined from bulk_campaigns + apps). */
+export interface BulkCampaignDispatchInfo {
+  campaignId: string;
+  /** Public appId — goes in the payload. */
+  appId: string;
+  /** Internal apps.id — satisfies webhook_deliveries.app_id's FK in audit rows. */
+  appRowId: string;
+  webhookUrl: string;
+  webhookSecret: string;
+}
+
+export interface BulkCampaignResults {
+  sentCount: number;
+  failedCount: number;
+  totalRecipients: number;
+}
+
+/**
+ * Dispatches the signed bulk campaign completion webhook (v4 sendBulkWebhook
+ * parity, on the v5 signing contract: X-DP-Signature hex HMAC-SHA256, own
+ * payload field names). Same retry + audit + exhaustion behavior as OTP.
+ */
+export async function dispatchBulkCampaignWebhook(
+  app: FastifyInstance,
+  campaign: BulkCampaignDispatchInfo,
+  results: BulkCampaignResults,
+): Promise<{ delivered: boolean; attempts: DeliveryAttemptRecord[] }> {
+  const payload = {
+    kind: "bulk.campaign.completed",
+    appId: campaign.appId,
+    campaignId: campaign.campaignId,
+    sentCount: results.sentCount,
+    failedCount: results.failedCount,
+    totalRecipients: results.totalRecipients,
+    timestamp: Math.floor(Date.now() / 1000),
+  };
+  return deliverSigned(
+    app,
+    {
+      appId: campaign.appId,
+      appRowId: campaign.appRowId,
+      webhookUrl: campaign.webhookUrl,
+      webhookSecret: campaign.webhookSecret,
+      sessionId: null,
+      campaignId: campaign.campaignId,
+    },
+    JSON.stringify(payload),
+    { appId: campaign.appId, campaignId: campaign.campaignId },
   );
-
-  const attempts: DeliveryAttemptRecord[] = [];
-  let delivered = false;
-  for (let attempt = 1; attempt <= WEBHOOK_RETRY_ATTEMPTS; attempt++) {
-    const deliveryId = newId();
-    insertRow.run(deliveryId, info.sessionId, info.appRowId, info.webhookUrl!.slice(0, WEBHOOK_URL_MAX_LEN), attempt, WEBHOOK_RETRY_ATTEMPTS);
-    let responseCode: number | null = null;
-    let lastError: string | null = null;
-    let transportError: unknown;
-    try {
-      responseCode = await postWebhook(
-        info.webhookUrl!,
-        rawBody,
-        signature,
-        app.config.webhookTimeoutMs,
-      );
-      delivered = responseCode >= 200 && responseCode < 300;
-    } catch (err) {
-      transportError = err;
-      lastError =
-        err instanceof Error ? err.message.slice(0, MAX_WEBHOOK_ERROR_LEN) : "unknown webhook error";
-    }
-
-    finalizeRow.run(
-      delivered ? "delivered" : "failed",
-      responseCode,
-      lastError,
-      delivered ? Math.floor(Date.now() / 1000) : null,
-      deliveryId,
-    );
-    attempts.push({ attempt, responseCode, lastError, status: delivered ? "delivered" : "failed" });
-
-    if (delivered) {
-      app.log.info(
-        { appId: info.appId, sessionId: info.sessionId, status, attempt, responseCode },
-        "webhook delivery attempt succeeded",
-      );
-      // Any success re-arms the exhaustion alert for the next outage episode.
-      exhaustionCounters.get(app)?.delete(info.appRowId);
-      break;
-    }
-    // Structured failure log per attempt: the webhook_deliveries row is the
-    // durable audit record, but the same outcome must be visible in the log
-    // stream with full context — never swallowed silently.
-    if (lastError !== null) {
-      app.log.warn(
-        { appId: info.appId, sessionId: info.sessionId, status, attempt, err: transportError },
-        "webhook delivery attempt failed with transport error",
-      );
-    } else {
-      app.log.warn(
-        { appId: info.appId, sessionId: info.sessionId, status, attempt, responseCode },
-        "webhook delivery attempt rejected with non-2xx status",
-      );
-    }
-    if (attempt < WEBHOOK_RETRY_ATTEMPTS && retryDelays.length > 0) {
-      const delay = retryDelays[Math.min(attempt - 1, retryDelays.length - 1)] ?? 0;
-      await sleep(delay);
-    }
-  }
-
-  if (!delivered) {
-    app.log.error(
-      { appId: info.appId, sessionId: info.sessionId, attempts: attempts.length },
-      "webhook dispatch failed after all retries",
-    );
-    // Best-effort dead-receiver notice on the shared alert channel; never fails
-    // the dispatch (and therefore never the triggering request either).
-    await onDispatchExhausted(app, info, attempts[attempts.length - 1]?.lastError ?? null);
-  }
-  return { delivered, attempts };
 }
 
 function sleep(ms: number): Promise<void> {

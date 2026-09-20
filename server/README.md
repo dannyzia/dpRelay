@@ -61,7 +61,18 @@ Single Fastify process hosts the node-cron job runner (constraint R3 — one pro
 - `heartbeat_watchdog` — devices with `last_seen_at` older than `WATCHDOG_STALE_SEC` (default 15 min) trigger a webhook alert (`ALERT_WEBHOOK_URL`) and a structured log line; log-only when no webhook is configured.
 - `catch_up_sweep` — runs on boot and on the **first request after each wake** (Render spin-down guard, constraint R5), so scheduled work cannot be silently skipped while asleep.
 
-All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `WATCHDOG_CRON`, `CATCH_UP_CRON`.
+All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `WATCHDOG_CRON`, `CATCH_UP_CRON`, `BULK_QUEUE_CRON`, `STATS_CRON`.
+
+## Bulk campaigns (M4 pass 2, PLAN §10)
+
+App-scoped (requireApp) campaign plane riding the device queue:
+
+- `POST /v5/bulk/campaigns` — create (CSV `phones` only until the contact-groups pass); deducts bulk credits atomically with `bulk_usage` audit rows (hashed phones).
+- `GET /v5/bulk/campaigns` / `GET /v5/bulk/campaigns/:id` — list (keyset pagination) and status.
+- `POST /v5/bulk/campaigns/:id/pause|resume|cancel|retry-failed` — lifecycle; cancel refunds unprocessed recipients **exactly once**; retry-failed re-deducts fresh credits (v4 `retryFailedJobs` parity).
+- `GET /v5/bulk/campaigns/:id/recipients/failed` — failure listing for dashboards.
+
+The queue tick (`BULK_QUEUE_CRON`, default every minute) reconciles phone-reported results → retries to `BULK_RETRY_MAX_ATTEMPTS` → enqueues pending recipients under `BULK_SMS_RATE_PER_MINUTE` with `BULK_MAX_PENDING_QUEUE` backpressure and a `BULK_POST_SEND_COOLDOWN_SEC` per-phone cooldown → finalizes completed campaigns with a signed `bulk.campaign.completed` webhook (same `X-DP-Signature` contract as OTP). The whole plane is gated by `BULK_ENABLED` (default **off**); the tick also runs on the wake sweep (R5). The `stats_current` snapshot refreshes on `STATS_CRON` (v4 `aggregateStats` parity).
 
 ## Render deployment (free web service)
 
