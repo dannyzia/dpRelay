@@ -1,0 +1,49 @@
+name: Deploy Status
+
+# ISSUE-13 recurrence guard, as its own push-triggered workflow. It lived in
+# pr-checks.yml first, where `if: github.event_name == 'push'` could never be
+# true — that workflow only subscribes to `pull_request`, so the guard was
+# dead code (and every PR showed it as "skipping"). A push to master is the
+# only event where "is the newest new_commit deploy live?" is the right
+# question, so this workflow triggers on exactly that.
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy-status:
+    # For 8 commits every test suite was green while production silently
+    # served a stale build because Render's auto-deploy was failing. This job
+    # fails when the newest new_commit deploy is not live, making a broken
+    # deploy chain a visible CI failure instead of a stale /health.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check latest Render deploy is live
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_SERVICE_ID" ]; then
+            echo "::warning::RENDER_API_KEY/RENDER_SERVICE_ID secrets not set - deploy-status check skipped (not a failure)."
+            exit 0
+          fi
+          echo "Waiting for the Render auto-deploy of $GITHUB_SHA to go live..."
+          for i in $(seq 1 20); do
+            DEPLOYS=$(curl -sS -m 30 -H "Authorization: Bearer $RENDER_API_KEY" \
+              "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=10")
+            STATUS=$(echo "$DEPLOYS" | jq -r '[.[] | select(.deploy.trigger == "new_commit")][0] | .deploy.status // "none"')
+            # .deploy.commit is an OBJECT ({id, createdAt, message}) — compare .id,
+            # not the object itself, or the mismatch warning would always fire.
+            COMMIT=$(echo "$DEPLOYS" | jq -r '[.[] | select(.deploy.trigger == "new_commit")][0] | .deploy.commit.id // "none"')
+            echo "attempt $i: newest new_commit deploy = $STATUS (commit ${COMMIT:0:7})"
+            if [ "$COMMIT" != "$GITHUB_SHA" ]; then
+              echo "::warning::Newest new_commit deploy is for $COMMIT, not this push ($GITHUB_SHA) - deploy chain may be lagging."
+            fi
+            case "$STATUS" in
+              live) echo "Deploy is live."; exit 0 ;;
+              update_failed|create_failed|build_failed|canceled|deactivated)
+                echo "::error::Latest Render deploy of master is $STATUS - production is NOT current. Fix the deploy chain (ISSUE-13 class of failure)."; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Timed out waiting for the Render deploy to go live after 10 minutes."; exit 1
