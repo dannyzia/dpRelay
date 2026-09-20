@@ -4,17 +4,27 @@ name: Deploy Status
 # pr-checks.yml first, where `if: github.event_name == 'push'` could never be
 # true — that workflow only subscribes to `pull_request`, so the guard was
 # dead code (and every PR showed it as "skipping"). A push to master is the
-# only event where "is the newest new_commit deploy live?" is the right
-# question, so this workflow triggers on exactly that.
+# only event where "did this commit reach production?" is the right question.
+#
+# Pass condition (learned from the first live run, which green-lit too early):
+# the guard waits for a deploy OF THIS COMMIT ($GITHUB_SHA) to reach live —
+# a *previous* commit's live deploy proves nothing about this push. Render
+# skips deploys for pushes that change nothing under the service's rootDir
+# (`server/`); observed with workflow-only commit 9684366, which got no
+# deploy at all. So "no deploy for this commit" fails the run only when the
+# push actually touched server/.
 on:
   push:
     branches: [master]
+
+permissions:
+  contents: read
 
 jobs:
   deploy-status:
     # For 8 commits every test suite was green while production silently
     # served a stale build because Render's auto-deploy was failing. This job
-    # fails when the newest new_commit deploy is not live, making a broken
+    # fails when this push's new_commit deploy is not live, making a broken
     # deploy chain a visible CI failure instead of a stale /health.
     runs-on: ubuntu-latest
     steps:
@@ -22,22 +32,37 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_SERVICE_ID" ]; then
             echo "::warning::RENDER_API_KEY/RENDER_SERVICE_ID secrets not set - deploy-status check skipped (not a failure)."
             exit 0
           fi
+
+          # Does this push touch the service's rootDir (server/)? The GitHub
+          # commit API lists changed files (GITHUB_TOKEN avoids a checkout).
+          SERVER_FILES=$(curl -sS -m 30 -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" \
+            | jq -r '.files[].filename' | grep -c '^server/' || true)
+          if [ "$SERVER_FILES" -eq 0 ]; then
+            echo "No server/ changes in this push - Render deploy not expected. OK."
+            exit 0
+          fi
+
           echo "Waiting for the Render auto-deploy of $GITHUB_SHA to go live..."
           for i in $(seq 1 20); do
             DEPLOYS=$(curl -sS -m 30 -H "Authorization: Bearer $RENDER_API_KEY" \
               "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=10")
             STATUS=$(echo "$DEPLOYS" | jq -r '[.[] | select(.deploy.trigger == "new_commit")][0] | .deploy.status // "none"')
             # .deploy.commit is an OBJECT ({id, createdAt, message}) — compare .id,
-            # not the object itself, or the mismatch warning would always fire.
+            # not the object itself, or the comparison never matches.
             COMMIT=$(echo "$DEPLOYS" | jq -r '[.[] | select(.deploy.trigger == "new_commit")][0] | .deploy.commit.id // "none"')
             echo "attempt $i: newest new_commit deploy = $STATUS (commit ${COMMIT:0:7})"
             if [ "$COMMIT" != "$GITHUB_SHA" ]; then
-              echo "::warning::Newest new_commit deploy is for $COMMIT, not this push ($GITHUB_SHA) - deploy chain may be lagging."
+              # Deploy for THIS push hasn't appeared yet. A previous commit's
+              # live deploy is not evidence for this one — keep waiting.
+              sleep 30
+              continue
             fi
             case "$STATUS" in
               live) echo "Deploy is live."; exit 0 ;;
@@ -46,4 +71,4 @@ jobs:
             esac
             sleep 30
           done
-          echo "::error::Timed out waiting for the Render deploy to go live after 10 minutes."; exit 1
+          echo "::error::No deploy for $GITHUB_SHA appeared within 10 minutes although server/ changed - deploy chain broken (ISSUE-13 class of failure)."; exit 1
