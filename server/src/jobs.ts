@@ -8,6 +8,7 @@
  */
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import type { Config } from "./config.js";
+import { runBulkQueueTick } from "./services/bulk.js";
 
 export interface StaleDevice {
   id: string;
@@ -49,6 +50,10 @@ declare module "fastify" {
     runWatchdog(): Promise<StaleDevice[]>;
     /** Runs one catch-up sweep pass. */
     runCatchUpSweep(): Promise<void>;
+    /** Runs one bulk queue pass (reconcile → finalize → enqueue). */
+    runBulkQueueTick(): Promise<{ reconciled: number; enqueued: number; finalized: number }>;
+    /** Refreshes the stats snapshot row. */
+    runStatsTick(): void;
     /** Starts cron scheduling (skipped in tests). */
     startJobs(): void;
     /** Stops cron scheduling. */
@@ -139,9 +144,71 @@ export async function watchdogTick(
   return stale;
 }
 
-/** One catch-up sweep pass (R5): currently the watchdog tick; more jobs join in M2+. */
+/** One catch-up sweep pass (R5): watchdog + bulk queue drain + stats refresh. */
 export async function catchUpSweepTick(app: FastifyInstance): Promise<void> {
   await watchdogTick(app);
+  // The bulk queue drains on wake too — a paused Render instance must not
+  // leave recipients stranded mid-campaign (at-least-once on first request).
+  await runBulkQueueTick(app);
+  runStatsTick(app);
+}
+
+/**
+ * Aggregate stats snapshot (v4 aggregateStats parity): current OTP/bulk
+ * counters into a single upserted row. Cheap enough for a slow cron; history
+ * rollups stay a dashboard concern (not ported).
+ */
+export function runStatsTick(app: FastifyInstance): void {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const dayStart = nowSec - (nowSec % 86_400);
+  const payload = {
+    otp: {
+      sessionsToday: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM otp_sessions WHERE created_at >= ?").get(dayStart) as { n: number }
+      ).n,
+      verified: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM otp_sessions WHERE status = 'verified'").get() as { n: number }
+      ).n,
+      locked: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM otp_sessions WHERE status = 'locked'").get() as { n: number }
+      ).n,
+      pending: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM otp_sessions WHERE status = 'pending'").get() as { n: number }
+      ).n,
+    },
+    queue: {
+      pendingSms: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM pending_sms WHERE status = 'pending'").get() as { n: number }
+      ).n,
+      claimedSms: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM pending_sms WHERE status = 'claimed'").get() as { n: number }
+      ).n,
+    },
+    bulk: {
+      campaignsToday: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM bulk_campaigns WHERE created_at >= ?").get(dayStart) as { n: number }
+      ).n,
+      active: (
+        app.db.prepare("SELECT COUNT(*) AS n FROM bulk_campaigns WHERE status IN ('queued', 'sending')").get() as {
+          n: number;
+        }
+      ).n,
+      recipientsSent: (
+        app.db.prepare("SELECT COALESCE(SUM(sent_count), 0) AS n FROM bulk_campaigns").get() as { n: number }
+      ).n,
+      recipientsFailed: (
+        app.db.prepare("SELECT COALESCE(SUM(failed_count), 0) AS n FROM bulk_campaigns").get() as { n: number }
+      ).n,
+    },
+    captured_at: nowSec,
+  };
+  app.db
+    .prepare(
+      "INSERT INTO stats_current (id, payload, updated_at) VALUES (1, ?, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at",
+    )
+    .run(JSON.stringify(payload), nowSec);
+  app.log.debug({ stats: payload }, "stats snapshot");
 }
 
 /**
@@ -155,6 +222,8 @@ export function registerJobs(
 ): void {
   app.decorate("runWatchdog", () => watchdogTick(app));
   app.decorate("runCatchUpSweep", () => catchUpSweepTick(app));
+  app.decorate("runBulkQueueTick", () => runBulkQueueTick(app));
+  app.decorate("runStatsTick", () => runStatsTick(app));
 
   if (startCron) {
     // Lazy import keeps vitest free of node-cron timers when startCron=false.
@@ -166,8 +235,23 @@ export function registerJobs(
       cron.schedule(config.catchUpCron, () => {
         catchUpSweepTick(app).catch((err) => app.log.error({ err }, "catch-up job failed"));
       });
+      cron.schedule(config.bulkQueueCron, () => {
+        runBulkQueueTick(app).catch((err) => app.log.error({ err }, "bulk queue job failed"));
+      });
+      cron.schedule(config.statsCron, () => {
+        try {
+          runStatsTick(app);
+        } catch (err) {
+          app.log.error({ err }, "stats job failed");
+        }
+      });
       app.log.info(
-        { watchdogCron: config.watchdogCron, catchUpCron: config.catchUpCron },
+        {
+          watchdogCron: config.watchdogCron,
+          catchUpCron: config.catchUpCron,
+          bulkQueueCron: config.bulkQueueCron,
+          statsCron: config.statsCron,
+        },
         "job runner started",
       );
     })();

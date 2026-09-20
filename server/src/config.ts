@@ -67,6 +67,29 @@ export interface Config {
   operatorSecret: string;
   /** bKash destination shown to customers on credit request. Empty = requests fail fast. */
   bkashPersonalNumber: string;
+
+  /** Bulk campaigns master switch (v4 config/bulk_enabled parity). Default off. */
+  bulkEnabled: boolean;
+  /** How often the bulk queue tick runs (node-cron pattern). */
+  bulkQueueCron: string;
+  /** Max recipients enqueued per minute across all active campaigns. */
+  bulkSmsRatePerMinute: number;
+  /** Global backpressure: skip enqueueing when this many bulk rows are pending/claimed. */
+  bulkMaxPendingQueue: number;
+  /** Failed-delivery attempts per recipient before it counts as terminal failure. */
+  bulkRetryMaxAttempts: number;
+  /** Max recipients per campaign. */
+  bulkPerCampaignLimit: number;
+  /** Max recipients an app may create campaigns for per UTC day. */
+  bulkDailyAppLimit: number;
+  /** Message length cap for GSM-7 charset. */
+  bulkMaxCharsGsm: number;
+  /** Message length cap for UCS-2 charset. */
+  bulkMaxCharsUcs2: number;
+  /** Seconds after a confirmed bulk delivery before the same phone gets another. */
+  bulkPostSendCooldownSec: number;
+  /** How often the aggregate-stats snapshot refreshes (node-cron pattern). */
+  statsCron: string;
 }
 
 /**
@@ -89,6 +112,15 @@ function parsePositiveInt(
     );
   }
   return parsed;
+}
+
+/** Parses a boolean env value; returns fallback when unset, throws when malformed. */
+function parseBoolean(value: string | undefined, name: string, fallback: boolean): boolean {
+  if (value === undefined || value.trim() === "") return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") return true;
+  if (normalized === "false" || normalized === "0") return false;
+  throw new Error(`Invalid env var ${name}: must be true or false, got "${value}"`);
 }
 
 /** Reads a required secret env var and enforces the minimum length policy. */
@@ -163,5 +195,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ),
     operatorSecret: env.OPERATOR_SECRET ?? "",
     bkashPersonalNumber: env.BKASH_PERSONAL_NUMBER ?? "",
+
+    // Bulk campaign plane: defaults mirror v4 (functions/src/bulk/*).
+    bulkEnabled: parseBoolean(env.BULK_ENABLED, "BULK_ENABLED", false),
+    bulkQueueCron: env.BULK_QUEUE_CRON ?? "*/1 * * * *",
+    bulkSmsRatePerMinute: parsePositiveInt(env.BULK_SMS_RATE_PER_MINUTE, "BULK_SMS_RATE_PER_MINUTE", 30),
+    bulkMaxPendingQueue: parsePositiveInt(env.BULK_MAX_PENDING_QUEUE, "BULK_MAX_PENDING_QUEUE", 100),
+    bulkRetryMaxAttempts: parsePositiveInt(env.BULK_RETRY_MAX_ATTEMPTS, "BULK_RETRY_MAX_ATTEMPTS", 3),
+    bulkPerCampaignLimit: parsePositiveInt(env.BULK_SMS_PER_CAMPAIGN_LIMIT, "BULK_SMS_PER_CAMPAIGN_LIMIT", 10_000),
+    bulkDailyAppLimit: parsePositiveInt(env.BULK_DAILY_APP_LIMIT, "BULK_DAILY_APP_LIMIT", 50_000),
+    bulkMaxCharsGsm: parsePositiveInt(env.BULK_MAX_MESSAGE_CHARS_GSM, "BULK_MAX_MESSAGE_CHARS_GSM", 160),
+    bulkMaxCharsUcs2: parsePositiveInt(env.BULK_MAX_MESSAGE_CHARS_UCS2, "BULK_MAX_MESSAGE_CHARS_UCS2", 70),
+    bulkPostSendCooldownSec: parsePositiveInt(env.BULK_POST_SEND_COOLDOWN_SEC, "BULK_POST_SEND_COOLDOWN_SEC", 120),
+    statsCron: env.STATS_CRON ?? "*/15 * * * *",
   };
 }
