@@ -8,6 +8,7 @@ import authRoutes from "./routes/auth.js";
 import appRoutes from "./routes/apps.js";
 import deviceRoutes from "./routes/device.js";
 import otpRoutes from "./routes/otp.js";
+import billingRoutes from "./routes/billing.js";
 import { registerJobs } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
 
@@ -78,6 +79,7 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   app.register(deviceRoutes);
   app.register(otpRoutes);
   app.register(appRoutes);
+  app.register(billingRoutes);
 
   // Jobs (R3) + wake guard (R5). Decorators must exist before hooks run.
   registerJobs(app, config, startCron);
