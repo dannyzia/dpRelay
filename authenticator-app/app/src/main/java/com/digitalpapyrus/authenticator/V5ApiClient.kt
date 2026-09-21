@@ -46,7 +46,8 @@ object V5ApiClient {
     private const val CONNECT_TIMEOUT_MS = 30_000
     private const val READ_TIMEOUT_MS = 30_000
 
-    private fun baseUrl(): String = BuildConfig.V5_API_BASE_URL.trimEnd('/')
+    private fun baseUrl(): String =
+        (BuildConfig.V5_SERVER_URL.takeIf { it.isNotBlank() } ?: BuildConfig.V5_API_BASE_URL).trimEnd('/')
 
     /** v5 plane toggle (parallel run, PLAN §9). Compiled in, off by default. */
     fun isEnabled(): Boolean = BuildConfig.V5_API_ENABLED

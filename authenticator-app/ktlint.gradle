@@ -1,6 +1,5 @@
-plugins {
-    id "org.jlleitschuh.gradle.ktlint" version "11.6.1"
-}
+// ktlint configuration for the Authenticator app module.
+// The plugin itself is declared in app/build.gradle; this file only configures it.
 
 ktlint {
     version = "0.50.0"
@@ -9,4 +8,11 @@ ktlint {
     outputColorName = "RED"
     ignoreFailures = false
     verbose = true
+    // Baseline pins the pre-existing style violations (the whole main source
+    // set predates ktlint ever being wired — the plugin was declared in this
+    // file but never applied, so run-all-checks.sh's ktlint line has always
+    // been a no-op). New or changed code must be clean: anything not in the
+    // baseline that fails ktlintCheck breaks the gate. Regenerate with
+    // `./gradlew ktlintBaselineRelease` only after fixing those files.
+    baseline = file("ktlint-baseline.xml")
 }

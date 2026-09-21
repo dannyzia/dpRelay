@@ -43,7 +43,7 @@ class PendingSmsListener(private val context: Context) {
         "https://authenticator-15fb7-default-rtdb.asia-southeast1.firebasedatabase.app"
     )
     private val smsManager = context.getSystemService(SmsManager::class.java)
-    private val smsRateLimiter = SmsRateLimiter()
+    private val smsRateLimiter = SmsRateLimiter
     private val pendingSmsRef = database.getReference(PENDING_SMS_PATH)
 
     // Track active sessions for timeout handling

@@ -39,7 +39,7 @@ object OutstandingFetcher {
     private const val EXTRA_MESSAGE_ID = "message_id"
 
     private val fetchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val smsRateLimiter = SmsRateLimiter()
+    private val smsRateLimiter = SmsRateLimiter
 
     // messageId → started-at for sends not yet confirmed by the sent broadcast.
     private val inFlight = ConcurrentHashMap<String, Long>()
