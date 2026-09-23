@@ -67,7 +67,9 @@ All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `
 
 App-scoped (requireApp) campaign plane riding the device queue:
 
-- `POST /v5/bulk/campaigns` — create (CSV `phones` only until the contact-groups pass); deducts bulk credits atomically with `bulk_usage` audit rows (hashed phones).
+- `POST /v5/bulk/campaigns` — create with `sourceType: "csv"` (body `phones`) or `sourceType: "contactGroups"` (body `sourceGroupIds`, max 10 per campaign, per-app scoped; members materialized as recipients at create so later group edits never mutate a running campaign); deducts bulk credits atomically with `bulk_usage` audit rows (hashed phones).
+- `POST /v5/contact-groups` / `GET /v5/contact-groups` / `GET|PATCH|DELETE /v5/contact-groups/:id` — per-app contact-group CRUD (v4 stored these in Firestore; v5 makes them first-class) plus `POST|DELETE /v5/contact-groups/:id/phones` for membership (E.164-validated, deduped).
+- `POST /v5/message-templates` / `GET /v5/message-templates` / `GET|PATCH|DELETE /v5/message-templates/:id` — per-app message-template CRUD (storage-only; charset/length enforcement happens at campaign create).
 - `GET /v5/bulk/campaigns` / `GET /v5/bulk/campaigns/:id` — list (keyset pagination) and status.
 - `POST /v5/bulk/campaigns/:id/pause|resume|cancel|retry-failed` — lifecycle; cancel refunds unprocessed recipients **exactly once**; retry-failed re-deducts fresh credits (v4 `retryFailedJobs` parity).
 - `GET /v5/bulk/campaigns/:id/recipients/failed` — failure listing for dashboards.

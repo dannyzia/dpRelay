@@ -159,16 +159,15 @@ describe("POST /v5/bulk/campaigns — gating + validation", () => {
     expect(body.code).toBe("bulk_not_enabled");
   });
 
-  it("rejects contact-group sources until the groups pass", async () => {
+  it("rejects an unknown sourceType", async () => {
     app = makeApp();
     const appRowId = seedApp("bulk_app", SECRET_A);
     seedCredits(appRowId, 100);
     const { statusCode, body } = await createCampaign(CREDS("bulk_app", SECRET_A), {
-      sourceType: "contactGroups",
-      sourceGroupIds: ["g1"],
+      sourceType: "carrierSmokeSignal",
     });
     expect(statusCode).toBe(400);
-    expect(body.code).toBe("contact_groups_not_available");
+    expect(body.code).toBe("invalid_source_type");
   });
 
   it("validates name, message charset caps, and E.164", async () => {
@@ -698,5 +697,147 @@ describe("stats snapshot", () => {
     app.runStatsTick(); // upsert, never grows
     const count = app.db.prepare("SELECT COUNT(*) AS n FROM stats_current").get() as { n: number };
     expect(count.n).toBe(1);
+  });
+});
+
+describe("POST /v5/bulk/campaigns — sourceType=contactGroups (M4 pass 3)", () => {
+  /** Seeds a group + members directly (route-level CRUD has its own suite). */
+  function seedGroup(appRowId: string, name: string, phones: string[]): string {
+    const groupId = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+    app.db
+      .prepare(
+        "INSERT INTO contact_groups (id, app_id, name, phone_count, created_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(groupId, appRowId, name, phones.length, now, now);
+    const ins = app.db.prepare(
+      "INSERT INTO contact_group_phones (group_id, phone, added_at) VALUES (?, ?, ?)",
+    );
+    phones.forEach((p, i) => ins.run(groupId, p, now + i));
+    return groupId;
+  }
+
+  it("materializes group members as recipients, deduped across groups, and snapshots the source", async () => {
+    app = makeApp();
+    const appRowId = seedApp("bulk_app", SECRET_A);
+    seedCredits(appRowId, 100);
+    const g1 = seedGroup(appRowId, "customers", [PHONES[0], PHONES[1], PHONES[2]]);
+    const g2 = seedGroup(appRowId, "vip", [PHONES[2], PHONES[3]]); // PHONES[2] overlaps
+
+    const { statusCode, body } = await createCampaign(CREDS("bulk_app", SECRET_A), {
+      sourceType: "contactGroups",
+      sourceGroupIds: [g1, g2],
+    });
+    expect(statusCode).toBe(201);
+    expect(body.sourceType).toBe("contactGroups");
+    // Union of both groups, cross-group duplicate counted once.
+    expect(body.totalRecipients).toBe(4);
+    expect(body.creditsReserved).toBe(4);
+
+    const row = app.db
+      .prepare("SELECT source_type, source_group_ids FROM bulk_campaigns WHERE id = ?")
+      .get(body.campaignId) as { source_type: string; source_group_ids: string | null };
+    expect(row.source_type).toBe("contactGroups");
+    expect(JSON.parse(row.source_group_ids ?? "null")).toEqual([g1, g2]);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/v5/bulk/campaigns/${body.campaignId as string}`,
+      headers: CREDS("bulk_app", SECRET_A),
+    });
+    const campaign = (detail.json() as { campaign: { sourceGroupIds: string[] | null } }).campaign;
+    expect(campaign.sourceGroupIds).toEqual([g1, g2]);
+  });
+
+  it("404s a foreign-app group and validates the sourceGroupIds contract", async () => {
+    app = makeApp();
+    const appRowId = seedApp("bulk_app", SECRET_A);
+    seedCredits(appRowId, 100);
+    const foreignRowId = seedApp("other_app", "other-app-secret-0123456789abcdef0123456789ab");
+    const foreignGroup = seedGroup(foreignRowId, "not-yours", [PHONES[0]]);
+
+    const creds = CREDS("bulk_app", SECRET_A);
+    // No ids at all → 400.
+    const missing = await createCampaign(creds, { sourceType: "contactGroups" });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.body.code).toBe("invalid_source_groups");
+    // More than the v4-parity cap of 10 → 400.
+    const tooMany = await createCampaign(creds, {
+      sourceType: "contactGroups",
+      sourceGroupIds: Array.from({ length: 11 }, (_, i) => `g${i}`),
+    });
+    expect(tooMany.statusCode).toBe(400);
+    expect(tooMany.body.code).toBe("invalid_source_groups");
+    // A group owned by another app is invisible → 404 (v4 parity).
+    const foreign = await createCampaign(creds, {
+      sourceType: "contactGroups",
+      sourceGroupIds: [foreignGroup],
+    });
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.body.code).toBe("group_not_found");
+  });
+
+  it("enforces the per-campaign cap on group sources and rejects empty groups", async () => {
+    app = makeApp({ BULK_SMS_PER_CAMPAIGN_LIMIT: "3" });
+    const appRowId = seedApp("bulk_app", SECRET_A);
+    seedCredits(appRowId, 100);
+    seedGroup(appRowId, "big", PHONES); // 4 phones > cap 3
+    seedGroup(appRowId, "empty-name-only", []);
+
+    const creds = CREDS("bulk_app", SECRET_A);
+    const overCap = await createCampaign(creds, {
+      sourceType: "contactGroups",
+      sourceGroupIds: [
+        (
+          app.db
+            .prepare("SELECT id FROM contact_groups WHERE name = 'big'")
+            .get() as { id: string }
+        ).id,
+      ],
+    });
+    expect(overCap.statusCode).toBe(400);
+    expect(overCap.body.code).toBe("invalid_source_groups");
+
+    // A group with zero members can never feed a campaign.
+    app.db
+      .prepare("UPDATE contact_groups SET phone_count = 0 WHERE name = 'empty-name-only'")
+      .run();
+    app.db.prepare("DELETE FROM contact_group_phones WHERE group_id IN (SELECT id FROM contact_groups WHERE name = 'empty-name-only')").run();
+    const empty = await createCampaign(creds, {
+      sourceType: "contactGroups",
+      sourceGroupIds: [
+        (
+          app.db
+            .prepare("SELECT id FROM contact_groups WHERE name = 'empty-name-only'")
+            .get() as { id: string }
+        ).id,
+      ],
+    });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.body.code).toBe("invalid_source_groups");
+  });
+
+  it("group edits after create never mutate an already-materialized campaign", async () => {
+    app = makeApp();
+    const appRowId = seedApp("bulk_app", SECRET_A);
+    seedCredits(appRowId, 100);
+    const groupId = seedGroup(appRowId, "mutable", [PHONES[0], PHONES[1]]);
+    const created = await createCampaign(CREDS("bulk_app", SECRET_A), {
+      sourceType: "contactGroups",
+      sourceGroupIds: [groupId],
+    });
+    expect(created.body.totalRecipients).toBe(2);
+
+    // Add a phone + delete the group entirely — recipients must not change.
+    app.db
+      .prepare("INSERT INTO contact_group_phones (group_id, phone, added_at) VALUES (?, ?, unixepoch())")
+      .run(groupId, PHONES[2]);
+    app.db.prepare("DELETE FROM contact_groups WHERE id = ?").run(groupId);
+
+    const recipients = app.db
+      .prepare("SELECT COUNT(*) AS n FROM bulk_recipients WHERE campaign_id = ?")
+      .get(created.body.campaignId) as { n: number };
+    expect(recipients.n).toBe(2);
   });
 });
