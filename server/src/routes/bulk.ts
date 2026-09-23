@@ -51,6 +51,8 @@ interface CampaignRow {
   created_at: number;
   started_at: number | null;
   completed_at: number | null;
+  source_type: string;
+  source_group_ids: string | null;
 }
 
 function publicCampaign(row: CampaignRow, includeMessage: boolean) {
@@ -58,6 +60,7 @@ function publicCampaign(row: CampaignRow, includeMessage: boolean) {
     campaignId: row.id,
     name: row.name,
     status: row.status,
+    sourceType: row.source_type,
     totalRecipients: row.total_recipients,
     sentCount: row.sent_count,
     failedCount: row.failed_count,
@@ -66,7 +69,12 @@ function publicCampaign(row: CampaignRow, includeMessage: boolean) {
     startedAt: row.started_at,
     completedAt: row.completed_at,
   };
-  if (includeMessage) base.message = row.message;
+  if (includeMessage) {
+    base.message = row.message;
+    base.sourceGroupIds = row.source_group_ids
+      ? (JSON.parse(row.source_group_ids) as string[])
+      : null;
+  }
   return base;
 }
 
@@ -74,17 +82,66 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
   const db = app.db;
 
   /**
-   * Create a campaign (v4 sendBulkSms + createBulkCampaign, CSV path).
-   * Contact-group sources arrive with the groups pass — rejected explicitly
-   * so clients get a stable code instead of a silent field drop.
+   * Create a campaign (v4 sendBulkSms + createBulkCampaign). sourceType=csv
+   * takes body.phones; sourceType=contactGroups takes sourceGroupIds (max 10,
+   * v4 parity) and materializes the groups' members as recipients at create
+   * time — later group edits never mutate a running campaign.
    */
   app.post("/v5/bulk/campaigns", { preHandler: [app.requireApp] }, async (request, reply) => {
     if (!app.config.bulkEnabled) {
       return fail(reply, 403, "bulk_not_enabled", "Bulk campaigns are not enabled");
     }
     const body = asRecord(request.body) ?? {};
-    if (body.sourceType !== undefined && body.sourceType !== "csv") {
-      return fail(reply, 400, "contact_groups_not_available", "Only csv sourceType is supported");
+    const sourceType = body.sourceType === undefined ? "csv" : body.sourceType;
+    if (sourceType !== "csv" && sourceType !== "contactGroups") {
+      return fail(reply, 400, "invalid_source_type", "sourceType must be 'csv' or 'contactGroups'");
+    }
+
+    /** v4 parity (createBulkCampaign): at most 10 groups per campaign. */
+    const MAX_SOURCE_GROUPS = 10;
+
+    let resolvedPhones: string[] = [];
+    let sourceGroupIds: string[] = [];
+    if (sourceType === "contactGroups") {
+      if (!Array.isArray(body.sourceGroupIds) || body.sourceGroupIds.length === 0) {
+        return fail(
+          reply,
+          400,
+          "invalid_source_groups",
+          "sourceGroupIds is required when sourceType is 'contactGroups'",
+        );
+      }
+      if (body.sourceGroupIds.length > MAX_SOURCE_GROUPS) {
+        return fail(
+          reply,
+          400,
+          "invalid_source_groups",
+          `Maximum ${MAX_SOURCE_GROUPS} contact groups allowed`,
+        );
+      }
+      sourceGroupIds = (body.sourceGroupIds as unknown[]).filter(
+        (id): id is string => typeof id === "string" && id.length > 0 && id.length <= 64,
+      );
+      if (sourceGroupIds.length !== body.sourceGroupIds.length) {
+        return fail(reply, 400, "invalid_source_groups", "sourceGroupIds must be groupId strings");
+      }
+      // Resolve every group within THIS app's scope (404 on any miss, v4
+      // parity) and union the member phones — the Set dedupes across groups
+      // exactly like v4's phoneSet. Members were validated E.164 at group
+      // ingestion (every group write path validates), so no re-validation
+      // here — v4's "contact groups are pre-validated" contract.
+      const phoneSet = new Set<string>();
+      const groupExists = db.prepare("SELECT 1 FROM contact_groups WHERE id = ? AND app_id = ?");
+      const groupPhones = db.prepare(
+        "SELECT phone FROM contact_group_phones WHERE group_id = ? ORDER BY added_at ASC, phone ASC",
+      );
+      for (const groupId of sourceGroupIds) {
+        if (!groupExists.get(groupId, request.appRow!.id)) {
+          return fail(reply, 404, "group_not_found", `Contact group not found: ${groupId}`);
+        }
+        for (const p of groupPhones.all(groupId) as { phone: string }[]) phoneSet.add(p.phone);
+      }
+      resolvedPhones = [...phoneSet];
     }
 
     const campaignName = asString(body.campaignName, CAMPAIGN_NAME_MAX);
@@ -99,24 +156,45 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     if (!messageVerdict.valid) {
       return fail(reply, 400, "invalid_message", messageVerdict.error ?? "Invalid message");
     }
-    if (!Array.isArray(body.phones)) {
-      return fail(reply, 400, "invalid_phones", "phones must be an array of E.164 strings");
+    let unique: string[];
+    let duplicateCount = 0;
+    if (sourceType === "csv") {
+      if (!Array.isArray(body.phones)) {
+        return fail(reply, 400, "invalid_phones", "phones must be an array of E.164 strings");
+      }
+      const phones = body.phones as unknown[];
+      if (phones.length < 1 || phones.length > app.config.bulkPerCampaignLimit) {
+        return fail(
+          reply,
+          400,
+          "invalid_phones",
+          `phones must contain between 1 and ${app.config.bulkPerCampaignLimit} entries`,
+        );
+      }
+      const invalid = phones.filter((p) => !isValidE164(p));
+      if (invalid.length > 0) {
+        return fail(reply, 400, "invalid_phones", "One or more phone numbers are not valid E.164 format");
+      }
+      const deduped = deduplicatePhones(phones as string[]);
+      unique = deduped.unique;
+      duplicateCount = deduped.duplicateCount;
+    } else {
+      // contactGroups: the union across resolved groups (already deduped).
+      // The per-campaign cap applies equally — v4 had no cap on this path;
+      // v5 enforces it so group sources can't bypass bulkPerCampaignLimit.
+      if (resolvedPhones.length === 0) {
+        return fail(reply, 400, "invalid_source_groups", "Selected contact groups contain no phone numbers");
+      }
+      if (resolvedPhones.length > app.config.bulkPerCampaignLimit) {
+        return fail(
+          reply,
+          400,
+          "invalid_source_groups",
+          `Selected groups contain ${resolvedPhones.length} numbers; the per-campaign cap is ${app.config.bulkPerCampaignLimit}`,
+        );
+      }
+      unique = resolvedPhones;
     }
-    const phones = body.phones as unknown[];
-    if (phones.length < 1 || phones.length > app.config.bulkPerCampaignLimit) {
-      return fail(
-        reply,
-        400,
-        "invalid_phones",
-        `phones must contain between 1 and ${app.config.bulkPerCampaignLimit} entries`,
-      );
-    }
-    const invalid = phones.filter((p) => !isValidE164(p));
-    if (invalid.length > 0) {
-      return fail(reply, 400, "invalid_phones", "One or more phone numbers are not valid E.164 format");
-    }
-
-    const { unique, duplicateCount } = deduplicatePhones(phones as string[]);
     const uniqueCount = unique.length;
 
     // Daily quota (v4): recipients created for this app today (UTC).
@@ -151,8 +229,8 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const insertCampaign = db.prepare(
-      "INSERT INTO bulk_campaigns (id, app_id, name, message, charset, status, total_recipients, created_at) " +
-        "VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+      "INSERT INTO bulk_campaigns (id, app_id, name, message, charset, status, total_recipients, created_at, " +
+        "source_type, source_group_ids) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
     );
     const insertRecipient = db.prepare(
       "INSERT INTO bulk_recipients (id, campaign_id, phone, idx, status) VALUES (?, ?, ?, ?, 'pending')",
@@ -160,7 +238,17 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     const insertUsage = db.prepare(
       "INSERT INTO bulk_usage (id, campaign_id, phone_hash, deducted_at) VALUES (?, ?, ?, ?)",
     );
-    insertCampaign.run(campaignId, request.appRow!.id, campaignName, body.message, messageVerdict.charset, uniqueCount, nowSec);
+    insertCampaign.run(
+      campaignId,
+      request.appRow!.id,
+      campaignName,
+      body.message,
+      messageVerdict.charset,
+      uniqueCount,
+      nowSec,
+      sourceType,
+      sourceType === "contactGroups" ? JSON.stringify(sourceGroupIds) : null,
+    );
     for (let i = 0; i < unique.length; i++) {
       insertRecipient.run(newId(), campaignId, unique[i], i);
       insertUsage.run(newId(), campaignId, sha256Hex(unique[i]), nowSec);
@@ -177,6 +265,7 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       creditsReserved: uniqueCount,
       charset: messageVerdict.charset,
       status: "queued",
+      sourceType,
     };
     if (duplicateCount > 0) response.duplicateCount = duplicateCount;
     return reply.code(201).send(response);
@@ -215,7 +304,7 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     const rows = db
       .prepare(
         "SELECT id, name, message, status, total_recipients, sent_count, failed_count, queued_count, " +
-          "created_at, started_at, completed_at FROM bulk_campaigns WHERE app_id = ? " +
+          "created_at, started_at, completed_at, source_type, source_group_ids FROM bulk_campaigns WHERE app_id = ? " +
           "AND (? IS NULL OR status = ?) " +
           "AND (? IS NULL OR created_at < ? OR (created_at = ? AND id > ?)) " +
           "ORDER BY created_at DESC, id ASC LIMIT ?",
@@ -247,7 +336,8 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       (db
         .prepare(
           "SELECT id, name, message, status, total_recipients, sent_count, failed_count, queued_count, " +
-            "created_at, started_at, completed_at FROM bulk_campaigns WHERE id = ? AND app_id = ?",
+            "created_at, started_at, completed_at, source_type, source_group_ids " +
+            "FROM bulk_campaigns WHERE id = ? AND app_id = ?",
         )
         .get(campaignId, request.appRow!.id) as CampaignRow | undefined) ?? null
     );
