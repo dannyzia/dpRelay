@@ -42,6 +42,7 @@ The gateway phone authenticates with its device API key (EncryptedSharedPreferen
 ## App provisioning (operator)
 
 - `POST /v5/apps/register` — `Authorization: Bearer <APP_PROVISIONING_SECRET>`, `{ "appId", "appSecret", "name"?, "webhookUrl"?, "rateMaxPerPhone"?, "rateWindowSec"? }` → `201 { appId, name, webhookUrl, webhookSecret }`
+- Admin app plane — `Authorization: Bearer <OPERATOR_SECRET>`: `POST /v5/admin/apps` (register; appSecret optional → server-generated, return-once), `GET /v5/admin/apps` (list, no secrets), `POST /v5/admin/apps/:id/revoke` / `.../unrevoke` (revoke cuts off every app-plane route instantly — 401 `app_revoked`), `POST /v5/admin/apps/:id/rotate-webhook-secret` (new secret return-once), `PATCH /v5/admin/apps/:id/webhook` (HTTPS-only; empty string clears).
 
 Closes the last hand-INSERT step of the OTP plane: the operator onboards a consumer app in one call. `appSecret` (caller-supplied, min 32 chars) is stored **hash-only**; `webhookSecret` (server-minted) is returned **once** and stored plaintext because the server signs HMAC deliveries (migration 005) — its SHA-256 hash is kept in sync for verifiers. Duplicate `appId` → 409 (never silently overwritten); unset secret → 403 `provisioning_disabled`; per-IP limiter like `/enroll`; `webhookUrl` must be https. Provisioned credentials work immediately on all `requireApp` routes (`X-App-Id` / `X-App-Secret`).
 
