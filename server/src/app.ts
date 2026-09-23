@@ -12,6 +12,7 @@ import billingRoutes from "./routes/billing.js";
 import bulkRoutes from "./routes/bulk.js";
 import contactGroupRoutes from "./routes/contact-groups.js";
 import messageTemplateRoutes from "./routes/message-templates.js";
+import adminAppRoutes from "./routes/admin-apps.js";
 import { registerJobs } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
 
@@ -86,6 +87,7 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   app.register(bulkRoutes);
   app.register(contactGroupRoutes);
   app.register(messageTemplateRoutes);
+  app.register(adminAppRoutes);
 
   // Jobs (R3) + wake guard (R5). Decorators must exist before hooks run.
   registerJobs(app, config, startCron);
