@@ -2,7 +2,9 @@
  * Admin app-plane routes (M4 pass 3 remainder, PLAN §10). Operator-gated
  * management of the 004 apps registry: register (with optional server-side
  * secret generation), list, revoke/unrevoke, rotate the webhook secret, and
- * update the webhook URL.
+ * update the webhook URL. Also exposes the global SMS kill switch
+ * (settings.kill_switch) so the pause lever behind OTP sends is reachable
+ * without DB access.
  *
  * Auth model (single choke point per plan §5): every route gates via
  * requireOperator (OPERATOR_SECRET) — the same guard as admin billing. These
@@ -276,6 +278,37 @@ const adminAppRoutes: FastifyPluginAsync = async (app) => {
     if (webhookUrl === null || webhookUrl === undefined) return;
     db.prepare("UPDATE apps SET webhook_url = ? WHERE id = ?").run(webhookUrl, appRowId);
     return { ok: true, appId: row.app_id, webhookUrl };
+  });
+
+  /**
+   * Global SMS kill switch (settings.kill_switch, seeded by migration 001):
+   * the pause lever behind POST /v5/otp/send — when on, sends reject with
+   * 503 sms_paused while verification of already-delivered codes keeps
+   * working (routes/otp.ts). `enabled: true` pauses, `false` resumes; the
+   * response reports the PREVIOUS state so the caller knows what the flip
+   * changed, and no-op flips to the current state never touch the row.
+   */
+  app.post("/v5/admin/kill-switch", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const body = asRecord(request.body) ?? {};
+    if (typeof body.enabled !== "boolean") {
+      return fail(reply, 400, "invalid_enabled", "enabled must be a boolean (true pauses SMS, false resumes)");
+    }
+    const row = db
+      .prepare("SELECT value FROM settings WHERE key = 'kill_switch'")
+      .get() as { value: string } | undefined;
+    if (!row) {
+      // 001 seeds this row; a missing row means a foreign/pre-migration DB.
+      return fail(reply, 500, "kill_switch_missing", "kill_switch setting is not initialized");
+    }
+    const previous = row.value === "true";
+    if (previous === body.enabled) {
+      return { ok: true, previous, enabled: body.enabled, changed: false };
+    }
+    db
+      .prepare("UPDATE settings SET value = ?, updated_at = unixepoch() WHERE key = 'kill_switch'")
+      .run(body.enabled ? "true" : "false");
+    app.log.info({ previous, enabled: body.enabled }, "SMS kill switch toggled via admin plane");
+    return { ok: true, previous, enabled: body.enabled, changed: true };
   });
 };
 
