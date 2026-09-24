@@ -235,3 +235,70 @@ describe("rotate-webhook-secret + webhook update", () => {
     expect(stored).toBeNull();
   });
 });
+
+describe("POST /v5/admin/kill-switch", () => {
+  it("401s without or with a wrong operator secret", async () => {
+    app = makeApp();
+    const none = await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: {}, payload: { enabled: true } });
+    expect(none.statusCode).toBe(401);
+    expect((none.json() as { code: string }).code).toBe("invalid_operator_secret");
+    const wrong = await app.inject({
+      method: "POST", url: "/v5/admin/kill-switch",
+      headers: { Authorization: "Bearer nope-nope-nope-nope-nope-nope-nope" }, payload: { enabled: true },
+    });
+    expect(wrong.statusCode).toBe(401);
+  });
+
+  it("400s on a non-boolean enabled", async () => {
+    app = makeApp();
+    for (const bad of ["true", 1, null, undefined]) {
+      const r = await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: OP, payload: { enabled: bad } });
+      expect(r.statusCode, `enabled=${String(bad)}`).toBe(400);
+      expect((r.json() as { code: string }).code).toBe("invalid_enabled");
+    }
+    const bodyless = await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: OP });
+    expect(bodyless.statusCode).toBe(400);
+  });
+
+  it("pauses and resumes OTP sends through the same settings row otp.ts reads", async () => {
+    app = makeApp();
+    seedApp("killswitch-app", SECRET_A);
+    const AH = { "X-App-Id": "killswitch-app", "X-App-Secret": SECRET_A };
+
+    const off = await app.inject({ method: "POST", url: "/v5/otp/send", headers: AH, payload: { phone: "+8801712345678" } });
+    expect(off.statusCode).not.toBe(503);
+
+    const pause = await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: OP, payload: { enabled: true } });
+    expect(pause.statusCode).toBe(200);
+    expect(pause.json()).toMatchObject({ ok: true, previous: false, enabled: true, changed: true });
+
+    const stored = (app.db.prepare("SELECT value FROM settings WHERE key = 'kill_switch'").get() as { value: string }).value;
+    expect(stored).toBe("true");
+
+    const paused = await app.inject({ method: "POST", url: "/v5/otp/send", headers: AH, payload: { phone: "+8801712345678" } });
+    expect(paused.statusCode).toBe(503);
+    expect((paused.json() as { code: string }).code).toBe("sms_paused");
+
+    const resume = await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: OP, payload: { enabled: false } });
+    expect(resume.statusCode).toBe(200);
+    expect(resume.json()).toMatchObject({ ok: true, previous: true, enabled: false, changed: true });
+    const after = await app.inject({ method: "POST", url: "/v5/otp/send", headers: AH, payload: { phone: "+8801712345678" } });
+    expect(after.statusCode).not.toBe(503);
+  });
+
+  it("is a no-op flipping to the current state (reports previous, changes nothing)", async () => {
+    app = makeApp();
+    const noopOff = await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: OP, payload: { enabled: false } });
+    expect(noopOff.statusCode).toBe(200);
+    expect(noopOff.json()).toMatchObject({ ok: true, previous: false, enabled: false, changed: false });
+
+    await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: OP, payload: { enabled: true } });
+    const noopOn = await app.inject({ method: "POST", url: "/v5/admin/kill-switch", headers: OP, payload: { enabled: true } });
+    expect(noopOn.statusCode).toBe(200);
+    expect(noopOn.json()).toMatchObject({ ok: true, previous: true, enabled: true, changed: false });
+    const stamp = (app.db.prepare("SELECT updated_at FROM settings WHERE key = 'kill_switch'").get() as { updated_at: number }).updated_at;
+    const first = (noopOff.json() as { previous: boolean });
+    expect(first.previous).toBe(false);
+    expect(stamp).toBeGreaterThan(0);
+  });
+});
