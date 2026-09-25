@@ -71,6 +71,19 @@ function ts(v: unknown): number {
   return typeof v === "number" ? v : Math.floor(new Date(String(v)).getTime() / 1000);
 }
 
+/**
+ * Like ts(), but tolerates null/absent v4 timestamps by falling back. v4's
+ * test packages (DevTester, Test Bulk, Test OTP) were written WITHOUT
+ * updated_at; ts(undefined) is NaN and SQLite stores NaN as NULL, which
+ * violates the NOT NULL columns and aborted the first --apply inside its
+ * transaction. Fallbacks stay export-deterministic (derived from sibling
+ * fields, never the wall clock) so re-runs reproduce byte-identical rows.
+ */
+function tsOr(v: unknown, fallback: number): number {
+  const parsed = ts(v);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 // ── CLI ────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
@@ -118,6 +131,8 @@ interface AppSeed {
   id: string; app_id: string; app_secret_hash: string; name: string;
   webhook_url: string | null; webhook_secret: string | null; webhook_secret_hash: string | null;
   rate_max_per_phone: number; rate_window_sec: number; created_at: number; revoked_at: number | null;
+  /** Raw generated appSecret — held only in memory; reported iff the row is actually inserted. */
+  raw_secret: string;
 }
 interface TxSeed {
   id: string; app_id: string; package_id: string; package_code: string;
@@ -131,7 +146,7 @@ interface CreditSeed {
   last_transaction_id: string | null; purchased_at: number | null; updated_at: number;
 }
 
-const secretsOut: { app_id: string; appSecret: string }[] = [];
+let insertedSecretsGlobal: { app_id: string; appSecret: string }[] = [];
 const packages = new Map<string, PackageSeed>();   // by v5 package_code
 const packagesByV4Id = new Map<string, string>();  // v4 package doc-id → v5 package_code
 const apps = new Map<string, AppSeed>();           // by v5 app_id
@@ -157,12 +172,16 @@ for (const doc of fstore.packages.documents) {
     continue;
   }
   const id = stableId("package", code);
+  // updated_at: v4 test packages carry no timestamp — creation is their last
+  // update, so falling back to created_at preserves the invariant
+  // updated_at >= created_at without inventing wall-clock data.
+  const createdAt = tsOr(f.created_at, 0);
   packages.set(code, {
     id, package_code: code, name,
     sms_quota: Number(f.sms_quota), price_bdt: Number(f.price_bdt),
     validity_days: Number(f.validity_days), type: String(f.type),
     is_active: f.is_active ? 1 : 0,
-    created_at: ts(f.created_at), updated_at: ts(f.updated_at),
+    created_at: createdAt, updated_at: tsOr(f.updated_at, createdAt),
   });
   packagesByV4Id.set(String(doc.name.split("/").pop()), code);
   b.imported += 1;
@@ -187,8 +206,8 @@ for (const [v4Id, ra] of Object.entries(rtdb.registeredApps)) {
     rate_window_sec: Number((ra.rateLimit as { windowSec?: number })?.windowSec ?? 3600) || 3600,
     created_at: Number(ra.createdAt ?? 0) || Math.floor(Date.now() / 1000),
     revoked_at: ra.active === false ? Math.floor(Date.now() / 1000) : null,
+    raw_secret: secret,
   });
-  secretsOut.push({ app_id: appId, appSecret: secret });
   appsByV4Id.set(v4Id, appId);
   b.imported += 1;
   if (ra.active === false) note("registered_apps", "inactive v4 app imported revoked");
@@ -213,8 +232,8 @@ for (const rawAppId of billingAppIds) {
     webhook_url: null, webhook_secret: webhookSecret, webhook_secret_hash: sha256Hex(webhookSecret),
     rate_max_per_phone: 3, rate_window_sec: 3600,
     created_at: Math.floor(Date.now() / 1000), revoked_at: null,
+    raw_secret: secret,
   });
-  secretsOut.push({ app_id: appId, appSecret: secret });
   appsByV4Id.set(rawAppId, appId);
   b.imported += 1;
   note("billing_apps", "v4 owner identity (email/uid) became a v5 app; secret return-once in 0600 file");
@@ -226,9 +245,14 @@ const txMapped: TxMapped[] = [];
 let txUnmapped = 0;
 for (const doc of fstore.transactions.documents) {
   const f = unwrap(doc.fields);
-  const appId = appsByV4Id.get(String(f.appId));
+  // FK targets are INTERNAL ids: credit_transactions.app_id references
+  // apps.id (the stableId UUID), not the public appId string — binding the
+  // string violated the FK on the first --apply (dry run never inserts, so
+  // this was invisible until a real apply ran).
+  const appIdKey = appsByV4Id.get(String(f.appId));
+  const appSeed = appIdKey !== undefined ? apps.get(appIdKey) : undefined;
   const packageCode = packagesByV4Id.get(String(f.package_id));
-  if (!appId || !packageCode) {
+  if (!appSeed || !packageCode) {
     txUnmapped += 1;
     continue;
   }
@@ -237,7 +261,7 @@ for (const doc of fstore.transactions.documents) {
   txMapped.push({
     docId: String(doc.name.split("/").pop() ?? ""),
     id: stableId("txn", String(doc.name.split("/").pop())),
-    app_id: appId, package_id: pkg.id, package_code: packageCode,
+    app_id: appSeed.id, package_id: pkg.id, package_code: packageCode,
     sms_quota: Number(f.sms_quota), validity_days: Number(f.validity_days),
     amount_bdt: Number(f.amount_bdt), package_type: pkg.type,
     // TrxIDs are unique, material, and already used — never re-awardable in v5.
@@ -279,21 +303,22 @@ for (const doc of fstore.appCredits.documents) {
   const f = unwrap(doc.fields);
   const b = bucket("app_credits");
   b.rows += 1;
-  const appId = appsByV4Id.get(String(f.appId));
-  if (!appId) {
+  const appIdKey = appsByV4Id.get(String(f.appId));
+  const appSeed = appIdKey !== undefined ? apps.get(appIdKey) : undefined;
+  if (!appSeed) {
     b.orphans += 1;
     note("app_credits", "orphan: credits row references an unmapped appId");
     continue;
   }
-  const prev = credits.get(appId);
+  const prev = credits.get(appSeed.id);
   const newer = !prev || Number(f.updated_at) > prev.updated_at;
   if (!newer) {
     b.skipped += 1;
     note("app_credits", "superseded older snapshot for the same app kept the newest");
     continue;
   }
-  credits.set(appId, {
-    app_id: appId,
+  credits.set(appSeed.id, {
+    app_id: appSeed.id,
     otp_sms_remaining: Number(f.sms_remaining ?? 0),
     bulk_sms_remaining: Number(f.bulk_sms_remaining ?? 0),
     otp_expires_at: f.expires_at === null ? null : Number(f.expires_at),
@@ -347,20 +372,43 @@ const { openDb } = await import("../db.js");
 const db = openDb(DB_PATH!);
 
 const apply = db.transaction(() => {
+  // Per-bucket error context: better-sqlite3 errors name the constraint, not
+  // the statement — the wrapper below turns "FOREIGN KEY constraint failed"
+  // into "which bucket, which row" without weakening the single transaction.
+  const stage = <T>(bucket: string, rows: Iterable<T>, run: (row: T) => void): void => {
+    for (const row of rows) {
+      try {
+        run(row);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(`[${bucket}] ${JSON.stringify(row).slice(0, 300)} — ${detail}`);
+      }
+    }
+  };
+
   const insPkg = db.prepare(
     "INSERT INTO packages (id, package_code, name, sms_quota, price_bdt, validity_days, type, is_active, created_at, updated_at) " +
     "VALUES (@id, @package_code, @name, @sms_quota, @price_bdt, @validity_days, @type, @is_active, @created_at, @updated_at) " +
     "ON CONFLICT(package_code) DO NOTHING",
   );
-  for (const p of packages.values()) insPkg.run(p);
+  stage("packages", packages.values(), (p) => insPkg.run(p));
 
+  // Idempotent re-runs: every insert is DO NOTHING on its unique key, and the
+  // return-once secrets report is built from rows ACTUALLY inserted on this
+  // run (changes=1). A re-run against an already-populated DB inserts nothing
+  // and reports zero new secrets — it never rewrites the secrets file with
+  // values that do not open the existing rows.
+  insertedSecretsGlobal = [];
   const insApp = db.prepare(
     "INSERT INTO apps (id, app_id, app_secret_hash, name, webhook_url, webhook_secret, webhook_secret_hash, " +
     "rate_max_per_phone, rate_window_sec, created_at, revoked_at) " +
     "VALUES (@id, @app_id, @app_secret_hash, @name, @webhook_url, @webhook_secret, @webhook_secret_hash, " +
-    "@rate_max_per_phone, @rate_window_sec, @created_at, @revoked_at)",
+    "@rate_max_per_phone, @rate_window_sec, @created_at, @revoked_at) " +
+    "ON CONFLICT(app_id) DO NOTHING",
   );
-  for (const a of apps.values()) insApp.run(a);
+  stage("apps", apps.values(), (a) => {
+    if (insApp.run(a).changes === 1) insertedSecretsGlobal.push({ app_id: a.app_id, appSecret: a.raw_secret });
+  });
 
   const insTx = db.prepare(
     "INSERT INTO credit_transactions (id, app_id, package_id, package_code, sms_quota, validity_days, " +
@@ -369,16 +417,18 @@ const apply = db.transaction(() => {
     "@package_type, @trx_id, @status, @admin_notes, @resolved_by, @requested_at, @resolved_at) " +
     "ON CONFLICT(id) DO NOTHING",
   );
-  for (const t of transactions) insTx.run(t);
+  stage("transactions", transactions, (t) => insTx.run(t));
 
   const insCr = db.prepare(
     "INSERT INTO app_credits (app_id, otp_sms_remaining, bulk_sms_remaining, otp_expires_at, bulk_expires_at, " +
     "last_transaction_id, purchased_at, updated_at) VALUES (@app_id, @otp_sms_remaining, @bulk_sms_remaining, " +
-    "@otp_expires_at, @bulk_expires_at, @last_transaction_id, @purchased_at, @updated_at)",
+    "@otp_expires_at, @bulk_expires_at, @last_transaction_id, @purchased_at, @updated_at) " +
+    "ON CONFLICT(app_id) DO NOTHING",
   );
-  for (const c of credits.values()) insCr.run(c);
+  stage("app_credits", credits.values(), (c) => insCr.run(c));
 });
 
+let insertedCounts = { packages: 0, apps: 0, transactions: 0, creditRows: 0 };
 try {
   apply();
 } catch (err) {
@@ -387,8 +437,29 @@ try {
   process.exit(1);
 }
 
+// Counts are read AFTER the transaction commits: post-apply state is the
+// evidence that matters for reconciliation.
+const dbCount = (sql: string): number => (db.prepare(sql).get() as { n: number }).n;
+insertedCounts = {
+  packages: dbCount("SELECT COUNT(*) AS n FROM packages"),
+  apps: dbCount("SELECT COUNT(*) AS n FROM apps"),
+  transactions: dbCount("SELECT COUNT(*) AS n FROM credit_transactions"),
+  creditRows: dbCount("SELECT COUNT(*) AS n FROM app_credits"),
+};
+
 const secretsFile = `${EXPORT_DIR}/../v4-import-app-secrets.json`;
-writeFileSync(secretsFile, JSON.stringify(secretsOut, null, 2), { mode: 0o600 });
-console.log(`\nAPPLIED. ${secretsOut.length} new app secret(s) written to ${secretsFile} (0600) — return-once, store safely.`);
+if (insertedSecretsGlobal.length > 0) {
+  // First successful apply: report the freshly minted return-once secrets.
+  writeFileSync(secretsFile, JSON.stringify(insertedSecretsGlobal, null, 2), { mode: 0o600 });
+  console.log(`\nAPPLIED. ${insertedSecretsGlobal.length} new app secret(s) written to ${secretsFile} (0600) — return-once, store safely.`);
+} else {
+  // Idempotent re-run: rows already existed; the previous secrets file stays
+  // untouched and no misleading values are reported.
+  console.log("\nAPPLIED (idempotent re-run): no new rows inserted — existing v4-import-app-secrets.json (if any) is unchanged.");
+}
+console.log(
+  `Post-apply table counts: packages=${insertedCounts.packages} apps=${insertedCounts.apps} ` +
+    `transactions=${insertedCounts.transactions} app_credits=${insertedCounts.creditRows}`,
+);
 console.log("If the secrets file is lost, rotate per app via POST /v5/admin/apps/:id/rotate-webhook-secret and re-provision.");
 db.close();
