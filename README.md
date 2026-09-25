@@ -166,6 +166,15 @@ Authorization: Bearer <HEALTH_ADMIN_SECRET>
 }
 ```
 
+## dP Relay v5 dashboard (web/src/v5)
+
+A Firebase-free dashboard slice mounted at `/v5/*` (API client, auth context, and pages live in `web/src/v5/`); the legacy v4 pages are untouched.
+
+- **API base URL** — `VITE_V5_API_BASE_URL` in `web/.env` (see `web/.env.example`). Empty = same-origin (Cloudflare Pages reverse proxy, or the vite dev proxy); otherwise the absolute `https://` URL of the v5 API. `web/public/_redirects` keeps deep links like `/v5/campaigns` alive on Cloudflare Pages.
+- **Auth** — `POST /v5/auth/login` issues a JWT pair persisted in localStorage; the single-use refresh token rotates via `POST /v5/auth/refresh` (one automatic replay on a 401 `invalid_access_token`).
+- **App credentials** — campaigns ride the requireApp plane: `X-App-Id` / `X-App-Secret` are entered per session (sessionStorage only) on the Session credentials page and verified against `/v5/billing/credits` before use.
+- **Commands** — `cd web && npm run dev` (dev server), `npm run build` (Cloudflare Pages artifact in `dist/`), `npm test` (vitest unit tests for the API client).
+
 ## Testing
 
 ### Android Tests

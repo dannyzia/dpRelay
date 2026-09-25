@@ -51,6 +51,9 @@ import AdminCampaignDetail from "./pages/admin/AdminCampaignDetail";
 // Protected route component
 import ProtectedRoute from "./components/layout/ProtectedRoute";
 
+// v5 dashboard slice (dP Relay v5) — separate Firebase-free subtree at /v5/*
+import V5Routes from "./v5/V5Routes.jsx";
+
 function ScrollToTop() {
   const { pathname } = useLocation();
   React.useEffect(() => {
@@ -135,6 +138,9 @@ function AppRoutes() {
           <Route path="bulk" element={<AdminBulkCampaigns />} />
           <Route path="bulk/:campaignId" element={<AdminCampaignDetail />} />
         </Route>
+
+        {/* v5 dashboard slice (dP Relay v5) — own auth provider + guard */}
+        <Route path="/v5/*" element={<V5Routes />} />
 
         {/* 404 Catch-all */}
         <Route path="*" element={<CatchAll />} />
