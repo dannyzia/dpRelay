@@ -6,6 +6,15 @@ Facts below were probed live on **2026-09-23** against Render (`dprelay-api`,
 API. Secrets are never printed — only set/unset state. Re-verify §0 before
 executing anything; if reality has drifted, fix this section first.
 
+> **Status refresh 2026-09-25** (post W1–W5, ISSUE-25): §7's kill-switch gap is
+> closed (PR #20); the alert channel is now Telegram-first with webhook
+> fallback (PR #24) pending owner-side `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`
+> setup (§1.4 note); the W3 local import baseline is **clean**
+> (`docs/Plan/26-V4-IMPORT-RECONCILIATION.md`) and §4 T-0 is now a
+> *re-verification* step, not a first import. See
+> `docs/Plan/28-HANDOFF-STATUS.md` for the full shipped-state record and the
+> decommission precondition list.
+
 ---
 
 ## 0. Ground truth at drafting time (re-verify before cutover)
@@ -13,18 +22,20 @@ executing anything; if reality has drifted, fix this section first.
 | Fact | Value | How to re-verify |
 |---|---|---|
 | v5 production URL | `https://dprelay-api-hug8.onrender.com` | browser / curl |
-| v5 live version | `5.2.0-alpha.0` (= master `2b72c97`, deploy **live**) | `curl -s $BASE/health` |
+| v5 live version | `5.3.7-alpha.0` (= master `943d580`+docs, deploy **live**; last server merge `0321a97` #30) | `curl -s $BASE/health` |
 | v5 master ↔ prod parity | `version` in `/health` == `server/package.json` on master | one curl + one `git show` |
 | Deploy guard | `deploy-status.yml` active on master pushes (waits for this push's deploy to go `live`, fails after 10 min otherwise) | Actions tab on last merge |
 | v4 state | **Not serving**: `…cloudfunctions.net/health` → HTTP **500**; billing **disabled** (`billingEnabled=false`) | curl + `gcloud billing projects describe` |
 | Android client | `V5_API_ENABLED=true`, `V5_API_BASE_URL=https://dprelay-api-hug8.onrender.com` already compiled into the gateway build; device plane talks `enroll/heartbeat/outstanding/results/payment-sms/fcm-token` | `app/build.gradle` |
 | Render gates | `JWT_SECRET`, `DEVICE_ENROLLMENT_SECRET`, `APP_PROVISIONING_SECRET`, `OPERATOR_SECRET`, `BKASH_PERSONAL_NUMBER`, `FCM_SERVICE_ACCOUNT_JSON`, `BULK_ENABLED`, all R2/Litestream vars **set** | Render API env-vars (names only) |
-| `ALERT_WEBHOOK_URL` | **NOT set** → watchdog + webhook-exhaustion alerts are **log-only** in production | Render API env-vars |
+| Alert channel | **Telegram-first sink shipped but UNCONFIGURED**: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` absent (owner adds them; never placeholders); `ALERT_WEBHOOK_URL` also unset → alerts log-only today. Damping default 900s ⇒ ≤4 re-alerts/hour per dead receiver. | Render API env-vars (names only) + `/docs/json` |
 
-> ⚠️ **FLAG:** `ALERT_WEBHOOK_URL` is unset in production. Until it is set, a
-> stale-device or webhook-exhaustion alert exists only in Render logs. Set it
-> (any Discord/Slack-compatible receiver) **before** cutover — it is the
-> on-call signal for the whole flip. Similarly `ALERT_WEBHOOK_SECRET` (optional Bearer).
+> ⚠️ **FLAG:** `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` (preferred) and
+> `ALERT_WEBHOOK_URL` (fallback) are unset in production. Until one is set, a
+> stale-device or webhook-exhaustion alert exists only in Render logs. The
+> Telegram sink is live code (PR #24, verified by tests); setting the owner's
+> token + chat id and forcing one real alert is the remaining proof.
+> Similarly `ALERT_WEBHOOK_SECRET` (optional Bearer for the webhook fallback).
 
 > ⚠️ **FLAG (rollback reality):** v4 is **not** a viable rollback target — it is
 > already dead (Spark plan, `billingEnabled=false`, gen-2 functions
@@ -52,8 +63,10 @@ node server/scripts/download-litestream.mjs   # pulls latest replica from R2
 # then integrity-check the downloaded DB (sqlite3 pragmas) before trusting DR
 
 # 1.4 Alert channel live
-# Render env: ALERT_WEBHOOK_URL set; watchdog cron fires every 5 min
-# (watch the receiver for a test alert, or accept log-only knowingly)
+# Render env: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID set (Telegram-first, PR #24);
+# ALERT_WEBHOOK_URL is the fallback. After setting them: POST a Render deploy
+# (env PUTs alone do NOT deploy — server/scripts/set-alert-channel.cjs) and force
+# one real alert (set-stale drill) to prove delivery. Watchdog cron fires every 5 min.
 ```
 
 Gate fails → stop. Fix upstream (deploy chain, backups, alerting) first.
@@ -155,7 +168,7 @@ a row, and a wrong code is rejected (400-class, attempt counter visible).
 
 | # | Step | Verify | Abort if |
 |---|---|---|---|
-| T-0 | **Re-run the v4 export** → `staging/v4-export-cutover-<date>/` (9 sources, sha256 manifest, contents never printed). Firebase is still readable; this is the reconciliation baseline PLAN §9 requires. | manifest 9/9 hashes | any source unreadable |
+| T-0 | **Re-run the v4 export** → `staging/v4-export-cutover-<date>/` (9 sources, sha256 manifest, contents never printed) and re-reconcile against the **clean local baseline** (`docs/Plan/26-V4-IMPORT-RECONCILIATION.md`: 56 → 29/8/4, every delta rule-based, checksums pinned). Firebase is still readable; the frozen `staging/v4-export-final-2026-09-19/` baseline and its rules stay untouched. | manifest 9/9 hashes; fresh-run reconciliation reproduces §2/§3/§4 of the report | any source unreadable; any NEW unexplained delta vs the baseline rules |
 | 1 | Provision app + credits (§2) | balance > 0 via `/v5/billing/credits` | approve rejects the TrxID |
 | 2 | §3 smoke on a live phone | both flows green | any non-2xx unexplained |
 | 3 | **Canary:** point the first (internal/low-traffic) client app at v5 | first real `otp.status` webhook + verify success in production logs | OTP delivery latency or failure spikes |
@@ -212,12 +225,19 @@ Rollback notes:
 
 ## 7. Residual gaps (fix-before-flip candidates, none blocking today)
 
-1. **Kill switch has no operator route.** `settings.kill_switch` exists and
+1. **Kill switch has no operator route.** ✅ **CLOSED 2026-09-25 (PR #20,
+   `0f20194`):** `requireOperator`-gated `POST /v5/admin/kill-switch` shipped
+   with tests and deployed. Original finding kept for the record:
+   `settings.kill_switch` exists and
    `/v5/otp/send` honors it (`503 sms_paused`), but the only writer is a raw
    DB row (`001_init.sql` seed). Production DB access = Litestream download,
    so the *practical* emergency stop is Suspend Service. A
    `requireOperator`-gated `POST /v5/admin/kill-switch` would close this.
 2. **`ALERT_WEBHOOK_URL` unset** — §1.4 gate will fail until set.
+   → **SUPERSEDED 2026-09-25 (PR #24):** alerts are Telegram-first
+   (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) with webhook fallback; both
+   still unset in production, so §1.4 remains open until the owner sets the
+   Telegram vars and one real alert is delivered.
 3. **No staging environment** — prod is the only v5 environment; the canary
    app in §4 step 3 is the staging substitute. Acceptable at this scale, but
    it means every verification happens against real SMS credit.
@@ -225,6 +245,10 @@ Rollback notes:
    recovery is re-enrolling a replacement (§0 procedure in `11-ENV-VARS.md`).
 5. `/health` version is manually bumped per milestone — keep bumping
    `server/package.json` per pass or staleness checks silently degrade.
+6. **`CORS_ALLOWED_ORIGINS` unset** (new 2026-09-25): the clean-room
+   `dashboard/` SPA (PR #29) cannot call the API from a browser until the
+   owner sets this fail-closed allow-list (the Cloudflare Pages origin) on
+   Render and redeploys. curl/mobile clients are unaffected.
 
 ---
 
