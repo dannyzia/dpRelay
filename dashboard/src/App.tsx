@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
-import { getConnectedApp, setAppDisconnectedHandler, setUnauthorizedHandler } from "./api.js";
+import { getConnectedApp, getOperatorSecret, setAppDisconnectedHandler, setOperatorRejectedHandler, setUnauthorizedHandler } from "./api.js";
 import { isAuthenticated, signOut, subscribe } from "./auth.js";
 import { LoginScreen, RegisterScreen } from "./screens/AuthScreens.js";
 import { CampaignsScreen } from "./screens/CampaignsScreen.js";
 import { ConnectAppScreen } from "./screens/ConnectAppScreen.js";
 import { CreditsScreen } from "./screens/CreditsScreen.js";
+import { GroupsScreen } from "./screens/GroupsScreen.js";
+import { OperatorScreen } from "./screens/OperatorScreen.js";
+import { TemplatesScreen } from "./screens/TemplatesScreen.js";
 
-type Screen = "campaigns" | "credits" | "authLogin" | "authRegister" | "connectApp";
+type Screen = "campaigns" | "credits" | "groups" | "templates" | "operator" | "authLogin" | "authRegister" | "connectApp";
 
 /**
  * App shell over two credential planes:
@@ -40,10 +43,16 @@ export function App() {
     setAppDisconnectedHandler(() => {
       setAppConnected(false);
     });
+    setOperatorRejectedHandler(() => {
+      // A 401 from an operator call clears the stored secret; if the operator
+      // view is open, re-lock it so the unlock form re-prompts.
+      setScreen((current) => (current === "operator" && getOperatorSecret() === null ? "campaigns" : current));
+    });
     return () => {
       unsub();
       setUnauthorizedHandler(null);
       setAppDisconnectedHandler(null);
+      setOperatorRejectedHandler(null);
     };
   }, []);
 
@@ -85,6 +94,9 @@ export function App() {
   const navItems: Array<{ id: Screen; label: string }> = [
     { id: "campaigns", label: "Campaigns" },
     { id: "credits", label: "Credits" },
+    { id: "groups", label: "Groups" },
+    { id: "templates", label: "Templates" },
+    { id: "operator", label: "Operator" },
   ];
 
   return (
@@ -121,7 +133,17 @@ export function App() {
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-4 py-6">
-        {screen === "credits" ? <CreditsScreen /> : <CampaignsScreen />}
+        {screen === "credits" ? (
+          <CreditsScreen />
+        ) : screen === "groups" ? (
+          <GroupsScreen />
+        ) : screen === "templates" ? (
+          <TemplatesScreen />
+        ) : screen === "operator" ? (
+          <OperatorScreen />
+        ) : (
+          <CampaignsScreen />
+        )}
       </main>
     </div>
   );
