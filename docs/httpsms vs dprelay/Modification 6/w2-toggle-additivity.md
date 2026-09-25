@@ -39,8 +39,8 @@ between the planes (SmsManager + send pacing) is governed by the single process-
 
 - `ratelimit/SmsRateLimiter.kt` is a Kotlin `object` — a **process-wide singleton by construction**. Its own header documents the dual-plane contract: "A SINGLE instance must serve every outbound SMS path on the phone… a per-plane limiter would let the two planes race each other into the Android 'too many SMS' dialog."
 - Both planes hold a reference to that one object (references, not constructions):
-  - `PendingSmsListener.kt:36` — `private val smsRateLimiter = SmsRateLimiter`
-  - `OutstandingFetcher.kt:30` — `private val smsRateLimiter = SmsRateLimiter`
+  - `PendingSmsListener.kt:46` — `private val smsRateLimiter = SmsRateLimiter`
+  - `OutstandingFetcher.kt:42` — `private val smsRateLimiter = SmsRateLimiter`
 - Both call the identical `enqueueSms(...)` entry point (`PendingSmsListener.kt:sendSms`, `OutstandingFetcher.kt:enqueueSend`), so all sends interleave in one queue on one handler thread with one `MIN_INTERVAL_MS = 5000L` inter-send interval.
 - **Audit of the handoff premise**: the handoff said the two classes "each construct their own SmsRateLimiter". That was already false on `master` — there is nothing to refactor *structurally*; sharing is guaranteed by the Kotlin `object` declaration, not by wiring. The refactor-equivalent deliverable is the regression lock added in this branch: `app/src/test/java/com/digitalpapyrus/authenticator/SmsRateLimiterDualPlaneTest.kt` proves on the JVM that cross-plane sends share one FIFO queue and honor the >= 5 s inter-send interval (with a 50 ms scheduling tolerance).
 
