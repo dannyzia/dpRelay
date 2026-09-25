@@ -15,7 +15,7 @@
  * one per WEBHOOK_EXHAUSTION_DAMPING_SEC window; a success re-arms instantly.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -67,7 +67,10 @@ describe("OpenAPI /docs", () => {
       paths: Record<string, Record<string, unknown>>;
     };
     expect(spec.info.title).toBe("dP Relay v5 API");
-    expect(spec.info.version).toBe("5.3.5-alpha.0");
+    // Version comes from server/package.json (the /health contract); asserting
+    // against the file rather than a literal keeps this test version-bump-proof.
+    const pkgVersion = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+    expect(spec.info.version).toBe(pkgVersion);
     // Meaningful slice across the planes; full drift check is the next test.
     // NOTE: /health + /healthz are deliberately absent — they are registered
     // synchronously on the root instance before avvio loads the queued swagger
