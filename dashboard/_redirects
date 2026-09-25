@@ -1,0 +1,3 @@
+# Cloudflare Pages static SPA: every path serves the app shell; client-side
+# routing takes over from there. `dist` is the Pages build output directory.
+/* /index.html 200
