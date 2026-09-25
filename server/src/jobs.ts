@@ -40,8 +40,96 @@ export interface WebhookExhaustionAlert {
   detected_at: string;
 }
 
-/** Every alert shape routed through the shared alert webhook channel. */
+/** Every alert shape routed through the shared alert channels. */
 export type OpsAlert = WatchdogAlert | WebhookExhaustionAlert;
+
+/** HTML-escapes alert fields so parse_mode:"HTML" never breaks on their content. */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Renders an alert as a compact Telegram HTML message: kind line first (the
+ * on-call scan target), then the discriminating fields, timestamps last.
+ */
+function formatAlertHtml(alert: OpsAlert): string {
+  switch (alert.type) {
+    case "device_heartbeat_stale":
+      return (
+        "🔔 <b>device_heartbeat_stale</b>\n" +
+        `count: ${alert.count} (threshold ${alert.threshold_sec}s)\n` +
+        `devices: ${alert.deviceIds.map((id) => escapeHtml(id)).join(", ")}\n` +
+        `detected_at: ${escapeHtml(alert.detected_at)}`
+      );
+    case "webhook_exhaustion":
+      return (
+        "🔔 <b>webhook_exhaustion</b>\n" +
+        `app: ${escapeHtml(alert.appId)}\n` +
+        `consecutiveFailures: ${alert.consecutiveFailures} (threshold ${alert.threshold})\n` +
+        `lastSessionId: ${escapeHtml(alert.lastSessionId)}\n` +
+        `lastError: ${escapeHtml(alert.lastError)}\n` +
+        `detected_at: ${escapeHtml(alert.detected_at)}`
+      );
+  }
+}
+
+/**
+ * Telegram Bot API sendMessage. Same best-effort contract as the webhook
+ * channel: bounded timeout, failures logged and swallowed.
+ */
+async function dispatchTelegram(
+  log: FastifyBaseLogger,
+  config: Config,
+  text: string,
+): Promise<"telegram" | "log-only"> {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: config.telegramChatId, text, parse_mode: "HTML" }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      log.error({ status: res.status }, "telegram alert failed");
+      return "log-only";
+    }
+    return "telegram";
+  } catch (err) {
+    log.error({ err }, "telegram alert failed");
+    return "log-only";
+  }
+}
+
+/**
+ * Generic ALERT_WEBHOOK_URL receiver (Discord/Slack-compatible). Kept as the
+ * fallback sink; failure is logged and swallowed.
+ */
+async function dispatchWebhook(
+  log: FastifyBaseLogger,
+  config: Config,
+  alert: OpsAlert,
+): Promise<"webhook" | "log-only"> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (config.alertWebhookSecret !== "") {
+      headers.Authorization = `Bearer ${config.alertWebhookSecret}`;
+    }
+    const res = await fetch(config.alertWebhookUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(alert),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      log.error({ status: res.status }, "watchdog webhook alert failed");
+      return "log-only";
+    }
+    return "webhook";
+  } catch (err) {
+    log.error({ err }, "watchdog webhook alert failed");
+    return "log-only";
+  }
+}
 
 /** Registers the watchdog on the app for tests to call directly. */
 declare module "fastify" {
@@ -74,17 +162,25 @@ export function findStaleDevices(db: FastifyInstance["db"], staleSec: number): S
 }
 
 /**
- * Dispatches an ops alert (watchdog stale-devices or webhook exhaustion) to the
- * shared ALERT_WEBHOOK_URL channel. Webhook is best-effort: alerting must never
- * take the job runner (or the API) down. When no webhook is configured,
- * alerting is log-only (G6 gate: email/webhook parity is M6; webhook is the P0
- * channel).
+ * Result of one alert dispatch: which sink accepted it, or "log-only" when no
+ * sink was configured or every configured sink failed.
+ */
+export type AlertDispatchResult = "telegram" | "webhook" | "log-only";
+
+/**
+ * Dispatches an ops alert (watchdog stale-devices or webhook exhaustion) to
+ * the operator alert channel. TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID configure
+ * the preferred Telegram sink (HTML message); ALERT_WEBHOOK_URL remains the
+ * generic receiver and is tried when Telegram is unconfigured or its delivery
+ * failed. Alerting is best-effort and must never take the job runner (or the
+ * API) down; with no sink configured, alerting is log-only (G6 gate: email
+ * parity is M6).
  */
 export async function dispatchAlert(
   log: FastifyBaseLogger,
   config: Config,
   alert: OpsAlert,
-): Promise<"webhook" | "log-only"> {
+): Promise<AlertDispatchResult> {
   // Per-type log line: the log stream must name the alert kind explicitly so a
   // log-only deployment still distinguishes the two alert sources.
   switch (alert.type) {
@@ -95,29 +191,14 @@ export async function dispatchAlert(
       log.warn({ alert }, "webhook_exhaustion_alert");
       break;
   }
-  if (config.alertWebhookUrl === "") {
-    return "log-only";
+  if (config.telegramBotToken !== "" && config.telegramChatId !== "") {
+    const result = await dispatchTelegram(log, config, formatAlertHtml(alert));
+    if (result === "telegram") return result;
   }
-  try {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (config.alertWebhookSecret !== "") {
-      headers.Authorization = `Bearer ${config.alertWebhookSecret}`;
-    }
-    const res = await fetch(config.alertWebhookUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(alert),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      log.error({ status: res.status }, "watchdog webhook alert failed");
-      return "log-only";
-    }
-    return "webhook";
-  } catch (err) {
-    log.error({ err }, "watchdog webhook alert failed");
-    return "log-only";
+  if (config.alertWebhookUrl !== "") {
+    return dispatchWebhook(log, config, alert);
   }
+  return "log-only";
 }
 
 /**

@@ -3,15 +3,16 @@
  * or log-only), fresh devices do not, and the wake guard sweeps on boot and
  * first request after an idle gap.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/app.js";
-import type { FastifyInstance } from "fastify";
-import type { WatchdogAlert } from "../src/jobs.js";
+import { loadConfig } from "../src/config.js";
+import { dispatchAlert, type OpsAlert, type WatchdogAlert } from "../src/jobs.js";
+import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 
@@ -183,5 +184,166 @@ describe("wake guard + boot sweep (R5)", () => {
     expect(r1.statusCode).toBe(200);
     expect(r2.statusCode).toBe(200);
     await guardApp.close();
+  });
+});
+
+/**
+ * Telegram sink tests: pure unit tests of dispatchAlert with a stubbed global
+ * fetch — no test-only env hooks in production config. Each stub records
+ * (url, init) so the Bot API request shape and the fallback order are asserted
+ * exactly.
+ */
+interface FetchCall {
+  url: string;
+  init: { method?: string; headers?: Record<string, string>; body?: string };
+}
+
+/** Stubs global fetch with scripted (status, body) responses, in order. */
+function stubFetch(...responses: { status: number; body?: unknown }[]): FetchCall[] {
+  const calls: FetchCall[] = [];
+  const impl = vi.fn(async (url: string | URL, init: FetchCall["init"] = {}) => {
+    calls.push({ url: String(url), init });
+    const next = responses.shift() ?? { status: 200, body: { ok: true } };
+    return { ok: next.status < 400, status: next.status, json: async () => next.body } as Response;
+  });
+  vi.stubGlobal("fetch", impl);
+  return calls;
+}
+
+const noopLog = { warn() {}, info() {}, error() {}, debug() {} } as unknown as FastifyBaseLogger;
+
+const STALE_ALERT: WatchdogAlert = {
+  type: "device_heartbeat_stale",
+  deviceIds: ["dev-1", "dev-2"],
+  count: 2,
+  threshold_sec: 900,
+  detected_at: "2026-01-01T00:00:00.000Z",
+};
+
+function cfg(env: Record<string, string>) {
+  return loadConfig({ JWT_SECRET: TEST_JWT_SECRET, ...env });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("telegram alert sink", () => {
+  it("POSTs an HTML message with alert kind + devices to the Bot API and skips the generic webhook", async () => {
+    const calls = stubFetch({ status: 200 });
+    const result = await dispatchAlert(
+      noopLog,
+      cfg({
+        TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN",
+        TELEGRAM_CHAT_ID: "-100200300",
+        ALERT_WEBHOOK_URL: "https://fallback.example.com/hook",
+      }),
+      STALE_ALERT,
+    );
+
+    expect(result).toBe("telegram");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://api.telegram.org/bot12345:TEST-TOKEN/sendMessage");
+    const body = JSON.parse(calls[0].init.body ?? "{}") as { chat_id: string; text: string; parse_mode: string };
+    expect(body.chat_id).toBe("-100200300");
+    expect(body.parse_mode).toBe("HTML");
+    expect(body.text).toContain("device_heartbeat_stale");
+    expect(body.text).toContain("dev-1");
+    expect(body.text).toContain("dev-2");
+  });
+
+  it("escapes HTML-significant characters in alert fields", async () => {
+    const calls = stubFetch({ status: 200 });
+    await dispatchAlert(
+      noopLog,
+      cfg({ TELEGRAM_BOT_TOKEN: "12345:T", TELEGRAM_CHAT_ID: "42" }),
+      {
+        type: "webhook_exhaustion",
+        appId: "app<b>&raw",
+        consecutiveFailures: 3,
+        threshold: 3,
+        lastSessionId: "sess<1>",
+        lastError: "boom <&>",
+        detected_at: "2026-01-01T00:00:00.000Z",
+      },
+    );
+
+    const text = (JSON.parse(calls[0].init.body ?? "{}") as { text: string }).text;
+    expect(text).toContain("webhook_exhaustion");
+    expect(text).toContain("app&lt;b&gt;&amp;raw");
+    expect(text).toContain("boom &lt;&amp;&gt;");
+    expect(text).not.toContain("app<b>");
+  });
+
+  it("falls back to ALERT_WEBHOOK_URL when the Bot API rejects the send", async () => {
+    const calls = stubFetch({ status: 500 }, { status: 200 });
+    const result = await dispatchAlert(
+      noopLog,
+      cfg({
+        TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN",
+        TELEGRAM_CHAT_ID: "-100200300",
+        ALERT_WEBHOOK_URL: "https://fallback.example.com/hook",
+        ALERT_WEBHOOK_SECRET: "whsec-test-0123456789abcdef",
+      }),
+      STALE_ALERT,
+    );
+
+    expect(result).toBe("webhook");
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toContain("api.telegram.org");
+    expect(calls[1].url).toBe("https://fallback.example.com/hook");
+    expect(calls[1].init.headers?.Authorization).toBe("Bearer whsec-test-0123456789abcdef");
+    expect(JSON.parse(calls[1].init.body ?? "{}")).toMatchObject({ type: "device_heartbeat_stale", deviceIds: ["dev-1", "dev-2"] });
+  });
+
+  it("falls back when the Bot API transport throws (timeout/network)", async () => {
+    const calls: FetchCall[] = [];
+    const impl = vi.fn(async (url: string | URL, init: FetchCall["init"] = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).includes("api.telegram.org")) throw new Error("timeout");
+      return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+    });
+    vi.stubGlobal("fetch", impl);
+    const result = await dispatchAlert(
+      noopLog,
+      cfg({
+        TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN",
+        TELEGRAM_CHAT_ID: "-100200300",
+        ALERT_WEBHOOK_URL: "https://fallback.example.com/hook",
+      }),
+      STALE_ALERT,
+    );
+    expect(result).toBe("webhook");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("uses the generic webhook when Telegram is unconfigured", async () => {
+    const calls = stubFetch({ status: 200 });
+    const result = await dispatchAlert(
+      noopLog,
+      cfg({ ALERT_WEBHOOK_URL: "https://fallback.example.com/hook" }),
+      STALE_ALERT,
+    );
+    expect(result).toBe("webhook");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://fallback.example.com/hook");
+  });
+
+  it("stays log-only when no sink is configured", async () => {
+    const calls = stubFetch();
+    const result = await dispatchAlert(noopLog, cfg({}), STALE_ALERT);
+    expect(result).toBe("log-only");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("stays log-only when Telegram is half-configured (token without chat id)", async () => {
+    const calls = stubFetch();
+    const result = await dispatchAlert(
+      noopLog,
+      cfg({ TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN" }),
+      STALE_ALERT,
+    );
+    expect(result).toBe("log-only");
+    expect(calls).toHaveLength(0);
   });
 });

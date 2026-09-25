@@ -30,6 +30,10 @@ export interface Config {
   alertWebhookUrl: string;
   /** Shared secret sent as `Authorization: Bearer` on watchdog webhook alerts. */
   alertWebhookSecret: string;
+  /** Telegram Bot API token; with telegramChatId, the preferred alert sink. */
+  telegramBotToken: string;
+  /** Telegram chat id receiving alerts; only used when telegramBotToken is set. */
+  telegramChatId: string;
   /** Idle seconds after which the next request counts as a wake (Render guard). */
   wakeIdleThresholdSec: number;
   /** Shared secret for phone enrollment (POST /v5/device/enroll). Empty = enrollment disabled. */
@@ -158,6 +162,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     catchUpCron: env.CATCH_UP_CRON ?? "*/10 * * * *",
     alertWebhookUrl: env.ALERT_WEBHOOK_URL ?? "",
     alertWebhookSecret: env.ALERT_WEBHOOK_SECRET ?? "",
+    telegramBotToken: env.TELEGRAM_BOT_TOKEN ?? "",
+    telegramChatId: env.TELEGRAM_CHAT_ID ?? "",
     wakeIdleThresholdSec: parsePositiveInt(
       env.WAKE_IDLE_THRESHOLD_SEC,
       "WAKE_IDLE_THRESHOLD_SEC",
