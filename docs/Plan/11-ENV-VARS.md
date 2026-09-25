@@ -54,6 +54,8 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | CATCH_UP_CRON | no | */10 * * * * | Catch-up sweep schedule (node-cron). | — |
 | ALERT_WEBHOOK_URL | no | — (empty = log-only) | Watchdog alert delivery endpoint. | Your webhook receiver (e.g. Discord/Slack-compatible) |
 | ALERT_WEBHOOK_SECRET | no | — | Sent as `Authorization: Bearer` on alert webhooks. | `openssl rand -base64 32` |
+| TELEGRAM_BOT_TOKEN | no | — (empty = sink disabled) | Telegram Bot API token; with TELEGRAM_CHAT_ID this is the preferred alert sink (HTML sendMessage), falling back to ALERT_WEBHOOK_URL on failure. | Token from @BotFather |
+| TELEGRAM_CHAT_ID | no | — | Telegram chat id receiving alerts; only used when TELEGRAM_BOT_TOKEN is set. | Chat id from the target chat (negative for groups/channels) |
 | WAKE_IDLE_THRESHOLD_SEC | no | 900 | Idle seconds before the next request counts as a wake (R5 catch-up sweep). | — |
 | DEVICE_ENROLLMENT_SECRET | for M2 | — (empty = enrollment disabled) | Enrollment secret for `POST /v5/device/enroll` (ADR-016 exchange → device API key). Compared in constant time. | `openssl rand -base64 32` |
 | OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |

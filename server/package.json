@@ -1,6 +1,6 @@
 {
   "name": "dprelay-server",
-  "version": "5.3.3-alpha.0",
+  "version": "5.3.4-alpha.0",
   "description": "dP Relay v5 API server (Modification 6 — Firebase exit)",
   "private": true,
   "type": "module",
