@@ -43,6 +43,18 @@ function nowSec(): number {
 }
 
 const otpRoutes: FastifyPluginAsync = async (app) => {
+  /**
+   * Per-phone resend cooldown (M3 tail, ISSUE-23): last send time per (app,
+   * phone), in-memory like the other per-plane rate structures — it bounds SMS
+   * spend, not correctness, and a restart resetting it merely allows one
+   * immediate resend (the per-app session rate limit above still applies).
+   * Pattern parity: bulk_phone_cooldowns caps re-alerts after confirmed bulk
+   * delivery; this caps OTP re-sends to the SAME number within
+   * OTP_RESEND_COOLDOWN_SEC regardless of session state.
+   */
+  const resendCooldown = new Map<string, number>();
+  let resendSweepCounter = 0;
+
   /** Kill switch read (settings.kill_switch seeded by migration 001). */
   function killSwitchOn(): boolean {
     const row = app.db
@@ -130,6 +142,32 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
           .code(429)
           .header("Retry-After", String(appRow.rateWindowSec))
           .send({ ok: false, error: "Too many OTP requests for this number", code: "rate_limited" });
+      }
+
+      // Per-phone resend cooldown: runs AFTER the per-app session rate limit
+      // (that one bounds session volume; this one bounds resend frequency for
+      // a single number). Failure envelope mirrors rate_limited.
+      const nowMs = Date.now();
+      const cooldownMs = app.config.otpResendCooldownSec * 1000;
+      const lastSendMs = resendCooldown.get(`${appRow.id}:${phone}`) ?? 0;
+      if (nowMs - lastSendMs < cooldownMs) {
+        const retryAfterSec = Math.max(1, Math.ceil((lastSendMs + cooldownMs - nowMs) / 1000));
+        return reply
+          .code(429)
+          .header("Retry-After", String(retryAfterSec))
+          .send({
+            ok: false,
+            error: `Please wait ${retryAfterSec}s before requesting another code for this number`,
+            code: "resend_cooldown",
+          });
+      }
+      resendCooldown.set(`${appRow.id}:${phone}`, nowMs);
+      // Periodic sweep keeps the map bounded (slow-burn entries only; a small
+      // scan every 64 sends is cheaper than a timestamp index per send).
+      if (++resendSweepCounter % 64 === 0) {
+        for (const [key, at] of resendCooldown) {
+          if (nowMs - at >= cooldownMs) resendCooldown.delete(key);
+        }
       }
 
       const otp = String(randomInt(0, 1_000_000)).padStart(OTP_LENGTH, "0");

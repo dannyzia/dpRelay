@@ -67,6 +67,12 @@ export interface Config {
    * channel fires. Any successful delivery resets the count. 1 = alert on first.
    */
   webhookExhaustionAlertThreshold: number;
+  /**
+   * Minimum seconds between webhook-exhaustion alerts for the SAME app (dead-
+   * receiver damping). Default 3600 ⇒ at most one re-alert per hour per dead
+   * receiver while it stays dead; any successful delivery re-arms instantly.
+   */
+  webhookExhaustionDampingSec: number;
   /** Shared secret for operator/admin routes (requireOperator). Empty = admin routes disabled. */
   operatorSecret: string;
   /** bKash destination shown to customers on credit request. Empty = requests fail fast. */
@@ -92,6 +98,8 @@ export interface Config {
   bulkMaxCharsUcs2: number;
   /** Seconds after a confirmed bulk delivery before the same phone gets another. */
   bulkPostSendCooldownSec: number;
+  /** Minimum seconds between OTP sends to the SAME phone per app (resend cooldown). */
+  otpResendCooldownSec: number;
   /** How often the aggregate-stats snapshot refreshes (node-cron pattern). */
   statsCron: string;
 }
@@ -199,6 +207,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "WEBHOOK_EXHAUSTION_ALERT_THRESHOLD",
       3,
     ),
+    webhookExhaustionDampingSec: parsePositiveInt(
+      env.WEBHOOK_EXHAUSTION_DAMPING_SEC,
+      "WEBHOOK_EXHAUSTION_DAMPING_SEC",
+      3600,
+      true, // 0 is a documented value: damping disabled
+    ),
     operatorSecret: env.OPERATOR_SECRET ?? "",
     bkashPersonalNumber: env.BKASH_PERSONAL_NUMBER ?? "",
 
@@ -213,6 +227,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     bulkMaxCharsGsm: parsePositiveInt(env.BULK_MAX_MESSAGE_CHARS_GSM, "BULK_MAX_MESSAGE_CHARS_GSM", 160),
     bulkMaxCharsUcs2: parsePositiveInt(env.BULK_MAX_MESSAGE_CHARS_UCS2, "BULK_MAX_MESSAGE_CHARS_UCS2", 70),
     bulkPostSendCooldownSec: parsePositiveInt(env.BULK_POST_SEND_COOLDOWN_SEC, "BULK_POST_SEND_COOLDOWN_SEC", 120),
+    otpResendCooldownSec: parsePositiveInt(
+      env.OTP_RESEND_COOLDOWN_SEC,
+      "OTP_RESEND_COOLDOWN_SEC",
+      60,
+      true, // 0 is a documented value: cooldown disabled
+    ),
     statsCron: env.STATS_CRON ?? "*/15 * * * *",
   };
 }

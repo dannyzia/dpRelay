@@ -70,6 +70,8 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | FCM_SERVICE_ACCOUNT_JSON | no* | — | Stringified Firebase service-account JSON; enables the FCM wake sender. Empty = wake disabled (reconcile fetch covers delivery). *Required in production once M3 OTP traffic is live. | server |
 | WEBHOOK_TIMEOUT_MS | no | 5000 | Hard timeout per OTP webhook delivery attempt, in milliseconds. | server |
 | WEBHOOK_EXHAUSTION_ALERT_THRESHOLD | no | 3 | Consecutive exhausted webhook dispatches per app before the alert channel (`ALERT_WEBHOOK_URL`) fires a `webhook_exhaustion` alert. Any successful delivery resets the count. | server |
+| WEBHOOK_EXHAUSTION_DAMPING_SEC | no | 3600 | Minimum seconds between exhaustion alerts for the SAME app (dead-receiver damping; default caps re-alerts at ~1/hour per dead receiver). 0 disables damping. Any successful delivery re-arms instantly. | server |
+| OTP_RESEND_COOLDOWN_SEC | no | 60 | Minimum seconds between OTP sends to the SAME phone per app (resend cooldown on POST /v5/otp/send; 429 `resend_cooldown` with Retry-After). 0 disables. Sits alongside the per-app session rate limit (`rate_max_per_phone`/`rate_window_sec`). | server |
 | WEBHOOK_RETRY_DELAYS_MS | no | 30000,120000 | Comma-separated backoff delays (ms) between OTP webhook retry attempts (last value repeats; 3 attempts total). | server |
 | LITESTREAM_ENABLED | no | false | start-server.mjs flag: false = serve without litestream supervision. | — |
 | R2_ACCOUNT_ID | for litestream | — | Cloudflare account ID (R2 endpoint). | Cloudflare dashboard → R2 |

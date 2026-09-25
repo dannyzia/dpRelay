@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { createRequire } from "node:module";
+import swagger from "@fastify/swagger";
+import swaggerUi from "@fastify/swagger-ui";
 import { loadConfig } from "./config.js";
 import { openDb, type Db } from "./db.js";
 import authService from "./services/auth.js";
@@ -58,6 +60,40 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   // Expose for route handlers and tests without module-level singletons
   app.decorate("db", db);
   app.decorate("config", config);
+
+  // OpenAPI (M3 tail, ISSUE-23) registers an fp-wrapped onRoute hook. It
+  // captures routes from every ROUTE PLUGIN queued after it; /health and
+  // /healthz are added synchronously on the root instance before plugins
+  // load, so they stay out of the spec (ops probes, not API surface). Spec:
+  // Swagger UI at /docs, raw JSON at /docs/json; the generated spec is
+  // committed to docs/Plan/27-OPENAPI-SPEC.json and a unit test fails when
+  // routes drift from the committed file so the docs cannot rot silently.
+  app.register(swagger, {
+    openapi: {
+      info: {
+        title: "dP Relay v5 API",
+        description:
+          "dP Relay v5 (Modification 6 — Firebase exit): device plane, OTP plane, " +
+          "billing/credits, bulk campaigns, contact groups, templates, and the " +
+          "operator admin plane. Webhook deliveries are signed with " +
+          "X-DP-Signature (hex HMAC-SHA256 of the raw body).",
+        version: require("../package.json").version as string,
+      },
+      tags: [
+        { name: "health", description: "Liveness and deployment verification" },
+        { name: "auth", description: "User JWT register/login/refresh" },
+        { name: "device", description: "Gateway phone plane (enroll, heartbeat, outstanding, results)" },
+        { name: "otp", description: "OTP sessions (send/verify/status) — app credentials" },
+        { name: "apps", description: "App provisioning (operator Bearer)" },
+        { name: "billing", description: "Credit packages, transactions, balances" },
+        { name: "bulk", description: "Bulk SMS campaigns" },
+        { name: "contact-groups", description: "Per-app contact groups" },
+        { name: "message-templates", description: "Per-app message templates" },
+        { name: "admin", description: "Operator-gated management plane (OPERATOR_SECRET)" },
+      ],
+    },
+  });
+  app.register(swaggerUi, { routePrefix: "/docs" });
 
   app.get("/health", async () => {
     // DB ping: proves migrations ran and the file is writable this boot
