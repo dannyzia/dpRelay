@@ -4,7 +4,9 @@
  * secret generation), list, revoke/unrevoke, rotate the webhook secret, and
  * update the webhook URL. Also exposes the global SMS kill switch
  * (settings.kill_switch) so the pause lever behind OTP sends is reachable
- * without DB access.
+ * without DB access, plus the operator-facing aggregate metrics, the
+ * cross-app campaign oversight listing, and the per-app credentials-status
+ * report (M4 pass 3 deferred items).
  *
  * Auth model (single choke point per plan §5): every route gates via
  * requireOperator (OPERATOR_SECRET) — the same guard as admin billing. These
@@ -73,6 +75,21 @@ function parseWebhookUrl(reply: FastifyReply, raw: unknown): string | null | und
     return null;
   }
   return parsed.toString();
+}
+
+/** Campaign-oversight row (operator listing — joined with apps for the public appId). */
+interface OversightRow {
+  id: string;
+  app_id: string;
+  app_public_id: string;
+  name: string;
+  status: string;
+  total_recipients: number;
+  sent_count: number;
+  failed_count: number;
+  created_at: number;
+  started_at: number | null;
+  completed_at: number | null;
 }
 
 const adminAppRoutes: FastifyPluginAsync = async (app) => {
@@ -278,6 +295,157 @@ const adminAppRoutes: FastifyPluginAsync = async (app) => {
     if (webhookUrl === null || webhookUrl === undefined) return;
     db.prepare("UPDATE apps SET webhook_url = ? WHERE id = ?").run(webhookUrl, appRowId);
     return { ok: true, appId: row.app_id, webhookUrl };
+  });
+
+  /**
+   * Credentials-status report (M4 pass 3 deferred item): whether an app's
+   * credentials were ever issued and what state they are in now. Apps rows are
+   * only created when credentials are minted (operator provisioning, the
+   * provisioning route, or the v4 import), so a row's existence IS the answer
+   * to "were credentials ever issued" — there is no separate issuance flag to
+   * track. Pure read: never touches the row (the dprelay-prod orphaned
+   * credential-burn row stays exactly as documented).
+   */
+  app.get("/v5/admin/apps/:id/credentials-status", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const appRowId = asString(params.id, 64);
+    if (appRowId === null) return fail(reply, 400, "invalid_app_id", "app id is required");
+    const row = loadApp(appRowId);
+    if (!row) return fail(reply, 404, "admin_app_not_found", "App not found");
+    const rotated = (
+      db.prepare("SELECT webhook_rotated_at FROM apps WHERE id = ?").get(appRowId) as
+        | { webhook_rotated_at: number | null }
+        | undefined
+    )?.webhook_rotated_at ?? null;
+    return {
+      ok: true,
+      appId: row.app_id,
+      credentialsIssued: true,
+      revoked: row.revoked_at !== null,
+      revokedAt: row.revoked_at,
+      webhookConfigured: row.webhook_url !== null,
+      webhookRotatedAt: rotated,
+      createdAt: row.created_at,
+    };
+  });
+
+  /**
+   * Aggregate metrics (M4 pass 3 deferred item): one operator-facing snapshot
+   * across the planes an operator has levers for — apps, users/devices, OTP
+   * sessions, bulk campaigns, billing, and webhook delivery health.
+   * counts-style COUNT(*) queries (no table scans into JS).
+   */
+  app.get("/v5/admin/metrics", { preHandler: [app.requireOperator] }, async () => {
+    const count = (sql: string): number => (db.prepare(sql).get() as { n: number }).n;
+    const now = Math.floor(Date.now() / 1000);
+    const dayAgo = now - 86_400;
+    return {
+      ok: true,
+      generatedAt: now,
+      apps: {
+        total: count("SELECT COUNT(*) AS n FROM apps"),
+        revoked: count("SELECT COUNT(*) AS n FROM apps WHERE revoked_at IS NOT NULL"),
+      },
+      users: {
+        total: count("SELECT COUNT(*) AS n FROM users"),
+        devices: count("SELECT COUNT(*) AS n FROM devices"),
+      },
+      otp: {
+        sessionsTotal: count("SELECT COUNT(*) AS n FROM otp_sessions"),
+        sessionsPending: count("SELECT COUNT(*) AS n FROM otp_sessions WHERE status = 'pending'"),
+        sessionsVerified: count("SELECT COUNT(*) AS n FROM otp_sessions WHERE status = 'verified'"),
+        sessionsLast24h: count(`SELECT COUNT(*) AS n FROM otp_sessions WHERE created_at >= ${dayAgo}`),
+      },
+      bulk: {
+        campaignsTotal: count("SELECT COUNT(*) AS n FROM bulk_campaigns"),
+        campaignsActive: count("SELECT COUNT(*) AS n FROM bulk_campaigns WHERE status IN ('queued', 'sending', 'paused')"),
+        recipientsSent: count("SELECT COUNT(*) AS n FROM bulk_recipients WHERE status = 'sent'"),
+        recipientsFailed: count("SELECT COUNT(*) AS n FROM bulk_recipients WHERE status = 'failed'"),
+        recipientsQueued: count("SELECT COUNT(*) AS n FROM bulk_recipients WHERE status IN ('pending', 'queued')"),
+      },
+      billing: {
+        transactionsPending: count("SELECT COUNT(*) AS n FROM credit_transactions WHERE status = 'pending'"),
+        transactionsApproved: count("SELECT COUNT(*) AS n FROM credit_transactions WHERE status = 'approved'"),
+        transactionsRejected: count("SELECT COUNT(*) AS n FROM credit_transactions WHERE status = 'rejected'"),
+        creditsRows: count("SELECT COUNT(*) AS n FROM app_credits"),
+      },
+      webhooks: {
+        deliveriesLast24h: count(`SELECT COUNT(*) AS n FROM webhook_deliveries WHERE created_at >= ${dayAgo}`),
+        deliveredLast24h: count(`SELECT COUNT(*) AS n FROM webhook_deliveries WHERE created_at >= ${dayAgo} AND status = 'delivered'`),
+        failedLast24h: count(`SELECT COUNT(*) AS n FROM webhook_deliveries WHERE created_at >= ${dayAgo} AND status = 'failed'`),
+      },
+    };
+  });
+
+  /**
+   * Campaign oversight listing (M4 pass 3 deferred item): every campaign
+   * across ALL apps, newest first — the operator counterpart to the per-app
+   * GET /v5/bulk/campaigns (which scopes to the calling app). Same keyset
+   * cursor contract; optional status filter, same enum as the app plane.
+   */
+  app.get("/v5/admin/campaigns", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const query = asRecord(request.query) ?? {};
+    const statusRaw = query.status;
+    const status =
+      statusRaw === "queued" || statusRaw === "sending" || statusRaw === "paused" ||
+      statusRaw === "completed" || statusRaw === "cancelled"
+        ? statusRaw
+        : null;
+    if (statusRaw !== undefined && status === null) {
+      return fail(reply, 400, "invalid_status", "status must be one of queued, sending, paused, completed, cancelled");
+    }
+    const limitRaw = query.limit;
+    const limitNum =
+      typeof limitRaw === "number"
+        ? limitRaw
+        : typeof limitRaw === "string" && /^\d+$/.test(limitRaw)
+          ? Number.parseInt(limitRaw, 10)
+          : NaN;
+    const limit = Number.isInteger(limitNum) && limitNum >= 1 ? Math.min(limitNum, LIST_MAX) : LIST_DEFAULT;
+    const cursorRaw = query.cursor;
+    let cursorAt: number | null = null;
+    let cursorId: string | null = null;
+    if (typeof cursorRaw === "string") {
+      const sep = cursorRaw.indexOf(":");
+      const at = sep > 0 ? Number.parseInt(cursorRaw.slice(0, sep), 10) : NaN;
+      const id = sep > 0 ? cursorRaw.slice(sep + 1) : "";
+      if (Number.isInteger(at) && at >= 0 && id.length > 0) {
+        cursorAt = at;
+        cursorId = id;
+      }
+    }
+
+    const rows = db
+      .prepare(
+        "SELECT c.id, c.app_id, c.name, c.status, c.total_recipients, c.sent_count, c.failed_count, " +
+          "c.created_at, c.started_at, c.completed_at, a.app_id AS app_public_id " +
+          "FROM bulk_campaigns c JOIN apps a ON a.id = c.app_id " +
+          "WHERE (? IS NULL OR c.status = ?) " +
+          "AND (? IS NULL OR c.created_at < ? OR (c.created_at = ? AND c.id > ?)) " +
+          "ORDER BY c.created_at DESC, c.id ASC LIMIT ?",
+      )
+      .all(status, status, cursorAt, cursorAt, cursorAt, cursorId, limit + 1) as OversightRow[];
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      ok: true,
+      campaigns: page.map((row) => ({
+        campaignId: row.id,
+        appId: row.app_public_id,
+        name: row.name,
+        status: row.status,
+        totalRecipients: row.total_recipients,
+        sentCount: row.sent_count,
+        failedCount: row.failed_count,
+        queuedCount: Math.max(0, row.total_recipients - row.sent_count - row.failed_count),
+        createdAt: row.created_at,
+        startedAt: row.started_at,
+        completedAt: row.completed_at,
+      })),
+      nextCursor: hasMore
+        ? `${page[page.length - 1]?.created_at ?? 0}:${page[page.length - 1]?.id ?? ""}`
+        : null,
+    };
   });
 
   /**

@@ -208,6 +208,81 @@ const appProvisioningRoutes: FastifyPluginAsync = async (app) => {
       webhookSecret,
     });
   });
+
+  /**
+   * Self-revoke (M4 pass 3 deferred item, fable5-v2 queue): an app holder
+   * kills its OWN credentials. Gates via the provisioning Bearer secret —
+   * the same operator choke point as /v5/apps/register, NOT requireApp (a
+   * compromised holder could otherwise revoke non-revoked state asymmetrically
+   * and requireApp dies once revoked, making the call non-repeatable) — then
+   * identifies the target app by its live X-App-Id/X-App-Secret credentials.
+   *
+   * requireApp rejects every subsequent app-plane request with 401 app_revoked
+   * (middleware.ts), so revocation is effective immediately across OTP,
+   * billing, campaigns, groups, and templates. No un-revoke exists on this
+   * plane by design: restoration is an explicit operator action
+   * (POST /v5/admin/apps/:id/unrevoke), so a leaked secret cannot silently
+   * re-activate itself. The admin-plane revoke (internal id addressable)
+   * remains the operator's variant; this route is the holder's variant.
+   */
+  app.post("/v5/apps/revoke", async (request, reply) => {
+    const verdict = provisionRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many provisioning attempts", code: "rate_limited" });
+    }
+
+    const expected = app.config.appProvisioningSecret;
+    if (expected === "") {
+      return reply
+        .code(403)
+        .send({ ok: false, error: "App provisioning is disabled", code: "provisioning_disabled" });
+    }
+
+    const authHeader = request.headers.authorization;
+    const provided = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
+    // Constant-time even when the header is missing (register parity).
+    if (provided === "" || !constantTimeEquals(provided, expected)) {
+      return reply
+        .code(401)
+        .send({ ok: false, error: "Invalid provisioning secret", code: "invalid_provisioning_secret" });
+    }
+
+    // The app identifies ITSELF with its live credentials. Unknown appId and
+    // secret mismatch share one envelope so probing appIds reveals nothing.
+    const appIdHeader = request.headers["x-app-id"];
+    const appSecretHeader = request.headers["x-app-secret"];
+    if (
+      typeof appIdHeader !== "string" ||
+      appIdHeader.length === 0 ||
+      typeof appSecretHeader !== "string" ||
+      appSecretHeader.length === 0
+    ) {
+      return reply
+        .code(401)
+        .send({ ok: false, error: "X-App-Id and X-App-Secret headers required", code: "missing_app_credentials" });
+    }
+    const row = app.db
+      .prepare("SELECT id, app_id, app_secret_hash, revoked_at FROM apps WHERE app_id = ?")
+      .get(appIdHeader) as
+      | { id: string; app_id: string; app_secret_hash: string; revoked_at: number | null }
+      | undefined;
+    if (!row || !constantTimeEquals(row.app_secret_hash, app.sha256Hex(appSecretHeader))) {
+      return reply
+        .code(401)
+        .send({ ok: false, error: "Invalid app credentials", code: "invalid_app_credentials" });
+    }
+    if (row.revoked_at !== null) {
+      return reply
+        .code(409)
+        .send({ ok: false, error: "App is already revoked", code: "already_revoked" });
+    }
+    app.db.prepare("UPDATE apps SET revoked_at = unixepoch() WHERE id = ?").run(row.id);
+    app.log.info({ appId: row.app_id }, "app self-revoked via apps plane");
+    return { ok: true, appId: row.app_id, revokedAt: Math.floor(Date.now() / 1000) };
+  });
 };
 
 export default appProvisioningRoutes;
