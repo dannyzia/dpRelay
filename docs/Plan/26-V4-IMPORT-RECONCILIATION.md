@@ -78,17 +78,28 @@ Deterministic seeds mean re-runs against the same export reproduce identical
 rows; the apps checksum covers secret-hash columns, so it pins THIS run's
 minted secrets (any re-mint changes it — expected and documented):
 
-| Table (ordered by PK / unique key) | Rows | sha256 (first 16 hex) |
+| Table (ordering per erratum below) | Rows | sha256 (first 16 hex) |
 |---|---|---|
-| packages | 12 | `69ca080d97d3f45a` |
-| apps (all columns except raw `webhook_secret`) | 11 | `edbf6ef46fbcb7ec` |
-| credit_transactions | 3 | `711e6a259d324f79` |
-| app_credits | 3 | `d6fcdadec906bc59` |
+| packages (ordered by `package_code`) | 12 | `69ca080d97d3f45a` |
+| apps (PK `id`, all columns except raw `webhook_secret`) | 11 | `63994018d4f14179` |
+| credit_transactions (PK `id`) | 3 | `711e6a259d324f79` |
+| app_credits (PK `app_id`) | 3 | `d6fcdadec906bc59` |
 
-Checksum method: `sha256(JSON.stringify(rows_ordered_by_key))` via better-sqlite3
-`SELECT *` (apps excludes only the raw signing-secret column, which is
-re-minted per run by design). Full rows stay in gitignored staging — this
-report carries counts and hashes only.
+Checksum method: `sha256(JSON.stringify(rows_ordered_as_listed))` via
+better-sqlite3 `SELECT *` (apps excludes only the raw signing-secret column,
+which is re-minted per run by design). Full rows stay in gitignored staging —
+this report carries counts and hashes only.
+
+**Review erratum (2026-09-25, ISSUE-22 review pass):** the review independently
+re-derived every checksum from a fresh `--apply`: packages, credit_transactions,
+and app_credits reproduce the originally published values exactly; packages'
+ordering was the script's map order (`package_code`), not PK as originally
+stated — corrected above. The original apps value (`edbf6ef46fbcb7ec`) pinned
+the original run's minted secret hashes; a review-time verification re-apply
+displaced the original return-once secrets file, so the work-dir pair was
+regenerated self-consistently (fresh apply, integrity ok, 0 FK violations,
+11/11 secrets verified against their hashes) and the apps value re-pinned to
+the current run above. Counts, sum-check, and every §4 delta are unaffected.
 
 ## 6. Verified test app (reconciliation queries against production)
 
