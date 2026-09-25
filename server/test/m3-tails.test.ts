@@ -113,6 +113,56 @@ describe("OpenAPI /docs", () => {
   });
 });
 
+describe("CORS (dashboard origin allow-list)", () => {
+  const DASHBOARD_ORIGIN = "https://dprelay-dashboard.pages.dev";
+
+  it("answers a browser preflight from an allowed origin", async () => {
+    app.close();
+    app = makeApp({ CORS_ALLOWED_ORIGINS: DASHBOARD_ORIGIN });
+    const res = await app.inject({
+      method: "OPTIONS",
+      url: "/v5/auth/login",
+      headers: {
+        Origin: DASHBOARD_ORIGIN,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type",
+      },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(res.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+  });
+
+  it("reflects only allow-listed origins and blocks strangers", async () => {
+    app.close();
+    app = makeApp({ CORS_ALLOWED_ORIGINS: DASHBOARD_ORIGIN });
+    const good = await app.inject({
+      method: "POST",
+      url: "/v5/auth/login",
+      headers: { Origin: DASHBOARD_ORIGIN, "Content-Type": "application/json" },
+      payload: { email: "x@y.z", password: "password123" },
+    });
+    expect(good.headers["access-control-allow-origin"]).toBe(DASHBOARD_ORIGIN);
+
+    const stranger = await app.inject({
+      method: "POST",
+      url: "/v5/auth/login",
+      headers: { Origin: "https://evil.example", "Content-Type": "application/json" },
+      payload: { email: "x@y.z", password: "password123" },
+    });
+    expect(stranger.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("stays fail-closed with no CORS_ALLOWED_ORIGINS configured", async () => {
+    const res = await app.inject({
+      method: "OPTIONS",
+      url: "/v5/auth/login",
+      headers: { Origin: DASHBOARD_ORIGIN, "Access-Control-Request-Method": "POST" },
+    });
+    expect(res.statusCode).toBe(404); // no preflight handler registered
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});
+
 describe("per-phone OTP resend cooldown", () => {
   it("allows the first send, 429s an immediate resend, then allows after the window", async () => {
     const first = await app.inject({

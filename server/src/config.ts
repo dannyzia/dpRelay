@@ -100,6 +100,13 @@ export interface Config {
   bulkPostSendCooldownSec: number;
   /** Minimum seconds between OTP sends to the SAME phone per app (resend cooldown). */
   otpResendCooldownSec: number;
+  /**
+   * Comma-separated list of dashboard origins allowed by CORS. Empty = no
+   * cross-origin browser access (API-only deployments, curl/mobile clients
+   * are unaffected by CORS either way). Example:
+   * https://dprelay-dashboard.pages.dev,http://localhost:5173
+   */
+  corsAllowedOrigins: string;
   /** How often the aggregate-stats snapshot refreshes (node-cron pattern). */
   statsCron: string;
 }
@@ -233,6 +240,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       60,
       true, // 0 is a documented value: cooldown disabled
     ),
+    corsAllowedOrigins: env.CORS_ALLOWED_ORIGINS ?? "",
     statsCron: env.STATS_CRON ?? "*/15 * * * *",
   };
 }

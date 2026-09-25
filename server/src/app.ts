@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { createRequire } from "node:module";
+import cors from "@fastify/cors";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { loadConfig } from "./config.js";
@@ -94,6 +95,28 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
     },
   });
   app.register(swaggerUi, { routePrefix: "/docs" });
+
+  // CORS (dashboard deploy target, ISSUE-24): the v5 dashboard ships as a
+  // browser SPA on Cloudflare Pages — a different origin from the API — so
+  // browser calls need CORS. Allow-list model: CORS_ALLOWED_ORIGINS is a
+  // comma-separated origin list; UNSET means no cross-origin browser access
+  // (curl/native/mobile clients are unaffected by CORS either way, so the
+  // default stays fail-closed). Credentials are not used (the SPA sends
+  // explicit Bearer/X-App-* headers, not cookies), so origin reflection via
+  // the allow-list is safe. Registered BEFORE the route plugins so the
+  // preflight handler covers every route incl. /docs and /health.
+  const allowedOrigins = config.corsAllowedOrigins
+    .split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+  if (allowedOrigins.length > 0) {
+    app.register(cors, {
+      origin: allowedOrigins,
+      methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "X-App-Id", "X-App-Secret"],
+      maxAge: 86400,
+    });
+  }
 
   app.get("/health", async () => {
     // DB ping: proves migrations ran and the file is writable this boot
