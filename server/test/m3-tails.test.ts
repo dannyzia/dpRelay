@@ -113,6 +113,17 @@ describe("OpenAPI /docs", () => {
   });
 });
 
+describe("exhaustion damping default", () => {
+  it("defaults to 900s so an unconfigured deployment caps re-alerts at 4/hour (handoff default)", async () => {
+    app.close();
+    app = makeApp();
+    expect(app.config.webhookExhaustionDampingSec).toBe(900);
+    await app.close();
+    app = makeApp({ WEBHOOK_EXHAUSTION_DAMPING_SEC: "900" }); // env override respected
+    expect(app.config.webhookExhaustionDampingSec).toBe(900);
+  });
+});
+
 describe("CORS (dashboard origin allow-list)", () => {
   const DASHBOARD_ORIGIN = "https://dprelay-dashboard.pages.dev";
 
@@ -321,7 +332,7 @@ describe("webhook exhaustion alert damping", () => {
     app = makeApp({
       WEBHOOK_RETRY_DELAYS_MS: "10,10",
       WEBHOOK_EXHAUSTION_ALERT_THRESHOLD: "2",
-      WEBHOOK_EXHAUSTION_DAMPING_SEC: "3600",
+      WEBHOOK_EXHAUSTION_DAMPING_SEC: "3600", // explicitly non-default window
     });
     seedApp(app);
     seedOtpPending(app, `http://127.0.0.1:${deadPort}/otp-status`);
@@ -394,7 +405,7 @@ describe("webhook exhaustion alert damping", () => {
       app = makeApp({
         WEBHOOK_RETRY_DELAYS_MS: "10,10",
         WEBHOOK_EXHAUSTION_ALERT_THRESHOLD: "1",
-        WEBHOOK_EXHAUSTION_DAMPING_SEC: "3600",
+        WEBHOOK_EXHAUSTION_DAMPING_SEC: "3600", // explicitly non-default window
       });
       seedApp(app);
       seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);

@@ -164,9 +164,8 @@ const exhaustionCounters = new WeakMap<FastifyInstance, Map<string, number>>();
  * instance. When a receiver stays dead, the exhaustion alert re-fires on every
  * subsequent exhausted dispatch — correct as an at-least-once alarm, but it
  * can flood the ops channel at one alert per dispatch cycle. The damper caps
- * re-alerts at WEBHOOK_EXHAUSTION_DAMPING_SEC per app (default 3600 s ⇒ at
- * most 4/hour at the default 900 s threshold cadence... the cap is independent
- * of the threshold; the operator tunes the window, not a per-hour count).
+ * re-alerts at WEBHOOK_EXHAUSTION_DAMPING_SEC per app (default 900 s ⇒ up to
+ * 4 re-alerts per hour per dead receiver — the handoff's stated default).
  * In-memory like the counters: a restart re-arms alerting, the safe direction.
  */
 const exhaustionAlertTimestamps = new WeakMap<FastifyInstance, Map<string, number>>();

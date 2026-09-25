@@ -69,8 +69,9 @@ export interface Config {
   webhookExhaustionAlertThreshold: number;
   /**
    * Minimum seconds between webhook-exhaustion alerts for the SAME app (dead-
-   * receiver damping). Default 3600 ⇒ at most one re-alert per hour per dead
-   * receiver while it stays dead; any successful delivery re-arms instantly.
+   * receiver damping). Default 900 ⇒ at most 4 re-alerts per hour per dead
+   * receiver (the handoff's stated default) while it stays dead; any
+   * successful delivery re-arms instantly.
    */
   webhookExhaustionDampingSec: number;
   /** Shared secret for operator/admin routes (requireOperator). Empty = admin routes disabled. */
@@ -217,7 +218,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     webhookExhaustionDampingSec: parsePositiveInt(
       env.WEBHOOK_EXHAUSTION_DAMPING_SEC,
       "WEBHOOK_EXHAUSTION_DAMPING_SEC",
-      3600,
+      900, // handoff default: caps re-alerts at 4/hour per dead receiver
       true, // 0 is a documented value: damping disabled
     ),
     operatorSecret: env.OPERATOR_SECRET ?? "",
