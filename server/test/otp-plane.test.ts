@@ -106,7 +106,7 @@ describe("POST /v5/otp/send", () => {
 
   it("429s past the per-phone rate limit and supersede keeps one pending session", async () => {
     app.close();
-    app = makeApp(); // fresh app + fresh rate state
+    app = makeApp({ OTP_RESEND_COOLDOWN_SEC: "0" }); // fresh app; cooldown off so the session cap is what bites
     seedApp(app);
     // apps table rate limit is 3 per phone per hour
     for (let i = 0; i < 3; i++) {

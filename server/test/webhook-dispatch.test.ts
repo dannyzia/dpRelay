@@ -601,6 +601,10 @@ describe("webhook exhaustion alerts", () => {
     app = makeApp({
       WEBHOOK_RETRY_DELAYS_MS: "10,10",
       WEBHOOK_EXHAUSTION_ALERT_THRESHOLD: "2",
+      // Damping off: this suite pins the THRESHOLD semantics (alert on every
+      // threshold-crossing exhaustion). The damping window itself is tested in
+      // m3-tails.test.ts.
+      WEBHOOK_EXHAUSTION_DAMPING_SEC: "0",
       ALERT_WEBHOOK_URL: `http://127.0.0.1:${port}/nowhere`,
     });
     seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);

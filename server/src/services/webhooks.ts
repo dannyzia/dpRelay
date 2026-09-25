@@ -160,6 +160,18 @@ function postWebhook(
 const exhaustionCounters = new WeakMap<FastifyInstance, Map<string, number>>();
 
 /**
+ * Alert damping (M3 tail, ISSUE-23): last-alert timestamp per app id, per app
+ * instance. When a receiver stays dead, the exhaustion alert re-fires on every
+ * subsequent exhausted dispatch — correct as an at-least-once alarm, but it
+ * can flood the ops channel at one alert per dispatch cycle. The damper caps
+ * re-alerts at WEBHOOK_EXHAUSTION_DAMPING_SEC per app (default 3600 s ⇒ at
+ * most 4/hour at the default 900 s threshold cadence... the cap is independent
+ * of the threshold; the operator tunes the window, not a per-hour count).
+ * In-memory like the counters: a restart re-arms alerting, the safe direction.
+ */
+const exhaustionAlertTimestamps = new WeakMap<FastifyInstance, Map<string, number>>();
+
+/**
  * Runs once per exhausted dispatch: bumps the app's consecutive-exhaustion
  * count and fires the ops alert channel (log + ALERT_WEBHOOK_URL) when the
  * threshold is crossed. Alerting is best-effort and awaited like dispatch
@@ -180,9 +192,29 @@ async function onDispatchExhausted(app: FastifyInstance, subject: DispatchSubjec
     return;
   }
 
-  // Re-alert on every threshold-and-beyond exhaustion: a dead receiver keeps
-  // ringing while it stays dead. Any successful delivery resets the counter
-  // (re-arms the alert for the next outage episode).
+  // Re-alert on threshold-and-beyond exhaustions, DAMPED: a dead receiver
+  // keeps ringing, but no more than once per damping window per app (the ops
+  // channel must not flood at one alert per dispatch cycle). Any successful
+  // delivery resets BOTH the counter and the damper (re-arms everything for
+  // the next outage episode).
+  const nowMs = Date.now();
+  const dampingMs = app.config.webhookExhaustionDampingSec * 1000;
+  let alertStamps = exhaustionAlertTimestamps.get(app);
+  if (!alertStamps) {
+    alertStamps = new Map();
+    exhaustionAlertTimestamps.set(app, alertStamps);
+  }
+  const lastAlertAt = alertStamps.get(subject.appRowId) ?? 0;
+  if (nowMs - lastAlertAt < dampingMs) {
+    // warn-level: it names a suppressed alert on the shared stream — the same
+    // level the alert itself uses, so log-based alerting sees both equally.
+    app.log.warn(
+      { appId: subject.appId, consecutiveFailures: consecutive },
+      "webhook_exhaustion_alert_damped",
+    );
+    return;
+  }
+  alertStamps.set(subject.appRowId, nowMs);
   try {
     await dispatchAlert(app.log, app.config, {
       type: "webhook_exhaustion",
@@ -265,8 +297,10 @@ async function deliverSigned(
         { ...logContext, attempt, responseCode },
         "webhook delivery attempt succeeded",
       );
-      // Any success re-arms the exhaustion alert for the next outage episode.
+      // Any success re-arms the exhaustion alert for the next outage episode:
+      // both the consecutive-failure counter and the alert damper reset.
       exhaustionCounters.get(app)?.delete(subject.appRowId);
+      exhaustionAlertTimestamps.get(app)?.delete(subject.appRowId);
       break;
     }
     // Structured failure log per attempt: the webhook_deliveries row is the
