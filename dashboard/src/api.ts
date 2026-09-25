@@ -134,7 +134,13 @@ export async function request<T>(path: string, init: RequestInit): Promise<T> {
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
+      // Content-Type only when a body exists: bodyless POSTs (pause/resume/
+      // cancel) declaring application/json hit Fastify's empty-JSON-body
+      // rejection (400) — caught by the lifecycle smoke test.
+      headers: {
+        ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(init.headers ?? {}),
+      },
     });
   } catch {
     throw new ApiError(0, "network_error", "Network error — the API is unreachable");
