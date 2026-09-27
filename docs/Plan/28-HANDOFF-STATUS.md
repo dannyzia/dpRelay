@@ -49,6 +49,8 @@ Workstream 6 starts **only** after **all** of the following — in order:
 
 ## Owner action items (outside agent gates)
 
+> Execution-ordered walkthrough with verifications: **`docs/Plan/29-OWNER-CHECKLIST.md`** (ISSUE-31) — the items below are the record; the checklist is the procedure.
+
 | # | Action | Notes |
 |---|---|---|
 | 1 | Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` on Render | Then trigger a deploy (env PUTs alone do **not** deploy — use `server/scripts/set-alert-channel.cjs`) and force one real alert (set-stale drill) as delivery proof. Never placeholders. Steps + proof: CUTOVER-CHECKLIST §1.5(a). |
