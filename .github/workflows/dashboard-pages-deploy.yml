@@ -29,6 +29,11 @@ concurrency:
 jobs:
   deploy-dashboard:
     runs-on: ubuntu-latest
+    # Job-level env is the one place a secrets-derived predicate belongs:
+    # `secrets` in step-level `if:` is not supported by the workflow parser
+    # (run 36322939290 failed in 0s on exactly that). Steps gate on this.
+    env:
+      HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
     defaults:
       run:
         working-directory: dashboard
@@ -56,7 +61,7 @@ jobs:
         # logged in" and would keep master red for an owner-side reason. Once
         # the token exists, every failure in this step is a real one and stays
         # page-worthy.
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        if: env.HAS_CLOUDFLARE == 'true'
         uses: cloudflare/wrangler-action@v3
         id: pages
         # Step-level env so $CLOUDFLARE_PAGES_PROJECT expands inside the
@@ -76,12 +81,12 @@ jobs:
       - name: Report deployment URL
         # wrangler-action exposes the deployment URL of this upload. Block
         # scalar: the echoed text contains ": ", illegal in a plain scalar.
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        if: env.HAS_CLOUDFLARE == 'true'
         run: |
           echo "Pages deployment URL: ${{ steps.pages.outputs.url }}"
 
       - name: Announce skipped publish (secrets not set)
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN == '' }}
+        if: env.HAS_CLOUDFLARE != 'true'
         run: |
           echo "::warning::CLOUDFLARE_API_TOKEN (and/or CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_PAGES_PROJECT) not set in repo secrets — skipping Pages publish + smoke. Build still ran as SPA validation."
 
@@ -96,7 +101,7 @@ jobs:
         # vacuously — it degrades to a warning plus the alias check.
         # Same skip condition as publish: smoking the PREVIOUS deployment
         # would be misleading.
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        if: env.HAS_CLOUDFLARE == 'true'
         env:
           CLOUDFLARE_PAGES_PROJECT: ${{ secrets.CLOUDFLARE_PAGES_PROJECT }}
         run: |
