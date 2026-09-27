@@ -1,10 +1,24 @@
 /**
- * One-off Render env writer for the ALERT_WEBHOOK_URL end-to-end proof.
+ * One-off Render env writer for the alert-channel end-to-end proofs.
  * Modes:
  *   set     — GET env, set ALERT_WEBHOOK_URL (+ generated ALERT_WEBHOOK_SECRET,
  *             + WATCHDOG_STALE_SEC=60 temporarily to force one real alert), PUT back.
+ *   set-stale <sec> — temporarily set WATCHDOG_STALE_SEC (forces the stale alert).
  *   revert  — GET env, drop the temporary WATCHDOG_STALE_SEC override, PUT back.
+ *   deploy  — POST /deploys (env PUTs alone do NOT deploy).
  *   wait-live — poll the latest Render deploy until status=live (or timeout).
+ *   telegram <botToken> <chatId> — ONE-COMMAND Telegram setup + proof:
+ *       1) verify the bot+chat pair against the real Bot API (getMe, then a
+ *          probe sendMessage — the exact dispatchAlert call path) BEFORE any
+ *          Render write, so bad creds never deploy;
+ *       2) set TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (preserving all other
+ *          vars) + temporary WATCHDOG_STALE_SEC=60, PUT back;
+ *       3) trigger the deploy and wait for live — the stale alert then lands
+ *          in the verified chat within ~10 min. Run `revert` afterwards.
+ *     Arguments live in shell history (owner-local tradeoff, documented);
+ *     token/chatId are never echoed, and only the bot's public @username is
+ *     printed. TELEGRAM_API_BASE overrides the Bot API origin and DRY_RUN=1
+ *     skips all Render writes — for local verification of this script only.
  * Secrets are never printed — only key names and status codes.
  */
 const { readFileSync } = require('node:fs');
@@ -117,8 +131,72 @@ const mode = process.argv[2];
       await new Promise((r) => setTimeout(r, 15000));
     }
     throw new Error('deploy did not go live within 9 minutes');
+  } else if (mode === 'telegram') {
+    const botToken = process.argv[3];
+    const chatId = process.argv[4];
+    if (!botToken || !chatId) {
+      throw new Error('usage: set-alert-channel.cjs telegram <botToken> <chatId>');
+    }
+    // Verify against the REAL Bot API first — dispatchAlert posts to exactly
+    // this endpoint shape, so a green probe means production alerts will land.
+    // TELEGRAM_API_BASE exists solely for local verification of this script.
+    const tgBase = process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
+    const tgRequest = (pathname, payload) =>
+      new Promise((resolve, reject) => {
+        const data = payload ? JSON.stringify(payload) : null;
+        const req = https.request(
+          `${tgBase}${pathname}`,
+          {
+            method: data ? 'POST' : 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+            },
+          },
+          (res) => {
+            let body = '';
+            res.on('data', (c) => (body += c));
+            res.on('end', () => {
+              let parsed = null;
+              try { parsed = body ? JSON.parse(body) : null; } catch { parsed = null; }
+              resolve({ status: res.statusCode, parsed });
+            });
+          },
+        );
+        req.on('error', reject);
+        if (data) req.write(data);
+        req.end();
+      });
+    const me = await tgRequest(`/bot${botToken}/getMe`);
+    if (me.status !== 200 || !me.parsed?.ok) {
+      throw new Error(`bot verification failed (HTTP ${me.status}) — token rejected by the Bot API; nothing written to Render`);
+    }
+    console.log(`bot verified: @${me.parsed.result?.username ?? 'unknown'}`);
+    const probe = await tgRequest(`/bot${botToken}/sendMessage`, {
+      chat_id: chatId,
+      text: 'dP Relay alert-channel verification — if you can read this, the ops channel works.',
+    });
+    if (probe.status !== 200 || !probe.parsed?.ok) {
+      const why = probe.parsed?.description ? ` — Bot API says: ${probe.parsed.description}` : '';
+      throw new Error(`chat verification failed (HTTP ${probe.status})${why}; nothing written to Render`);
+    }
+    console.log('chat verified: probe message delivered — check the ops group now');
+    if (process.env.DRY_RUN === '1') {
+      console.log('DRY_RUN=1 — skipping Render env write and deploy (verified path only)');
+      return;
+    }
+    const env = await getEnv();
+    env.TELEGRAM_BOT_TOKEN = botToken;
+    env.TELEGRAM_CHAT_ID = chatId;
+    env.WATCHDOG_STALE_SEC = '60'; // temporary: forces one real prod alert for the proof
+    console.log('setting: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, WATCHDOG_STALE_SEC=60 (temporary)');
+    await putEnv(env);
+    const dep = await request('/deploys', 'POST', {});
+    console.log(`POST deploys status: ${dep.status}`);
+    if (dep.status !== 201) throw new Error(`deploy trigger failed: ${JSON.stringify(dep.parsed).slice(0, 300)}`);
+    console.log('deploy triggered — the stale alert should land in the verified chat within ~10 min of live; run `revert` after the proof');
   } else {
-    throw new Error('usage: set-alert-channel.cjs <set <url> | revert | wait-live>');
+    throw new Error('usage: set-alert-channel.cjs <telegram <botToken> <chatId> | set <url> | set-stale <sec> | revert | deploy | wait-live>');
   }
 })().catch((err) => {
   console.error(err.message);
