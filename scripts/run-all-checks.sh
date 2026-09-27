@@ -78,8 +78,14 @@ else
   fail "ktlint"
 fi
 if [ "$NODE_MAJOR_OK" = "1" ]; then
-  echo -n "  ESLint... "
-  (cd functions && npm run lint > /dev/null 2>&1) && pass "ESLint (functions)" || fail "ESLint (functions)"
+  if [ -f functions/package.json ]; then
+    echo -n "  ESLint... "
+    (cd functions && npm run lint > /dev/null 2>&1) && pass "ESLint (functions)" || fail "ESLint (functions)"
+  else
+    # v4 Firebase plane removed at decommission (06980de, owner-approved):
+    # nothing left to lint — an explicit skip, not a pass and not a failure.
+    echo "  SKIP: ESLint (functions) — functions/ plane decommissioned"
+  fi
 fi
 
 # Server (v5 core)
@@ -128,7 +134,12 @@ if [ "$NODE_MAJOR_OK" = "1" ]; then
   echo -n "  Cloud Functions tests... "
   # test:unit = no-emulator scope (index.test.js). Bare `npm test` needs
   # Firebase emulators and cannot pass off-CI (see pr-checks.yml).
-  (cd functions && npm run test:unit > /dev/null 2>&1) && pass "Functions tests (test:unit)" || fail "Functions tests (test:unit)"
+  if [ -f functions/package.json ]; then
+    (cd functions && npm run test:unit > /dev/null 2>&1) && pass "Functions tests (test:unit)" || fail "Functions tests (test:unit)"
+  else
+    # v4 plane decommissioned (06980de): no functions tests exist to run.
+    echo "  SKIP: Functions tests — functions/ plane decommissioned"
+  fi
 fi
 echo -n "  Android unit tests... "
 if [ -n "$JDK17" ] && (cd authenticator-app && ./gradlew test > /dev/null 2>&1); then
