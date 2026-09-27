@@ -51,6 +51,12 @@ jobs:
         run: npm run build
 
       - name: Publish to Cloudflare Pages
+        # Skip (with a loud notice below, never silently) until the owner sets
+        # the Cloudflare secrets — an unset token makes wrangler fail with "Not
+        # logged in" and would keep master red for an owner-side reason. Once
+        # the token exists, every failure in this step is a real one and stays
+        # page-worthy.
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
         uses: cloudflare/wrangler-action@v3
         id: pages
         # Step-level env so $CLOUDFLARE_PAGES_PROJECT expands inside the
@@ -70,5 +76,33 @@ jobs:
       - name: Report deployment URL
         # wrangler-action exposes the deployment URL of this upload. Block
         # scalar: the echoed text contains ": ", illegal in a plain scalar.
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
         run: |
           echo "Pages deployment URL: ${{ steps.pages.outputs.url }}"
+
+      - name: Announce skipped publish (secrets not set)
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN == '' }}
+        run: |
+          echo "::warning::CLOUDFLARE_API_TOKEN (and/or CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_PAGES_PROJECT) not set in repo secrets — skipping Pages publish + smoke. Build still ran as SPA validation."
+
+      - name: Post-deploy smoke (SPA must actually serve)
+        # Upload success ≠ SPA serving — the same invisible-failure class the
+        # server's deploy-status.yml guard exists for (ISSUE-13 lesson).
+        # Verifies the per-deployment URL briefly, then the production alias
+        # with the full retry budget (the new deploy is still propagating to
+        # the alias). scripts/pages-smoke.sh emits ::error:: and exits 1 on
+        # failure so the run goes red, mirroring deploy-status.
+        # A missing wrangler URL (action output contract change) must NOT pass
+        # vacuously — it degrades to a warning plus the alias check.
+        # Same skip condition as publish: smoking the PREVIOUS deployment
+        # would be misleading.
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        env:
+          CLOUDFLARE_PAGES_PROJECT: ${{ secrets.CLOUDFLARE_PAGES_PROJECT }}
+        run: |
+          if [ -n "${{ steps.pages.outputs.url }}" ]; then
+            sh "$GITHUB_WORKSPACE/scripts/pages-smoke.sh" "${{ steps.pages.outputs.url }}" "https://$CLOUDFLARE_PAGES_PROJECT.pages.dev"
+          else
+            echo "::warning::wrangler-action exposed no deployment URL; checking the production alias only"
+            sh "$GITHUB_WORKSPACE/scripts/pages-smoke.sh" "https://$CLOUDFLARE_PAGES_PROJECT.pages.dev"
+          fi
