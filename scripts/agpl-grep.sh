@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PATTERN='com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node'
-DIRS=(server/src server/test client web/src functions authenticator-app/app/src)
+DIRS=(server/src server/test server/scripts client web/src dashboard authenticator-app/app/src)
 
 HITS=$(grep -rInE "$PATTERN" "${DIRS[@]}" 2>/dev/null || true)
 if [ -n "$HITS" ]; then

@@ -62,30 +62,6 @@ jobs:
           fail_ci_if_error: false
           verbose: true
 
-  cloud-function-tests:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: functions
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install Dependencies
-        run: npm ci
-      - name: Run ESLint
-        run: npm run lint
-      - name: Run Tests
-        # test:unit = no-emulator scope (index.test.js). Bare `npm test` needs
-        # Firebase emulators (test/setup.js) and cannot pass on the runner.
-        run: npm run test:unit
-      - name: Upload Coverage
-        uses: codecov/codecov-action@v5
-        with:
-          files: functions/coverage/lcov.info
-          fail_ci_if_error: false
-
   server-tests:
     runs-on: ubuntu-latest
     defaults:
@@ -109,14 +85,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run npm audit
-        working-directory: functions
-        # Advisory only: no audit level (low→critical) passes on master (1 critical,
-        # 8 high, 13 moderate, 2 low; prod tree alone carries highs via firebase-admin).
-        # Hard-gating here blocked every PR while the tree stays unfixed — remediation
-        # (`npm audit fix` on functions/) needs its own pass. Report stays visible.
-        run: npm audit --audit-level=low
-        continue-on-error: true
+      # v4 functions/ plane removed (decommission) — the npm-audit step that
+      # scanned it went with it; remediation is moot post-decommission.
       - name: Run dependency check
         uses: dependency-check/Dependency-Check_Action@main
         with:
