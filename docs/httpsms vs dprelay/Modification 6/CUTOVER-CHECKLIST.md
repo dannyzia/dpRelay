@@ -14,6 +14,13 @@ executing anything; if reality has drifted, fix this section first.
 > *re-verification* step, not a first import. See
 > `docs/Plan/28-HANDOFF-STATUS.md` for the full shipped-state record and the
 > decommission precondition list.
+>
+> **Status refresh 2026-09-27** (ISSUE-26): all five implementation
+> workstreams are now review-verified — Rhizome ISSUE-20 through ISSUE-25 are
+> approved and **done** (W4 M3 tails, W5 dashboard incl. AC5–AC7, and the
+> handoff docs pass included). Remaining before T-0: only the owner-side
+> deploy steps in §1.5, then the gated decommission. Master tip `800d1ed`;
+> production stays 5.3.7-alpha.0 (docs-only merges since #30).
 
 ---
 
@@ -22,13 +29,14 @@ executing anything; if reality has drifted, fix this section first.
 | Fact | Value | How to re-verify |
 |---|---|---|
 | v5 production URL | `https://dprelay-api-hug8.onrender.com` | browser / curl |
-| v5 live version | `5.3.7-alpha.0` (= master `943d580`+docs, deploy **live**; last server merge `0321a97` #30) | `curl -s $BASE/health` |
+| v5 live version | `5.3.7-alpha.0` (server parity at `0321a97` #30; master tip `800d1ed` adds docs-only merges #31/#32; deploy **live**) | `curl -s $BASE/health` |
 | v5 master ↔ prod parity | `version` in `/health` == `server/package.json` on master | one curl + one `git show` |
 | Deploy guard | `deploy-status.yml` active on master pushes (waits for this push's deploy to go `live`, fails after 10 min otherwise) | Actions tab on last merge |
 | v4 state | **Not serving**: `…cloudfunctions.net/health` → HTTP **500**; billing **disabled** (`billingEnabled=false`) | curl + `gcloud billing projects describe` |
 | Android client | `V5_API_ENABLED=true`, `V5_API_BASE_URL=https://dprelay-api-hug8.onrender.com` already compiled into the gateway build; device plane talks `enroll/heartbeat/outstanding/results/payment-sms/fcm-token` | `app/build.gradle` |
 | Render gates | `JWT_SECRET`, `DEVICE_ENROLLMENT_SECRET`, `APP_PROVISIONING_SECRET`, `OPERATOR_SECRET`, `BKASH_PERSONAL_NUMBER`, `FCM_SERVICE_ACCOUNT_JSON`, `BULK_ENABLED`, all R2/Litestream vars **set** | Render API env-vars (names only) |
 | Alert channel | **Telegram-first sink shipped but UNCONFIGURED**: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` absent (owner adds them; never placeholders); `ALERT_WEBHOOK_URL` also unset → alerts log-only today. Damping default 900s ⇒ ≤4 re-alerts/hour per dead receiver. | Render API env-vars (names only) + `/docs/json` |
+| Dashboard | `dashboard/` SPA review-closed (Rhizome ISSUE-24, PRs #29/#32): auth, campaigns, credits, groups, templates, apps, operator screens. **Not deployed yet** — needs §1.5(b) + §1.5(c). `web/` v4 zombie stays untouched until decommission. | Render env-vars (names only) + Cloudflare Pages dashboard |
 
 > ⚠️ **FLAG:** `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` (preferred) and
 > `ALERT_WEBHOOK_URL` (fallback) are unset in production. Until one is set, a
@@ -68,6 +76,65 @@ node server/scripts/download-litestream.mjs   # pulls latest replica from R2
 # (env PUTs alone do NOT deploy — server/scripts/set-alert-channel.cjs) and force
 # one real alert (set-stale drill) to prove delivery. Watchdog cron fires every 5 min.
 ```
+
+### 1.5 Owner-side deploy steps (the only work left before §4)
+
+All three are owner-only actions (Render dashboard / Cloudflare account) — no
+code changes remain on the repo side. To set a var: Render dashboard →
+`dprelay-api-hug8` → Environment → add/replace → Save. **Env changes alone do
+NOT deploy** — trigger a deploy after each batch (Render → Manual Deploy, or
+`POST https://api.render.com/v1/services/srv-dal3bae7bikc73e7k7pg/deploys`
+with the API key), then `curl -s $BASE/health` until the live deploy is
+confirmed (the deploy-status guard only tracks git pushes).
+`server/scripts/set-alert-channel.cjs` automates set-vars + deploy + wait-live
+for the alert channel.
+
+**(a) Telegram alert sink — §7 gap 2 (alerts are log-only until proven):**
+1. Create a bot via @BotFather (note the token); add it to the ops Telegram
+   group; post once in the group and read `getUpdates` to get the numeric
+   chat id.
+2. On Render set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` — real values
+   only, never placeholders; keep them out of git, chat, and logs.
+3. Deploy, then force one real alert (§1.4 set-stale drill; watchdog cron
+   fires every 5 min) and confirm it lands in the Telegram group.
+   Verify: that delivery **is** the proof — until it happens, §1.4 stays
+   open. `ALERT_WEBHOOK_URL`/`ALERT_WEBHOOK_SECRET` stay unset (fallback
+   deliberately unused).
+
+**(b) CORS allow-list — §7 gap 6 (dashboard SPA is browser-blocked until
+set):**
+1. On Render set
+   `CORS_ALLOWED_ORIGINS=https://dprelay-dashboard.pages.dev`
+   (comma-separate extra origins, e.g. a custom domain). Fail-closed:
+   unset = no browser origin is allowed; curl/mobile clients unaffected.
+2. Deploy, then verify preflight:
+   `curl -s -i -X OPTIONS "$BASE/v5/auth/login" -H "Origin:
+   https://dprelay-dashboard.pages.dev" -H "Access-Control-Request-Method:
+   POST"` → expect HTTP **204** with `access-control-allow-origin` echoing the
+   origin. Today (allow-list unset, fail-closed) the same probe returns HTTP
+   **404** with no CORS headers — the 404→204 flip after set + deploy is the
+   proof the dashboard can talk to the API.
+
+**(c) Cloudflare Pages deploy — automated (ISSUE-27, workflow
+`.github/workflows/dashboard-pages-deploy.yml`):**
+1. Set three GitHub Actions secrets (Settings → Secrets and variables →
+   Actions): `CLOUDFLARE_API_TOKEN` (Cloudflare Pages — Edit permission),
+   `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PAGES_PROJECT` (e.g.
+   `dprelay-dashboard`). No Cloudflare Git integration and no manual build
+   config: the workflow builds `dashboard/` (npm ci + tsc + vite) and
+   publishes `dist/` via wrangler on every master push touching it, and the
+   first run creates the Pages project (production deployments mapped to
+   main).
+2. After the first green run, note the final origin (default
+   `https://dprelay-dashboard.pages.dev` or the custom domain). If it
+   differs from the (b) value, update `CORS_ALLOWED_ORIGINS` and redeploy
+   the API — which is why (b) comes first.
+3. Drive the dashboard against production: log in (JWT plane), campaigns
+   list loads; Connect App (app plane) and Operator views unlock with their
+   respective credentials.
+   Verify: the Actions run is green and echoes a Pages deployment URL; SPA
+   loads from Pages; login works; browser Network tab shows CORS-clean
+   responses for every API call.
 
 Gate fails → stop. Fix upstream (deploy chain, backups, alerting) first.
 The deploy-status guard exists precisely because this class of failure was
@@ -168,7 +235,7 @@ a row, and a wrong code is rejected (400-class, attempt counter visible).
 
 | # | Step | Verify | Abort if |
 |---|---|---|---|
-| T-0 | **Re-run the v4 export** → `staging/v4-export-cutover-<date>/` (9 sources, sha256 manifest, contents never printed) and re-reconcile against the **clean local baseline** (`docs/Plan/26-V4-IMPORT-RECONCILIATION.md`: 56 → 29/8/4, every delta rule-based, checksums pinned). Firebase is still readable; the frozen `staging/v4-export-final-2026-09-19/` baseline and its rules stay untouched. | manifest 9/9 hashes; fresh-run reconciliation reproduces §2/§3/§4 of the report | any source unreadable; any NEW unexplained delta vs the baseline rules |
+| T-0 | **Re-run the v4 export** → `staging/v4-export-cutover-<date>/` (9 sources, sha256 manifest, contents never printed) and re-reconcile against the **clean local baseline** (`docs/Plan/26-V4-IMPORT-RECONCILIATION.md`: 56 → 29/8/4, every delta rule-based, checksums pinned). Firebase is still readable; the frozen `staging/v4-export-final-2026-09-19/` baseline and its rules stay untouched. Mechanics proven in W3 (ISSUE-22, review-verified); Render offers no direct SSH — run the re-export from the Render shell, or locally with the documented `staging/` secret files (0600). W1–W5 are review-closed (Rhizome ISSUE-20–25); only §1.5 precedes T-0. | manifest 9/9 hashes; fresh-run reconciliation reproduces §2/§3/§4 of the report | any source unreadable; any NEW unexplained delta vs the baseline rules |
 | 1 | Provision app + credits (§2) | balance > 0 via `/v5/billing/credits` | approve rejects the TrxID |
 | 2 | §3 smoke on a live phone | both flows green | any non-2xx unexplained |
 | 3 | **Canary:** point the first (internal/low-traffic) client app at v5 | first real `otp.status` webhook + verify success in production logs | OTP delivery latency or failure spikes |
@@ -188,7 +255,7 @@ a row, and a wrong code is rejected (400-class, attempt counter visible).
 - **Daily:** `curl -s $BASE/health` (version + `db:ok`).
 - **On every push:** `deploy-status.yml` fails the run if the deploy of that
   push doesn't go `live` within 10 min — treat any red run as page-worthy.
-- **Alerts** (`ALERT_WEBHOOK_URL`): watchdog `stale_device`, webhook
+- **Alerts** (Telegram-first per §1.5(a); webhook fallback): watchdog `stale_device`, webhook
   `webhook_exhaustion` (after 3 consecutive exhausted dispatches per app).
 - **Weekly:** Litestream restore drill (§1.3) — an untested backup is a hope,
   not a backup.
@@ -237,7 +304,8 @@ Rollback notes:
    → **SUPERSEDED 2026-09-25 (PR #24):** alerts are Telegram-first
    (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) with webhook fallback; both
    still unset in production, so §1.4 remains open until the owner sets the
-   Telegram vars and one real alert is delivered.
+   Telegram vars and one real alert is delivered. Owner steps + proof:
+   **§1.5(a)**.
 3. **No staging environment** — prod is the only v5 environment; the canary
    app in §4 step 3 is the staging substitute. Acceptable at this scale, but
    it means every verification happens against real SMS credit.
@@ -248,10 +316,11 @@ Rollback notes:
 6. **`CORS_ALLOWED_ORIGINS` unset** (new 2026-09-25): the clean-room
    `dashboard/` SPA (PR #29) cannot call the API from a browser until the
    owner sets this fail-closed allow-list (the Cloudflare Pages origin) on
-   Render and redeploys. curl/mobile clients are unaffected.
+   Render and redeploys. curl/mobile clients are unaffected. Owner steps:
+   **§1.5(b)**.
 
 ---
 
 *Drafted by Buffy from live probes; secrets handled per `.kilo/kilo.jsonc`
 house rules (never printed, temp copies deleted). Tracked under Rhizome
-ISSUE-17.*
+ISSUE-17; 2026-09-27 refresh under ISSUE-26.*
