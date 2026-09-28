@@ -58,6 +58,14 @@ Workstream 6 starts **only** after **all** of the following — in order:
 > recorded as a deviation, not a precedent. All remaining v4 artifact removal
 > (`web/`, `e2e/`, doc references, untracked `functions/` leftovers) stays
 > blocked until items 3 **and** 4 pass. Tracked in ISSUE-36.
+>
+> **Status walk (2026-09-28):** items 1–2 re-verified live; item 3 go/no-go
+> prechecks pass (Firebase project readable metadata-only, frozen baseline
+> intact) while the re-export + production import remain owner-gated; item 4
+> follows the cutover. Live tracker and audit trail: Rhizome **ISSUE-36**.
+> Related: ISSUE-37 (runbook execution) — the webhook-fallback alert path was
+> proven end-to-end on 2026-09-28 with authenticated receipts; the Telegram
+> sink is still owner-gated.
 
 ## Owner action items (outside agent gates)
 
@@ -73,10 +81,10 @@ Workstream 6 starts **only** after **all** of the following — in order:
 
 ## Traceability
 
-- Rhizome issues: ISSUE-20 through ISSUE-25 **done** (epic ISSUE-14);
-  ISSUE-26/27 docs+CI follow-ups open in review; W6 has no issue by design
-  (opens only on the owner's go).
-- PRs #17–#32 on `dannyzia/dpRelay`; all merges squash-merged, `Refs:`-linked,
+- Rhizome issues: ISSUE-20 through ISSUE-35 **done** (epic ISSUE-14);
+  ISSUE-36 tracks Workstream 6 (created on the owner's written go; gated on
+  items 3–4 above); ISSUE-37 tracks runbook execution steps 2–5 (owner-gated).
+- PRs #17–#45 on `dannyzia/dpRelay`; all merges squash-merged, `Refs:`-linked,
   no AI attribution.
 - Key docs: `docs/Plan/26-V4-IMPORT-RECONCILIATION.md`,
   `docs/Plan/27-OPENAPI-SPEC.json`,
