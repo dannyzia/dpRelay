@@ -34,7 +34,11 @@ cutover checklist itself (#21 `c71783c`).
 
 Workstream 6 starts **only** after **all** of the following — in order:
 
-1. **Owner's explicit written go.** Hard gate; nothing below substitutes.
+1. ✅ **Owner's explicit written go** (2026-09-28, verbatim in Rhizome
+   decision `01M3JYKM3770E7AGTQA8HG7RJ5`): "I am deliberately starting
+   Workstream 6 — record my written go in Rhizome, create the W6 issue, and
+   walk the decommission preconditions in order before any file deletions."
+   Tracked as ISSUE-36.
 2. ✅ **Clean reconciliation baseline** (satisfied 2026-09-25):
    `docs/Plan/26-V4-IMPORT-RECONCILIATION.md` — zero unexplained deltas,
    independently review-verified (checksums re-derived from a fresh apply).
@@ -46,6 +50,14 @@ Workstream 6 starts **only** after **all** of the following — in order:
    `firebase.json`, `.firebaserc`, rules files, cloud-function-tests CI job,
    the `web/` v4 zombie; Firebase deps removed from `server/` except
    `firebase-admin` for FCM).
+
+> **Deviation (disclosed 2026-09-28):** PR #42 (`f604551`) already removed the
+> tracked functions plane (`functions/**`, `firebase.json`, `.firebaserc`,
+> rules files, deploy workflows, `cloud-function-tests` CI job) before items
+> 3–4 were satisfied. Files remain recoverable from git history; this is
+> recorded as a deviation, not a precedent. All remaining v4 artifact removal
+> (`web/`, `e2e/`, doc references, untracked `functions/` leftovers) stays
+> blocked until items 3 **and** 4 pass. Tracked in ISSUE-36.
 
 ## Owner action items (outside agent gates)
 
