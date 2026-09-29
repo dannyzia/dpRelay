@@ -1,5 +1,12 @@
 # Modification 6 — Firebase Exit + httpSMS Parity Plan (dP Relay v5)
 
+> ✅ **APPROVED AND FULLY EXECUTED (record kept for traceability).** All
+> workstreams shipped and review-verified: Rhizome ISSUE-20–35 done, PRs
+> #17–#45 merged, production live (see `docs/Plan/28-HANDOFF-STATUS.md` for
+> the standing status, including the W6 decommission gate ISSUE-36 and open
+> items ISSUE-37/38 in Rhizome). Do not re-execute this plan; derive new
+> work from Rhizome issues only.
+
 | | |
 |---|---|
 | **Date** | 2026-09-07 |
