@@ -44,7 +44,12 @@ Workstream 6 starts **only** after **all** of the following — in order:
    independently review-verified (checksums re-derived from a fresh apply).
 3. ⬜ **Fresh cutover-date v4 re-export + production import**, reconciled
    against the same baseline rules (CUTOVER-CHECKLIST §4 T-0). Production
-   import is deliberately not executed from the local baseline.
+   import is deliberately not executed from the local baseline. Copy-paste
+   procedure: **`docs/Plan/31-T0-RUNBOOK.md`** (§0–§6). The read-only
+   go/no-go was executed for real on 2026-09-28 — verdict **GO**, zero
+   row-count deltas vs the frozen baseline and a byte-identical
+   reconciliation report (Rhizome decision `01M3MEBDCB9JC1XJW412JTKP8V`);
+   only the production import remains owner-gated at flip time.
 4. ⬜ **Cutover flip complete** (checklist §4 steps 1–5) and the **30-day
    clean soak** (§5) before removing v4 artifacts (`functions/`,
    `firebase.json`, `.firebaserc`, rules files, cloud-function-tests CI job,
@@ -61,7 +66,9 @@ Workstream 6 starts **only** after **all** of the following — in order:
 >
 > **Status walk (2026-09-28):** items 1–2 re-verified live; item 3 go/no-go
 > prechecks pass (Firebase project readable metadata-only, frozen baseline
-> intact) while the re-export + production import remain owner-gated; item 4
+> intact) and the §0–§6 sequence (`31-T0-RUNBOOK.md`) was executed for real
+> the same day — verdict **GO**, zero unexplained deltas — while the
+> re-export + production import remain owner-gated at flip time; item 4
 > follows the cutover. Live tracker and audit trail: Rhizome **ISSUE-36**.
 > Related: ISSUE-37 (runbook execution) — the webhook-fallback alert path was
 > proven end-to-end on 2026-09-28 with authenticated receipts; the Telegram
