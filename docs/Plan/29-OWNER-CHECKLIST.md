@@ -59,6 +59,20 @@ poll). Env PUTs alone never deploy.
       never leave the 60 s window armed (damping caps re-alerts at 4/hour,
       but the stale alarm would stay artificially on).
 
+> **Fallback-path proof (recorded 2026-09-28):** with `TELEGRAM_*` unset and
+> `ALERT_WEBHOOK_URL` + a `Bearer`-verifying local receiver wired through a
+> cloudflared quick tunnel, the webhook-fallback path delivered
+> **5 authenticated `device_heartbeat_stale` receipts** at the forced 60 s
+> cadence — `staging/alert-drill-receipts.log` (gitignored). Teardown then
+> removed the temporary vars (env back to 16 keys, `WATCHDOG_STALE_SEC`
+> absent = 900 s default). Learnings baked into the dispatcher before
+> launch: fallback auth is `Authorization: Bearer <secret>` (not HMAC), and
+> the dispatcher POSTs `ALERT_WEBHOOK_URL` verbatim so the URL must include
+> the `/alerts` path. Post-drill sweep (18:16 UTC) confirmed zero fallback
+> deliveries while the sink is unset and a return to the 5-min watchdog
+> cadence (`threshold_sec=900`) — i.e. teardown was clean and no sink was
+> left half-configured.
+
 ## 4 · GitHub secrets (3) — enables §1.5(c)
 
 - [ ] `CLOUDFLARE_API_TOKEN` — Cloudflare → My Profile → API Tokens →
