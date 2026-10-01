@@ -2,6 +2,13 @@
 ### A self-contained briefing for the builder who arrives with fresh eyes
 *You cannot see the codebase. You do not need to. Everything you must know lives in this document.*
 
+> ⚠️ **EXECUTED — DO NOT USE AS ONBOARDING (historical record).** This briefing
+> describes the v5 build phase, which is COMPLETE (ISSUE-20–35, PRs #17–#45,
+> master `36ca8f1`, production live on Render). It is intentionally frozen as
+> written and no longer reflects current state. For onboarding read
+> `docs/Plan/28-HANDOFF-STATUS.md` instead; for open work read the Rhizome
+> tracker (ISSUE-36/37/38). Never derive tasks from this document.
+
 ---
 
 ## Prologue — your mission
