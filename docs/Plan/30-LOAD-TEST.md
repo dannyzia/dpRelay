@@ -126,3 +126,78 @@ Deterministic inputs (seeded arithmetic, fixed phase durations); output is a
 JSON report on stdout. Numbers vary with hardware; the shape of the
 conclusions (zero surfaced errors, sub-ms claim path, rate limits ≪ DB
 ceiling) is the reproducible claim.
+
+## 7. Appendix — hardware-profile run (2026-09-29, ISSUE-39)
+
+A longer-duration profile of the same committed benchmark from master
+`36ca8f1`, exercising sustained contention (4× the formal runs' phase
+duration). Raw JSON: `staging/bench-30s-8w-2026-09-29.json` (gitignored);
+transcript of two earlier attempts in `staging/bench-30s-16w-2026-09-29.err`
+and `staging/bench-30s-2026-09-29.err`.
+
+**Environment deltas (read before comparing numbers):** same dev box, now at
+**98% disk utilization** (both `/tmp` and `/home` at <2 GB free), with the
+benchmark temp DB placed on `/home` via `TMPDIR`. Two earlier attempts at the
+originally requested `--seconds 30 --workers 16` (and a 30s/8w on the default
+`/tmp`) aborted with **`SQLITE_FULL` — the disk filled, not the database
+engine**; the requested 16-worker profile was therefore executed as 8 workers
+(2× the formal runs' duration, same worker count) and the disk constraint is
+recorded as a finding. No code was changed to accommodate this.
+
+| Metric (30 s phases, 8 workers) | Value | vs formal 8 s runs |
+|---|---|---|
+| Campaigns created / recipient rows | 1 390 / 139 000 | ~4.6× the rows of an 8 s run |
+| Create throughput | 32.04 tx/s (3 130 msg/s) | lower — constrained, 98%-full partition + sustained pileup; absolute numbers not comparable across disks |
+| Create latency p50 / p95 / p99 | 4.59 / 148.9 / 5 006 ms | p50 unchanged; p99 pinned at the 5 s busy-timeout ceiling |
+| Create max latency | 29 743 ms | multi-statement lock waits compound beyond a single busy-timeout window; still no failure |
+| `SQLITE_BUSY` events (create / claim) | 33 / 18 — **51 absorbed, 0 surfaced** | strongest sustained-contention evidence yet: 4× duration ⇒ ~10× busy absorptions across ~94 000 txs, all absorbed |
+| Claim txs / throughput / latency p50 / p99 | 92 454 / 65.1 /s / 0.28 / 0.77 ms | claim tail stays sub-millisecond even under sustained create pressure |
+| Drain (production / stress) | 61 ticks / 12 080 msgs/min effective | unchanged shape |
+| `wal_checkpoint(TRUNCATE)` | 287.99 ms | stable, sub-second at ~3.3× the formal runs' row volume |
+| `PRAGMA foreign_key_check` / row accounting | ok / reconciles exactly (1 390 campaigns, 2 000 sent, 0 pending) | — |
+
+**Verdict check (AC3 at the harsher profile): the no-mitigation verdict
+holds — and strengthens.** Sustained 30 s contention multiplied busy-event
+frequency ~10× (51 across 94 000 txs) and the busy-timeout absorbed **every
+one** with zero surfaced errors; the phone-facing claim path kept its
+sub-millisecond tail throughout; checkpoint and integrity remained stable.
+The one new finding is bench-environment-only: at this scale the benchmark
+temp DB needs ~1 GB+ of free disk, and a saturated host partition aborts with
+`SQLITE_FULL` before SQLite is ever the bottleneck — production is unaffected
+(its DB is Litestream-managed on Render and orders of magnitude smaller), but
+anyone reproducing this profile should point `TMPDIR` at a volume with ≥2 GB
+free.
+
+### 7.1 The originally requested 16-worker profile (2026-09-30)
+
+The `--seconds 30 --workers 16` profile that the disk constraint deferred on
+2026-09-29 was executed after host cleanup freed the `/` partition (7.8 GB
+available; the bench DB was pointed at it via `TMPDIR=/tmp`), removing the
+`SQLITE_FULL` failure mode entirely. Same committed benchmark from master
+`36ca8f1`, node v20.9.0, WAL, `busy_timeout` 5000 ms. Raw JSON:
+`staging/bench-30s-16w-2026-09-30.json` (gitignored); stderr empty.
+Reproduction note: the system `node` on the dev box is v18 (ABI 109) while
+`better-sqlite3` is built for Node 20 (ABI 115) — the benchmark must run
+under the nvm Node 20 (`export PATH="$HOME/.nvm/versions/node/v20.9.0/bin:$PATH"`)
+or it dies with `ERR_DLOPEN_FAILED` before phase A.
+
+| Metric (30 s phases, 16 workers) | Value | vs the 8-worker run above |
+|---|---|---|
+| Campaigns created / create txs / recipient rows | 3 012 / 3 060 / 301 200 | ~2.2× the rows at 2× workers |
+| Create throughput | 72.51 tx/s (7 137 msg/s) | 2.26× — freed disk changes the picture; absolute numbers now reflect contention, not I/O starvation |
+| Create latency p50 / p95 / p99 | 10.06 / 67.59 / 5 008 ms | p50 2.2× higher under doubled writer concurrency; p99 pinned at the same 5 s busy-timeout ceiling |
+| Create max latency | 24 406 ms | lower than the 8w run (29 743 ms) — waits spread across more workers instead of piling on fewer |
+| `SQLITE_BUSY` events (create / claim) | 48 / 22 — **70 absorbed, 0 surfaced** | 1.4× the 8w count across ~67 000 txs; every one absorbed by the default timeout |
+| Claim txs / throughput / latency p50 / p99 | 64 122 / 62.91 /s / 0.40 / 1.21 ms | claim tail stays ~1 ms at 2× contention (0.77 → 1.21 ms p99, 0.28 → 0.40 ms p50) |
+| Drain (production / stress) | 58 ticks / 3 652 msgs/min effective | same shape; stress-rate ceiling unchanged in kind |
+| `wal_checkpoint(TRUNCATE)` | 1 107.48 ms | 3.8× the 8w value — checkpoint cost scales with WAL volume (2.2× the rows), still sub-2 s |
+| `PRAGMA foreign_key_check` / row accounting | ok / reconciles exactly (3 012 campaigns, 2 000 sent, 0 pending) | — |
+
+**Verdict check (AC3 at the full requested profile): the no-mitigation
+verdict holds — a third time, at the harshest setting.** Doubling writer
+concurrency raised busy-event count, create p50, and checkpoint cost roughly
+in proportion, while the surfaced-error count stayed at zero and the
+phone-facing claim path kept its ~1 ms tail. The p99 remains a timeout
+*wait*, not a failure. The disk finding from the original §7 run is thereby
+completed, not contradicted: with the constraint removed, SQLite's behavior
+under 16-writer sustained contention is the same story the formal runs told.
