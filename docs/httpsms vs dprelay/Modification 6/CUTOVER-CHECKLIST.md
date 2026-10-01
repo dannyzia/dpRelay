@@ -233,6 +233,11 @@ a row, and a wrong code is rejected (400-class, attempt counter visible).
 
 ## 4. Cutover sequence
 
+> The step-1 data import (production `--apply`) has a dedicated owner
+> procedure: **`docs/Plan/32-FLIP-DAY-IMPORT.md`** — suspend → Litestream
+> restore → local apply (rehearsed mechanics) → new replica generation →
+> resume, with verification queries and data-level rollback notes.
+
 | # | Step | Verify | Abort if |
 |---|---|---|---|
 | T-0 | **Re-run the v4 export** → `staging/v4-export-cutover-<date>/` (9 sources, sha256 manifest, contents never printed) and re-reconcile against the **clean local baseline** (`docs/Plan/26-V4-IMPORT-RECONCILIATION.md`: 56 → 29/8/4, every delta rule-based, checksums pinned). Firebase is still readable; the frozen `staging/v4-export-final-2026-09-19/` baseline and its rules stay untouched. **Copy-paste execution sequence: `docs/Plan/31-T0-RUNBOOK.md` (exporter: `server/scripts/export-v4-cutover.cjs`).** Mechanics proven in W3 (ISSUE-22, review-verified); Render offers no direct SSH — run the re-export locally with the documented `staging/` secret files (0600). W1–W5 are review-closed (Rhizome ISSUE-20–25); only §1.5 precedes T-0. | manifest 9/9 hashes; fresh-run reconciliation reproduces §2/§3/§4 of the report | any source unreadable; any NEW unexplained delta vs the baseline rules |
