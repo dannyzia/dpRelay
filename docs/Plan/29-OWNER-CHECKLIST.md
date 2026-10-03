@@ -35,15 +35,36 @@ Then trigger ONE deploy: **Manual Deploy → Deploy latest commit**, or
 until live (`server/scripts/set-alert-channel.cjs wait-live` automates the
 poll). Env PUTs alone never deploy.
 
-## 2 · Create the Telegram bot (§1.5(a) setup; feeds step 1)
+## 2 · Telegram credential + membership proof (gate A — feeds step 1)
 
-- [ ] @BotFather → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`
-- [ ] Add the bot to the ops group; post one message in it
-- [ ] Open `https://api.telegram.org/bot<TOKEN>/getUpdates` → copy the
-      group's `"chat":{"id":...}` into `TELEGRAM_CHAT_ID`
-- [ ] Save both vars → Manual Deploy again (or batch with step 1's deploy)
+> **Why this is a separate gate.** "Do we hold a working credential, and is the bot
+> actually in the ops group with a resolvable chat id?" (gate A) and "did an alert
+> land *from the deployed service*?" (gate B, step 3) are independent. Only gate B
+> requires production to carry the `TELEGRAM_*` vars. A green gate A beside a red
+> gate B is an ordinary state — valid creds that were never deployed — so they are
+> tracked as separate items instead of one conflated "alert channel" checkbox. A
+> single combined box could only ever report the weaker of the two.
+>
+> **Status — owner-verified, agent-uncorroborated.** The owner confirmed a valid
+> bot token and that the bot is in the ops group. The agent did not and cannot
+> corroborate it: the token and chat id have never existed on this machine, and
+> `staging/` holds no Telegram receipt — the single line in
+> `staging/alerts-received.log` is the *webhook* self-test (`/alerts`,
+> `selftest-not-a-real-device`), not Telegram. Recorded on the same owner-attested
+> basis as the §1.4 note below. **This item asserts nothing about production
+> state**; for that, see step 3.
 
-## 3 · Prove the alert channel (the §1.4 gate)
+- [x] @BotFather → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`
+      — *owner-verified; token never present on this machine*
+- [x] Add the bot to the ops group; post one message in it
+      — *owner-verified*
+- [x] Open `https://api.telegram.org/bot<TOKEN>/getUpdates` → copy the
+      group's `"chat":{"id":...}` into `TELEGRAM_CHAT_ID` — *owner-verified*
+- [ ] Save both vars to Render → Manual Deploy (or batch with step 1's deploy)
+      — **this is gate B, not gate A.** Still open: 16 env keys, no
+      `TELEGRAM_*`, as of 2026-10-03.
+
+## 3 · Production delivery proof (gate B — the §1.4 gate)
 
 > **§1.4 status — 2026-10-03.** The **primary (Telegram) path is closed by owner
 > attestation**: the owner observed the alert land in the ops group and elected to
@@ -122,15 +143,26 @@ poll). Env PUTs alone never deploy.
 > drill (2026-09-24, 9 lines) shows the same receiver accepting `threshold_sec` 1, 5 and
 > 900 across three sessions, so behaviour predates and matches the 09-28 drill.
 >
-> **Tooling defect to fix before relying on the one-command path:**
-> `set-alert-channel.cjs` exits **cleanly with status 0** after printing `chat verified`
-> whenever `DRY_RUN=1` is present in the process environment, skipping the Render write
-> and the deploy with no error. A `DRY_RUN` inherited from a shell wrapper, sudo or an
-> agent runner therefore makes a "real" run look successful while doing nothing — the
-> most likely cause of the repeated no-op staging attempts on this gate. Neutralise it
-> per-invocation with an explicitly empty assignment, which can never equal `'1'`:
-> `DRY_RUN= node server/scripts/set-alert-channel.cjs telegram <botToken> <chatId>`.
-> A genuine run prints `PUT env status: 200` then `POST deploys status: 201`.
+> **Tooling defect — FIXED (was the likely cause of the repeated no-op staging
+> attempts on this gate).** `set-alert-channel.cjs` used to exit **0** after printing
+> `chat verified` whenever `DRY_RUN` was present, skipping the Render write and the
+> deploy with no error, so a `DRY_RUN` inherited from a shell wrapper, sudo or an
+> agent runner made a "real" run look successful while doing nothing. Worse, the
+> guard sat *after* the probe `sendMessage` (so a rehearsal still messaged the ops
+> group) and applied *only* in `telegram` mode (`set`/`set-stale`/`revert`/`deploy`
+> wrote to Render regardless).
+>
+> `DRY_RUN` is now a **hazard gate, not a rehearsal switch**. If it is present
+> and non-empty the script **refuses to run**: it exits **2** before any network
+> call — before the Bot API probe, before any Render write — and prints a loud
+> banner on stderr naming the skipped Render write and the exact command to run
+> for real. There is deliberately no rehearsal mode; only an explicitly unset
+> value permits a run (`DRY_RUN= node …`, `unset DRY_RUN`, or a fresh shell).
+> It fails closed: a whitespace-only value blocks too, so a blank-looking hazard
+> cannot slip past the gate. Exit codes are `0` succeeded, `1` failed,
+> `2` refused. A genuine run prints `PUT env status: 200` then
+> `POST deploys status: 201`. Regression tests:
+> `server/test/set-alert-channel.test.ts`.
 
 ## 4 · GitHub secrets (3) — enables §1.5(c)
 

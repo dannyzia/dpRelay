@@ -332,7 +332,7 @@ Rollback notes:
 
 ---
 
-## 7. Residual gaps (fix-before-flip candidates, none blocking today)
+## 7. Residual gaps (fix-before-flip candidates — gaps 1-6 none blocking today; gap 7 is owner-blocking)
 
 1. **Kill switch has no operator route.** ✅ **CLOSED 2026-09-25 (PR #20,
    `0f20194`):** `requireOperator`-gated `POST /v5/admin/kill-switch` shipped
@@ -348,6 +348,22 @@ Rollback notes:
    still unset in production, so §1.4 remains open until the owner sets the
    Telegram vars and one real alert is delivered. Owner steps + proof:
    **§1.5(a)**.
+   → **§1.4 SPLIT INTO TWO GATES 2026-10-03**, because a single box could only
+   ever report the weaker half. **Gate A (credential + membership) is
+   owner-verified**: valid token, bot in the ops group, chat id resolves, probe
+   delivered. Agent could not corroborate — those credentials have never
+   existed on this machine and `staging/` holds no Telegram receipt, so it is
+   recorded on the same owner-attested basis as §1.4, not as a sign-off.
+   **Gate B (production delivery) is still OPEN**: on every check the service
+   held 16 env keys with no `TELEGRAM_*`, the live deploy was unchanged since
+   2026-09-29, and a 3000-line log sweep showed 30 `watchdog_alert` emissions,
+   all `threshold=900`, zero `threshold=60` — so production never dispatched to
+   Telegram and remains log-only. **Gate B does not depend on gate A**: valid
+   creds that were never deployed is an ordinary state.
+   Settle it with one env read: 18 keys with both `TELEGRAM_*` corroborates the
+   attestation and closes gate B; 16 keys means reopen §1.4. Service id is
+   `srv-dal3bae7bikc73e7k7pg` (an earlier ISSUE-37 attestation comment
+   mistyped it as `...k7kg`; corrected there in comment `01M40N1P7CPKJRZMAJK28TQW9F`).
 3. **No staging environment** — prod is the only v5 environment; the canary
    app in §4 step 3 is the staging substitute. Acceptable at this scale, but
    it means every verification happens against real SMS credit.
@@ -362,8 +378,27 @@ Rollback notes:
    live-verified (allowed origin → 204 echoing `access-control-allow-origin`;
    unlisted origin → 204 with no such header). Owner steps: **§1.5(b)**.
    *Residual, and not a CORS problem:* that origin is currently NXDOMAIN,
-   because the Pages publish has never succeeded (§1.5(c)). The API is ready for
-   the dashboard the moment the deploy lands.
+   because the Pages publish has never succeeded — cause is gap 7 below, not
+   CORS. The API is ready for the dashboard the moment the deploy lands.
+7. **Cloudflare token gate unresolved — the sole blocker on the dashboard.**
+   The dashboard has never been published because `CLOUDFLARE_API_TOKEN` is
+   rejected by Cloudflare with `6003` "Invalid request headers" / inner `6111`
+   "Invalid format for Authorization header". All three Pages secrets exist and
+   the non-empty check passes, so this is not a missing-secret problem.
+   **`6003`/`6111` is Cloudflare's generic invalid-token response, not a
+   malformed-value signal:** a 40-char token, a short one, one with a trailing
+   space and one wrapped in quotes all return the identical code; an absent
+   header returns `1001` and a wrong-but-well-formed token returns `6003`.
+   Expired, revoked, wrong-scope and wrong-account remain indistinguishable,
+   because the preflight verifies the token *before* testing account
+   reachability, so the account check never runs.
+   The workflow defect is fixed and proven on `docs-load-repro` (project-name
+   expansion `6fd5ff3`, credential preflight `86e48c3`); `master` is untouched
+   and automatic Pages deploys stay inactive until it lands, since the
+   workflow triggers on `push: [master]` only.
+   Latest failing run **37100586782** (2026-10-03T05:40:39Z, `workflow_dispatch`).
+   **Owner action:** mint a fresh token with Account · Cloudflare Pages · Edit
+   and replace the secret — `29-OWNER-CHECKLIST.md` §4. Detail: **§1.5(c)**.
 
 ---
 

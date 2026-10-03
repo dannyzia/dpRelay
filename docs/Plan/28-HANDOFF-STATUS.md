@@ -89,7 +89,35 @@ Workstream 6 starts **only** after **all** of the following — in order:
 > log-only and the observed alert is attributable to a local `sendMessage` probe.
 > **Residual risk:** if the sink is in fact unset, no incident will page anyone.
 > One env read settles it — 18 keys with both `TELEGRAM_*` corroborates the
-> attestation, 16 keys means §1.4 should be reopened.
+> attestation, 16 keys means §1.4 should be reopened. Service id
+> `srv-dal3bae7bikc73e7k7pg`.
+>
+> **Sharpened 2026-10-03 — §1.4 is two gates, not one.** "Closed by owner
+> attestation" above applies to **gate A only (credential + membership)**: valid
+> token, bot in the ops group, chat id resolves, probe delivered. **Gate B
+> (production delivery) is still OPEN**, and the two are independent — valid
+> creds that were never deployed is an ordinary state, and a single combined box
+> could only ever report the weaker half. Gate A is owner-verified and
+> agent-uncorroborated: those credentials have never existed on this machine and
+> `staging/` holds no Telegram receipt (its one line is the *webhook* self-test).
+> Gate A says nothing about production, which is still log-only. The
+> attestation comment on ISSUE-37 mistyped the service id as `...k7kg` in its
+> disconfirming-check line; corrected in comment `01M40N1P7CPKJRZMAJK28TQW9F`.
+> A typo there is not cosmetic — `...k7kg` does not exist, so a GET returns
+> empty rather than a key count, and "no keys" reads as the attestation failing.
+>
+> **Tooling defect behind the repeated no-op attempts: FIXED.** ISSUE-37 named
+> `DRY_RUN=1` as the strongest hypothesis for why the documented one-command path
+> never wrote to Render — the script skipped the write, printed a reassuring
+> final line, and exited 0, so a "real" run looked successful while doing
+> nothing. `set-alert-channel.cjs` now treats `DRY_RUN` as a hazard rather than a
+> rehearsal switch: any non-empty value makes it **refuse to run** — exit 2, loud
+> stderr banner naming the skipped Render write, before argument parsing and
+> before any network call, so no mode is reachable. Only an explicitly unset
+> value permits a run (`DRY_RUN= node …`, `unset DRY_RUN`, or a fresh shell).
+> Fails closed: a whitespace-only value blocks too. Regression tests in
+> `server/test/set-alert-channel.test.ts` (hermetic — local mocks for both APIs).
+> Uncommitted on `docs-load-repro` at the time of writing; `master` untouched.
 >
 > Also still open on ISSUE-37: the §1.5(c) Pages publish is gated on a
 > `CLOUDFLARE_API_TOKEN` that Cloudflare rejects — `6003` "Invalid request
