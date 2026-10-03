@@ -355,11 +355,15 @@ Rollback notes:
    recovery is re-enrolling a replacement (§0 procedure in `11-ENV-VARS.md`).
 5. `/health` version is manually bumped per milestone — keep bumping
    `server/package.json` per pass or staleness checks silently degrade.
-6. **`CORS_ALLOWED_ORIGINS` unset** (new 2026-09-25): the clean-room
-   `dashboard/` SPA (PR #29) cannot call the API from a browser until the
-   owner sets this fail-closed allow-list (the Cloudflare Pages origin) on
-   Render and redeploys. curl/mobile clients are unaffected. Owner steps:
-   **§1.5(b)**.
+6. ~~**`CORS_ALLOWED_ORIGINS` unset**~~ — **RESOLVED 2026-10-03.** This gap
+   (opened 2026-09-25) blocked the clean-room `dashboard/` SPA (PR #29) from
+   calling the API from a browser. The owner set the fail-closed allow-list to
+   `https://dprelay-dashboard.pages.dev` on Render and redeployed; the flip is
+   live-verified (allowed origin → 204 echoing `access-control-allow-origin`;
+   unlisted origin → 204 with no such header). Owner steps: **§1.5(b)**.
+   *Residual, and not a CORS problem:* that origin is currently NXDOMAIN,
+   because the Pages publish has never succeeded (§1.5(c)). The API is ready for
+   the dashboard the moment the deploy lands.
 
 ---
 

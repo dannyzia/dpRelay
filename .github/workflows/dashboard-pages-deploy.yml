@@ -58,13 +58,22 @@ jobs:
       # Fail fast on credentials with an unambiguous verdict, instead of letting
       # wrangler report an auth error whose Cloudflare code does not say which
       # of "empty token" / "wrong token" / "wrong account" it was. Verified by
-      # hand against the API: an absent Authorization header returns
-      # 9106 "Missing X-Auth-Email header", a token-shaped but invalid one
-      # returns 9109 "Invalid access token", and a malformed header returns
-      # 6003/6111. Those three are otherwise indistinguishable from a wrangler
-      # stack trace, which cost several blind dispatch cycles (runs
-      # 36981226537…37092682243). The token value is never echoed; only
-      # Cloudflare's own verdict and the account-name lookup are printed.
+      # hand against the API on 2026-10-03: an absent Authorization header
+      # returns 1001 "Missing Authorization header", and EVERY rejected token
+      # returns the same 6003 / inner 6111 — a 40-char token of the real
+      # length, a short one, one with a trailing space, one wrapped in quotes.
+      # CORRECTION: an earlier version of this comment claimed 9106 for an
+      # absent header and 9109 for an invalid token, and concluded that
+      # 6003/6111 meant a malformed value. Both were wrong; 6003/6111 is
+      # Cloudflare's generic invalid-token response and does NOT distinguish a
+      # contaminated token from an expired, revoked, wrong-scope or
+      # wrong-account one. Those blind dispatch cycles (runs
+      # 36981226537…37092682243) cost more than the check saved.
+      # Consequence: token-verify is checked BEFORE account reachability, so
+      # the "valid token, wrong scope" case is never reached and the next
+      # failure stays ambiguous. Reversing the two would make it actionable.
+      # The token value is never echoed; only Cloudflare's own verdict and the
+      # account-name lookup are printed.
       - name: "Preflight: verify Cloudflare credentials"
         if: env.HAS_CLOUDFLARE == 'true'
         env:
