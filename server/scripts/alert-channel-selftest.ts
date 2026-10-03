@@ -160,10 +160,14 @@ async function main(): Promise<void> {
 
     const chat = await fetch(`https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(config.telegramChatId)}`)
       .then((r) => r.json() as Promise<{ ok: boolean; result?: { title?: string; username?: string; type?: string }; description?: string }>);
+    // A dead token makes getChat fail too, so blaming the chat there would send
+    // the operator to fix the wrong thing. Report the chat as unknown, not bad.
     record("chat reachable", chat.ok ? "PASS" : "FAIL",
       chat.ok
         ? `chat ok (${chat.result?.type}${chat.result?.title ? `: ${chat.result.title}` : chat.result?.username ? `: @${chat.result.username}` : ""})`
-        : `bot cannot see that chat: ${chat.description} — wrong id, or the bot was removed from the group`);
+        : !me.ok
+          ? `not tested — token rejected above, so this result says nothing about the chat`
+          : `bot cannot see that chat: ${chat.description} — wrong id, or the bot was removed from the group`);
   }
 
   // --- 4. Real Telegram send, through the production dispatch ---------------------
