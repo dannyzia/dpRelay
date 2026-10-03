@@ -64,11 +64,6 @@ jobs:
         if: env.HAS_CLOUDFLARE == 'true'
         uses: cloudflare/wrangler-action@v3
         id: pages
-        # Job-level env is the single source of truth for the project name;
-        # this step's `command` expands $CLOUDFLARE_PAGES_PROJECT for the
-        # wrangler process (the action only exports its own known vars). The
-        # step-level env key with the same name is removed so it can't shadow
-        # the job env and feed wrangler the literal text.
         with:
           # Pin wrangler major 4 deliberately; upgrade intentionally, not implicitly.
           wranglerVersion: '4'
@@ -77,7 +72,16 @@ jobs:
           workingDirectory: dashboard
           # --branch=main makes these production deployments (the auto-created
           # project's production branch is "main"); master is this repo's trunk.
-          command: pages deploy dist --project-name=$CLOUDFLARE_PAGES_PROJECT --branch=main
+          #
+          # The project name MUST be a ${{ secrets.* }} expression here, not a
+          # shell `$VAR`. wrangler-action spawns wrangler directly from argv
+          # without a shell, so `$CLOUDFLARE_PAGES_PROJECT` reached Cloudflare
+          # verbatim and the API was asked for a project literally named
+          # "$CLOUDFLARE_PAGES_PROJECT" (runs 36981649891…37092609336). Setting
+          # the name in step `env:` does not help for the same reason. Actions
+          # resolves `${{ }}` before argv is built, so that is what makes the
+          # real name arrive.
+          command: pages deploy dist --project-name=${{ secrets.CLOUDFLARE_PAGES_PROJECT }} --branch=main
 
       - name: Report deployment URL
         # wrangler-action exposes the deployment URL of this upload. Block
