@@ -134,13 +134,29 @@ poll). Env PUTs alone never deploy.
 
 ## 4 · GitHub secrets (3) — enables §1.5(c)
 
-- [ ] `CLOUDFLARE_API_TOKEN` — Cloudflare → My Profile → API Tokens →
-      Create Token with **Account · Cloudflare Pages · Edit**
-- [ ] `CLOUDFLARE_ACCOUNT_ID` — Cloudflare dashboard right sidebar
-- [ ] `CLOUDFLARE_PAGES_PROJECT` = `dprelay-dashboard`
+- [x] `CLOUDFLARE_ACCOUNT_ID` — Cloudflare dashboard right sidebar
+- [x] `CLOUDFLARE_PAGES_PROJECT` = `dprelay-dashboard`
+- [ ] `CLOUDFLARE_API_TOKEN` — **set but rejected by Cloudflare. Replace it.**
+      Cloudflare → My Profile → API Tokens → Create Token with
+      **Account · Cloudflare Pages · Edit**
 
-Until these exist, the Pages workflow runs **green with a warning** and
-skips publish (verified: run 36323346697).
+All three exist as repo secrets (token last rotated 2026-10-02T08:07:27Z), and
+the workflow's non-empty check passes — but the credential preflight fails with
+`6003 "Invalid request headers"` / inner `6111`, so the Pages publish has never
+run. Latest failing run **37100586782** (2026-10-03T05:40:39Z).
+
+**Replacing the token is the action; re-diagnosing the error code is not.** The
+previous note here said the workflow "runs green with a warning and skips
+publish" — that stopped being true in `86e48c3`, which made the preflight
+blocking. It now fails the run, which is the intended behaviour: a rejected
+credential must not read as a successful deploy.
+
+`6003`/`6111` does **not** identify the token as malformed. Verified against the
+live endpoint: a 40-char token of the correct length, a short one, one with a
+trailing space and one in quotes all return that identical code, while an absent
+header returns `1001`. Expired, revoked, wrong-scope and wrong-account all fit
+the evidence equally, so the cheapest next step is simply to mint a fresh token
+with the right scope rather than to keep decoding the response.
 
 ## 5 · Cloudflare Pages — automated from here (§1.5(c))
 

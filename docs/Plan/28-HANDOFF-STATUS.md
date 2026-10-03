@@ -91,10 +91,45 @@ Workstream 6 starts **only** after **all** of the following — in order:
 > One env read settles it — 18 keys with both `TELEGRAM_*` corroborates the
 > attestation, 16 keys means §1.4 should be reopened.
 >
-> Also still open on ISSUE-37: the §1.5(c) Pages publish is gated on a valid
-> `CLOUDFLARE_API_TOKEN` (repo secret currently returns `6003`/`6111` "Invalid
-> format for Authorization header" — a malformed value). The workflow defect is
-> fixed and proven on `docs-load-repro`; `master` is untouched.
+> Also still open on ISSUE-37: the §1.5(c) Pages publish is gated on a
+> `CLOUDFLARE_API_TOKEN` that Cloudflare rejects — `6003` "Invalid request
+> headers", inner `6111` "Invalid format for Authorization header". The
+> workflow defect is fixed and proven on `docs-load-repro`; `master` is
+> untouched.
+>
+> **Corrected 2026-10-03: `6003`/`6111` is NOT a malformed-value signal.** The
+> earlier note here read that error as "a malformed value". Probing the live
+> endpoint (`/client/v4/user/tokens/verify`) shows `6003`/`6111` is Cloudflare's
+> generic invalid-token response, identical for every rejected form:
+>
+> | header sent | HTTP | code |
+> |---|---|---|
+> | none | 400 | `1001` "Missing Authorization header" |
+> | invalid token, 40 chars (real token length) | 400 | `6003` / inner `6111` |
+> | invalid token, 31 chars | 400 | `6003` / inner `6111` |
+> | invalid token + trailing space | 400 | `6003` / inner `6111` |
+> | invalid token wrapped in quotes | 400 | `6003` / inner `6111` |
+>
+> The previously documented mapping — "a wrong token gives `9109`, an absent
+> header gives `9106`" — is wrong on both counts; observed values are `6003` and
+> `1001`. Expired, revoked, wrong-scope and wrong-account remain equally
+> consistent with the evidence, and this run cannot separate them.
+>
+> Two traps worth knowing before re-diagnosing:
+> - `.kilo/kilo.jsonc` holds **no** Cloudflare credential at all (only
+>   `mcp.cloudflare.{type,url,enabled}`). A local probe therefore sends
+>   `Authorization: Bearer ` with an empty value and receives the *same* `6003`,
+>   which reads like proof about the real secret and proves nothing.
+> - A newline inside the token cannot reach Cloudflare at all: Node rejects the
+>   header client-side (`ERR_INVALID_CHAR`), so that contamination mode surfaces
+>   as a local error, never as a Cloudflare error code.
+>
+> The secret is **not** missing: CI reports `HAS_CLOUDFLARE: true` and the
+> preflight's empty-value branch never fires. The preflight verifies the token
+> before testing account reachability, so the account check is never reached and
+> the "valid token, wrong scope" case stays invisible. Latest failing run
+> **37100586782** (2026-10-03T05:40:39Z, `workflow_dispatch`); `master` last
+> attempted **36982301978** (2026-10-02T08:07:49Z), also failed.
 
 ## Owner action items (outside agent gates)
 
@@ -103,8 +138,8 @@ Workstream 6 starts **only** after **all** of the following — in order:
 | # | Action | Notes |
 |---|---|---|
 | 1 | Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` on Render | Then trigger a deploy (env PUTs alone do **not** deploy — use `server/scripts/set-alert-channel.cjs`) and force one real alert (set-stale drill) as delivery proof. Never placeholders. Steps + proof: CUTOVER-CHECKLIST §1.5(a). |
-| 2 | Set `CORS_ALLOWED_ORIGINS` on Render | The Cloudflare Pages origin; fail-closed (unset = no browser access). Deploy after. Steps + preflight proof: CUTOVER-CHECKLIST §1.5(b). |
-| 3 | Set the 3 GitHub Actions secrets for the Pages deploy | `CLOUDFLARE_API_TOKEN` (Cloudflare Pages — Edit), `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PAGES_PROJECT`. Then master pushes touching `dashboard/` auto-build and publish via `.github/workflows/dashboard-pages-deploy.yml` (wrangler direct-upload; the first run creates the Pages project; production deployments mapped to main). `VITE_API_BASE_URL` defaults to the production URL. Steps: CUTOVER-CHECKLIST §1.5(c). |
+| 2 | Set `CORS_ALLOWED_ORIGINS` on Render | **DONE 2026-10-03** — set to `https://dprelay-dashboard.pages.dev` and deployed. Live-verified: preflight `OPTIONS /health` with that Origin → 204 with `access-control-allow-origin` echoing it, while an unlisted origin (`https://evil.example`) gets 204 with **no** allow-origin header. Fail-closed by design. Remaining gap is not CORS: the origin is NXDOMAIN until the first successful Pages deploy. Steps + preflight proof: CUTOVER-CHECKLIST §1.5(b). |
+| 3 | Set the 3 GitHub Actions secrets for the Pages deploy | All three secrets exist. `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_PAGES_PROJECT` are set; `CLOUDFLARE_API_TOKEN` is set but **rejected by Cloudflare** (`6003`/`6111`), so no dashboard has ever published — see the Cloudflare root-cause note above for why that code does not mean "malformed". **Action: mint a fresh token with Account · Cloudflare Pages · Edit and replace the secret.** Then master pushes touching `dashboard/` auto-build and publish via `.github/workflows/dashboard-pages-deploy.yml` (wrangler direct-upload; the first run creates the Pages project; production deployments mapped to main). `VITE_API_BASE_URL` defaults to the production URL. Steps: CUTOVER-CHECKLIST §1.5(c). |
 | 4 | Side-load the APK on the Redmi 9 + enroll | Enrollment happens on the physical phone by the owner; artifact evidence in WS2 row. |
 | 5 | Written go for cutover + decommission | Per the checklist and the gate above. |
 
