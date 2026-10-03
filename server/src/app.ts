@@ -17,7 +17,7 @@ import contactGroupRoutes from "./routes/contact-groups.js";
 import messageTemplateRoutes from "./routes/message-templates.js";
 import adminAppRoutes from "./routes/admin-apps.js";
 import adminDeviceRoutes from "./routes/admin-devices.js";
-import { registerJobs } from "./jobs.js";
+import { registerJobs, alertSinkStatus } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
 
 /** ESM-compatible require — reads package.json for the /health version field. */
@@ -135,6 +135,26 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   });
 
   app.get("/healthz", async () => ({ ok: true }));
+
+  /**
+   * Alerting reachability, for something outside this process to poll.
+   *
+   * Deliberately NOT part of /health or /healthz, and deliberately returning 503
+   * while degraded. Those two answer "is the API serving?"; this one answers
+   * "would anyone be told if it stopped?". Merging them would let a dead alert
+   * sink restart a perfectly healthy API.
+   *
+   * A monitor pointed at this returns red today — production has no
+   * TELEGRAM_* and no ALERT_WEBHOOK_URL, so its alerting really is log-only.
+   * That is the accurate answer, and it is the signal to configure a channel.
+   *
+   * Do NOT point the platform's own health check here; use a separate monitor.
+   */
+  app.get("/health/alerts", async (_request, reply) => {
+    const status = alertSinkStatus(config);
+    if (status.degraded) reply.code(503);
+    return status;
+  });
 
   // Auth/service + middleware plugins first, then routes (they rely on decorators).
   app.register(authService, { config });

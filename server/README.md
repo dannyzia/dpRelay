@@ -74,6 +74,8 @@ All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `
 
 **Dead-sink detection.** Alert delivery is best-effort by design — a failing sink must never take the job runner down — which historically made a permanently broken sink look exactly like a healthy one: every tick returned `log-only` and emitted the same per-failure error line, so a dead receiver was indistinguishable from routine noise. Each sink now keeps an in-process consecutive-failure count and emits a distinct, greppable event at the transition: **`alert_sink_degraded`** (`error`, once when the count reaches `ALERT_SINK_FAILURE_THRESHOLD` and again on each further multiple of it, carrying `sink`, `consecutiveFailures`, `threshold`, `degradedSince` and `lastError`) and **`alert_sink_recovered`** (`info`, on the first success after a degradation, carrying how many failures and how long). The two sinks are counted independently, so a dead Telegram does not implicate a healthy webhook fallback. Counters are process-local and unpersisted — the watchdog is a single-process cron (R3), so a restart legitimately starts clean. Alert on `alert_sink_degraded` in your log pipeline; it is the signal that the alerting path itself is broken.
 
+**Polling it instead: `GET /health/alerts`.** A log line pages nobody, so reachability is also exposed as an endpoint an uptime monitor can poll: **200** when every configured sink is delivering, **503** with a plain-language `reason` when one is not. It reports degraded in both conditions a sink can be unreachable — a configured sink failing past the threshold, **and** no sink configured at all — because log-only alerting is not operational health, and returning 200 for "nothing is wired up" would be the same silent-green failure this mechanism exists to catch. It returns **only** counters, a `degradedSince` timestamp and the reason; `lastError` is withheld because it carries the failing URL or response body and this endpoint is unauthenticated so a monitor can poll it without the operator secret. In-process and unpersisted, like the counters it reads, so a restart returns to clean — a monitor will see one green blip after a deploy, then red again if the sink is still dead.
+
 ## Bulk campaigns (M4 pass 2, PLAN §10)
 
 App-scoped (requireApp) campaign plane riding the device queue:
@@ -93,6 +95,10 @@ The queue tick (`BULK_QUEUE_CRON`, default every minute) reconciles phone-report
 - **Build Command:** `npm ci && npm run build`
 - **Start Command:** `npm start`
 - **Health Check Path:** `/health`
+  - **Do NOT point the platform health check at `/health/alerts`.** That endpoint
+    returns **503** while alerting is degraded or unconfigured. Wiring it into
+    the restart probe means a dead Telegram sink restarts a healthy API — an
+    alerting outage becomes a service outage. Use a separate monitor for it.
 - Node version pinned by `.node-version` (20)
 - Auto-deploy on `master` pushes is enabled — a deploy failing there means the
   boot chain broke, not the push chain. `GET /health` reports the running

@@ -172,6 +172,94 @@ export function resetAlertSinkHealth(): void {
   alertSinkHealth.clear();
 }
 
+/** Every alert sink, in the order the dispatcher prefers them. */
+const ALERT_SINK_KINDS: readonly AlertSinkKind[] = ["telegram", "webhook"];
+
+/** Whether a sink has enough configuration to be attempted at all. */
+function isSinkConfigured(kind: AlertSinkKind, config: Config): boolean {
+  return kind === "telegram"
+    ? config.telegramBotToken !== "" && config.telegramChatId !== ""
+    : config.alertWebhookUrl !== "";
+}
+
+/**
+ * Redacted health of one sink.
+ *
+ * `lastError` is deliberately NOT exposed. It carries whatever the failing
+ * transport put into it — a webhook URL, a response body — and this payload is
+ * unauthenticated so that a monitor or uptime check can poll it without holding
+ * the operator secret. Counters and a timestamp are enough to page on; the
+ * detail belongs in the log stream, which is already access-controlled.
+ */
+export interface AlertSinkStatusEntry {
+  sink: AlertSinkKind;
+  configured: boolean;
+  consecutiveFailures: number;
+  /** ISO time the sink crossed the failure threshold; null while healthy. */
+  degradedSince: string | null;
+}
+
+/** Aggregate alerting reachability, for an external monitor. */
+export interface AlertSinkStatus {
+  /** True when alerts cannot currently reach an operator. */
+  degraded: boolean;
+  /** Plain-language cause, suitable for surfacing in a monitor's alert body. */
+  reason: string;
+  sinks: AlertSinkStatusEntry[];
+}
+
+/**
+ * Whether this process can currently reach an operator at all.
+ *
+ * Two distinct conditions both mean "nobody is being told", and they are treated
+ * as one because they demand the same response:
+ *
+ *  1. No sink is configured. Every alert is log-only. This is NOT reported as
+ *     healthy: an alerting path that does not exist is not an operational
+ *     green, and returning 200 here would be the same silent-success failure
+ *     this whole mechanism exists to catch.
+ *  2. A configured sink is failing. `alert_sink_degraded` fired in the log, but
+ *     a log line pages nobody.
+ *
+ * Deliberately a separate endpoint from `/health`, which must keep returning
+ * 200. Pointing a platform health check at a 503 endpoint turns "Telegram is
+ * down" into "restart the API", converting an alerting outage into a full
+ * service outage.
+ */
+export function alertSinkStatus(config: Config): AlertSinkStatus {
+  const sinks: AlertSinkStatusEntry[] = ALERT_SINK_KINDS.map((kind) => {
+    const health = alertSinkHealth.get(kind);
+    return {
+      sink: kind,
+      configured: isSinkConfigured(kind, config),
+      consecutiveFailures: health?.consecutiveFailures ?? 0,
+      degradedSince: health?.degradedSince ?? null,
+    };
+  });
+
+  const configured = sinks.filter((s) => s.configured);
+  if (configured.length === 0) {
+    return {
+      degraded: true,
+      reason:
+        "no alert sink is configured — set ALERT_WEBHOOK_URL and/or " +
+        "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID; every alert is currently log-only",
+      sinks,
+    };
+  }
+  const failing = configured.find((s) => s.degradedSince !== null);
+  if (failing) {
+    return {
+      degraded: true,
+      reason:
+        `alert sink '${failing.sink}' has failed ${failing.consecutiveFailures} times ` +
+        `consecutively since ${failing.degradedSince}; alerts are not reaching an operator`,
+      sinks,
+    };
+  }
+  return { degraded: false, reason: "ok — every configured alert sink is delivering", sinks };
+}
+
 /**
  * Telegram Bot API sendMessage. Same best-effort contract as the webhook
  * channel: bounded timeout, failures logged and swallowed.
