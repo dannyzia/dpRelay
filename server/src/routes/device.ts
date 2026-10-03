@@ -186,7 +186,7 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
    */
   app.post("/v5/device/heartbeat", { onRequest: [app.requireDevice] }, async (request, reply) => {
     app.db
-      .prepare("UPDATE devices SET last_seen_at = unixepoch() WHERE id = ?")
+      .prepare("UPDATE devices SET last_seen_at = unixepoch(), quarantined_at = NULL WHERE id = ?")
       .run(request.device!.id);
     return reply.code(200).send({ ok: true, heartbeat: "received" });
   });

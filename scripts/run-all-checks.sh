@@ -99,6 +99,13 @@ if [ "$NODE_MAJOR_OK" = "1" ]; then
 fi
 echo -n "  AGPL identifier gate... "
 bash scripts/agpl-grep.sh > /dev/null 2>&1 && pass "agpl-grep" || fail "agpl-grep"
+echo -n "  secret gate... "
+# Unlike agpl-grep, the secret gate's output is surfaced on failure: "a secret
+# was found" is useless without knowing WHICH rule and WHICH file tripped.
+SECRET_SCAN_OUT=$(bash scripts/secret-scan.sh 2>&1) && pass "secret-scan" || {
+  fail "secret-scan"
+  printf '%s\n' "$SECRET_SCAN_OUT" | sed 's/^/    /'
+}
 
 # Dashboard (v5 SPA)
 echo ""

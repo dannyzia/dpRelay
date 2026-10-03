@@ -73,6 +73,193 @@ function formatAlertHtml(alert: OpsAlert): string {
   }
 }
 
+/** Which configured alert sink a health record refers to. */
+type AlertSinkKind = "telegram" | "webhook";
+
+interface AlertSinkHealth {
+  /** Consecutive failed dispatches; reset to 0 by the first success. */
+  consecutiveFailures: number;
+  /** ISO time of the failure that first crossed the threshold; null while healthy. */
+  degradedSince: string | null;
+  /** Most recent failure detail, carried into the escalation line. */
+  lastError: string;
+}
+
+/**
+ * Per-sink failure counters, keyed by sink kind.
+ *
+ * dispatchAlert swallows failures by contract — an alerting path must never take
+ * the job runner down — but that contract has a blind spot: a permanently broken
+ * ALERT_WEBHOOK_URL is indistinguishable from "no sink configured". Both return
+ * "log-only" on every tick, and both emit only a per-failure error line that
+ * reads like routine noise once the watchdog has been firing for a while. Nothing
+ * in the log stream marks the transition into "we have been shouting into a dead
+ * receiver for an hour", which is exactly the failure an operator needs to notice.
+ *
+ * Deliberately in-process and unpersisted. The watchdog is a single-process cron
+ * (constraint R3), so a restart legitimately returns to a clean slate, and a new
+ * table would buy a migration for state that carries no meaning across restarts.
+ */
+const alertSinkHealth = new Map<AlertSinkKind, AlertSinkHealth>();
+
+/**
+ * Records one dispatch outcome against its sink and emits the degraded/recovered
+ * transitions. Mirrors its callers' contract: never throws, never rejects.
+ *
+ * `alert_sink_degraded` fires once when the consecutive-failure count reaches the
+ * threshold, then again on each further multiple of the threshold, so the signal
+ * survives log rotation without degenerating into a per-tick wall of duplicates.
+ */
+function recordSinkOutcome(
+  log: FastifyBaseLogger,
+  config: Config,
+  kind: AlertSinkKind,
+  delivered: boolean,
+  detail: string,
+): void {
+  const threshold = config.alertSinkFailureThreshold;
+  const health = alertSinkHealth.get(kind) ?? {
+    consecutiveFailures: 0,
+    degradedSince: null,
+    lastError: "",
+  };
+
+  if (delivered) {
+    if (health.degradedSince !== null) {
+      log.info(
+        {
+          sink: kind,
+          consecutiveFailures: health.consecutiveFailures,
+          degradedSince: health.degradedSince,
+        },
+        "alert_sink_recovered",
+      );
+    }
+    health.consecutiveFailures = 0;
+    health.degradedSince = null;
+    health.lastError = "";
+    alertSinkHealth.set(kind, health);
+    return;
+  }
+
+  health.consecutiveFailures += 1;
+  health.lastError = detail;
+  const crossed = health.consecutiveFailures === threshold;
+  const repeats = health.consecutiveFailures > threshold && health.consecutiveFailures % threshold === 0;
+  if (crossed) {
+    health.degradedSince = new Date().toISOString();
+  }
+  if (crossed || repeats) {
+    log.error(
+      {
+        sink: kind,
+        consecutiveFailures: health.consecutiveFailures,
+        threshold,
+        degradedSince: health.degradedSince,
+        lastError: health.lastError,
+      },
+      "alert_sink_degraded",
+    );
+  }
+  alertSinkHealth.set(kind, health);
+}
+
+/**
+ * Clears the sink health counters. Exported for tests only — in production the
+ * counters are process-lifetime by design.
+ */
+export function resetAlertSinkHealth(): void {
+  alertSinkHealth.clear();
+}
+
+/** Every alert sink, in the order the dispatcher prefers them. */
+const ALERT_SINK_KINDS: readonly AlertSinkKind[] = ["telegram", "webhook"];
+
+/** Whether a sink has enough configuration to be attempted at all. */
+function isSinkConfigured(kind: AlertSinkKind, config: Config): boolean {
+  return kind === "telegram"
+    ? config.telegramBotToken !== "" && config.telegramChatId !== ""
+    : config.alertWebhookUrl !== "";
+}
+
+/**
+ * Redacted health of one sink.
+ *
+ * `lastError` is deliberately NOT exposed. It carries whatever the failing
+ * transport put into it — a webhook URL, a response body — and this payload is
+ * unauthenticated so that a monitor or uptime check can poll it without holding
+ * the operator secret. Counters and a timestamp are enough to page on; the
+ * detail belongs in the log stream, which is already access-controlled.
+ */
+export interface AlertSinkStatusEntry {
+  sink: AlertSinkKind;
+  configured: boolean;
+  consecutiveFailures: number;
+  /** ISO time the sink crossed the failure threshold; null while healthy. */
+  degradedSince: string | null;
+}
+
+/** Aggregate alerting reachability, for an external monitor. */
+export interface AlertSinkStatus {
+  /** True when alerts cannot currently reach an operator. */
+  degraded: boolean;
+  /** Plain-language cause, suitable for surfacing in a monitor's alert body. */
+  reason: string;
+  sinks: AlertSinkStatusEntry[];
+}
+
+/**
+ * Whether this process can currently reach an operator at all.
+ *
+ * Two distinct conditions both mean "nobody is being told", and they are treated
+ * as one because they demand the same response:
+ *
+ *  1. No sink is configured. Every alert is log-only. This is NOT reported as
+ *     healthy: an alerting path that does not exist is not an operational
+ *     green, and returning 200 here would be the same silent-success failure
+ *     this whole mechanism exists to catch.
+ *  2. A configured sink is failing. `alert_sink_degraded` fired in the log, but
+ *     a log line pages nobody.
+ *
+ * Deliberately a separate endpoint from `/health`, which must keep returning
+ * 200. Pointing a platform health check at a 503 endpoint turns "Telegram is
+ * down" into "restart the API", converting an alerting outage into a full
+ * service outage.
+ */
+export function alertSinkStatus(config: Config): AlertSinkStatus {
+  const sinks: AlertSinkStatusEntry[] = ALERT_SINK_KINDS.map((kind) => {
+    const health = alertSinkHealth.get(kind);
+    return {
+      sink: kind,
+      configured: isSinkConfigured(kind, config),
+      consecutiveFailures: health?.consecutiveFailures ?? 0,
+      degradedSince: health?.degradedSince ?? null,
+    };
+  });
+
+  const configured = sinks.filter((s) => s.configured);
+  if (configured.length === 0) {
+    return {
+      degraded: true,
+      reason:
+        "no alert sink is configured — set ALERT_WEBHOOK_URL and/or " +
+        "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID; every alert is currently log-only",
+      sinks,
+    };
+  }
+  const failing = configured.find((s) => s.degradedSince !== null);
+  if (failing) {
+    return {
+      degraded: true,
+      reason:
+        `alert sink '${failing.sink}' has failed ${failing.consecutiveFailures} times ` +
+        `consecutively since ${failing.degradedSince}; alerts are not reaching an operator`,
+      sinks,
+    };
+  }
+  return { degraded: false, reason: "ok — every configured alert sink is delivering", sinks };
+}
+
 /**
  * Telegram Bot API sendMessage. Same best-effort contract as the webhook
  * channel: bounded timeout, failures logged and swallowed.
@@ -90,11 +277,14 @@ async function dispatchTelegram(
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
+      recordSinkOutcome(log, config, "telegram", false, `HTTP ${res.status}`);
       log.error({ status: res.status }, "telegram alert failed");
       return "log-only";
     }
+    recordSinkOutcome(log, config, "telegram", true, "");
     return "telegram";
   } catch (err) {
+    recordSinkOutcome(log, config, "telegram", false, err instanceof Error ? err.message : String(err));
     log.error({ err }, "telegram alert failed");
     return "log-only";
   }
@@ -121,11 +311,14 @@ async function dispatchWebhook(
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
+      recordSinkOutcome(log, config, "webhook", false, `HTTP ${res.status}`);
       log.error({ status: res.status }, "watchdog webhook alert failed");
       return "log-only";
     }
+    recordSinkOutcome(log, config, "webhook", true, "");
     return "webhook";
   } catch (err) {
+    recordSinkOutcome(log, config, "webhook", false, err instanceof Error ? err.message : String(err));
     log.error({ err }, "watchdog webhook alert failed");
     return "log-only";
   }
@@ -149,16 +342,66 @@ declare module "fastify" {
   }
 }
 
-/** Finds devices whose last heartbeat is older than `staleSec` (or never seen but expected). */
+/**
+ * Finds devices whose last heartbeat is older than `staleSec`.
+ *
+ * A device that has NEVER been seen (last_seen_at IS NULL) is measured against
+ * `created_at` instead, not against the clock at large. The previous query tested
+ * `last_seen_at IS NULL` with no age bound at all, which made every freshly
+ * enrolled phone stale the instant its row was created and kept it stale forever
+ * if it never heartbeated — both provisioning routes insert NULL deliberately, so
+ * this was the normal state of any unenrolled device rather than an anomaly. The
+ * net effect was a permanent alert every tick for a phone nobody had finished
+ * setting up, which is exactly the noise that stopped anyone reading the watchdog
+ * (ISSUE-38).
+ */
 export function findStaleDevices(db: FastifyInstance["db"], staleSec: number): StaleDevice[] {
   const cutoff = Math.floor(Date.now() / 1000) - staleSec;
   return db
     .prepare(
       "SELECT id, user_id, label, last_seen_at FROM devices " +
-        "WHERE revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?) " +
+        "WHERE revoked_at IS NULL AND quarantined_at IS NULL AND " +
+        "((last_seen_at IS NULL AND created_at < ?) OR " +
+        "(last_seen_at IS NOT NULL AND last_seen_at < ?)) " +
         "ORDER BY last_seen_at IS NOT NULL, last_seen_at ASC",
     )
-    .all(cutoff) as StaleDevice[];
+    .all(cutoff, cutoff) as StaleDevice[];
+}
+
+/**
+ * Silently quarantines devices that have never sent a heartbeat and are older
+ * than `quarantineSec`.
+ *
+ * Scoped to never-seen devices ON PURPOSE. A device that once worked and then
+ * went quiet is a genuine outage signal and must keep alerting — reaping on that
+ * basis could cut over the only working gateway during an incident. A device that
+ * has never once checked in is almost certainly an abandoned enrolment, and the
+ * only thing it accomplishes is permanent alert noise.
+ *
+ * Quarantine is NOT revocation: the device keeps working and a single heartbeat
+ * clears it (see the heartbeat handler). There is no device unrevoke route, so
+ * revocation stays a deliberate operator decision.
+ *
+ * Returns the ids quarantined by THIS call, so the caller logs a real
+ * transition rather than a count including rows it did not touch.
+ */
+export function quarantineNeverSeenDevices(
+  db: FastifyInstance["db"],
+  quarantineSec: number,
+): string[] {
+  const cutoff = Math.floor(Date.now() / 1000) - quarantineSec;
+  const candidates = db
+    .prepare(
+      "SELECT id FROM devices " +
+        "WHERE revoked_at IS NULL AND quarantined_at IS NULL AND " +
+        "last_seen_at IS NULL AND created_at < ?",
+    )
+    .all(cutoff) as { id: string }[];
+  if (candidates.length === 0) return [];
+  const mark = db.prepare("UPDATE devices SET quarantined_at = ? WHERE id = ?");
+  const now = Math.floor(Date.now() / 1000);
+  for (const c of candidates) mark.run(now, c.id);
+  return candidates.map((c) => c.id);
 }
 
 /**
@@ -202,18 +445,76 @@ export async function dispatchAlert(
 }
 
 /**
+ * Tracks the last alerted stale-device set so an UNCHANGED set is not
+ * re-announced on every tick. Process-local for the same reason as the sink
+ * health counters: the watchdog is a single-process cron (R3) and a restart
+ * legitimately returns to a clean slate. The consequence is a single repeat
+ * alert after a restart, which is the safe direction to err in.
+ */
+let lastStaleSignature: string | null = null;
+let lastStaleAlertAtMs: number | null = null;
+
+/** Clears the stale-alert dedupe state. Test-only; see lastStaleSignature. */
+export function resetStaleAlertDedupe(): void {
+  lastStaleSignature = null;
+  lastStaleAlertAtMs = null;
+}
+
+/**
  * One watchdog pass: find stale devices, dispatch alert when any, log when none.
- * Exported for direct use by the catch-up sweep and tests.
+ *
+ * Dedupe: the alert fires when the stale set CHANGES (a device goes stale or
+ * recovers), or when an unchanged set has gone unannounced for
+ * `watchdogAlertRepeatSec`. Suppressed ticks log at info rather than silently,
+ * so the log still shows the watchdog is alive and seeing the same thing.
  */
 export async function watchdogTick(
   app: FastifyInstance,
 ): Promise<StaleDevice[]> {
   const config = app.config;
+  // Reap first: quarantined devices must be excluded before the stale set is
+  // computed, otherwise this tick would still alert on the device it just muted.
+  const reaped = quarantineNeverSeenDevices(app.db, config.deviceQuarantineSec);
+  if (reaped.length > 0) {
+    app.log.info(
+      { job: "heartbeat_watchdog", count: reaped.length, deviceIds: reaped, quarantineSec: config.deviceQuarantineSec },
+      "quarantined never-seen devices — muted, not revoked; any heartbeat clears them",
+    );
+  }
   const stale = findStaleDevices(app.db, config.watchdogStaleSec);
   if (stale.length === 0) {
     app.log.info({ job: "heartbeat_watchdog" }, "no stale devices");
+    // A recovered set must not pin the next alert as "unchanged", so clear here
+    // rather than comparing against an empty set forever.
+    lastStaleSignature = null;
+    lastStaleAlertAtMs = null;
     return [];
   }
+  const signature = stale
+    .map((d) => d.id)
+    .sort()
+    .join(",");
+  const nowMs = Date.now();
+  const unchanged = signature === lastStaleSignature;
+  const repeatDue =
+    lastStaleAlertAtMs !== null &&
+    nowMs - lastStaleAlertAtMs >= config.watchdogAlertRepeatSec * 1000;
+
+  if (unchanged && !repeatDue) {
+    app.log.info(
+      {
+        job: "heartbeat_watchdog",
+        deviceIds: stale.map((d) => d.id),
+        count: stale.length,
+        suppressedForSec:
+          lastStaleAlertAtMs === null ? null : Math.floor((nowMs - lastStaleAlertAtMs) / 1000),
+        repeatInSec: config.watchdogAlertRepeatSec,
+      },
+      "watchdog_alert_suppressed_unchanged_set",
+    );
+    return stale;
+  }
+
   const alert: WatchdogAlert = {
     type: "device_heartbeat_stale",
     deviceIds: stale.map((d) => d.id),
@@ -222,6 +523,8 @@ export async function watchdogTick(
     detected_at: new Date().toISOString(),
   };
   await dispatchAlert(app.log, config, alert);
+  lastStaleSignature = signature;
+  lastStaleAlertAtMs = nowMs;
   return stale;
 }
 

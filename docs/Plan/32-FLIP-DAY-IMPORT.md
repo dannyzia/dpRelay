@@ -162,6 +162,33 @@ curl -s "$BASE/health"                     # healthy, db ok
 - First real OTP send → verify (§3 smoke) lands **after** the import; watch the
   Telegram alert channel stay quiet about anything NEW (the 3 known
   never-heartbeated device rows per ISSUE-38 are expected baseline noise).
+- **Alert-sink health — check this explicitly.** A restart re-points config, so
+  flip day is precisely when a sink can break with no visible symptom: alert
+  delivery swallows failures by contract, and a dead `ALERT_WEBHOOK_URL` is
+  otherwise indistinguishable from a healthy one. Since `feat(server): surface a
+  repeatedly failing alert sink`, the service emits two greppable events:
+
+  | Event | Level | Meaning |
+  |---|---|---|
+  | `alert_sink_degraded` | `error` | one sink has failed `ALERT_SINK_FAILURE_THRESHOLD` consecutive times (default 3 ≈ 15 min at the 5-min watchdog cadence). Re-emits on each further multiple of the threshold |
+  | `alert_sink_recovered` | `info` | first success after a degradation; carries `consecutiveFailures` and `degradedSince` |
+
+  Payload fields on `alert_sink_degraded`: `sink` (`telegram` or `webhook`),
+  `consecutiveFailures`, `threshold`, `degradedSince`, `lastError`. The two sinks
+  are counted independently, so `sink: "telegram"` with no `sink: "webhook"`
+  means the fallback is still viable.
+
+  **Acceptance:** post-flip, zero `alert_sink_degraded` in the log window, and
+  at least one real alert (the ISSUE-38 baseline ticks supply this) with **no**
+  `telegram alert failed` line. A `alert_sink_degraded` at flip time is a
+  **stop-and-investigate**, not a warning to note — see §8, because a silently
+  dead sink turns every subsequent incident into silence.
+
+  ```bash
+  # read-only sweep of the flip window (adjust the window to the flip date)
+  node staging/render-log-sweep.cjs | grep -E "alert_sink_degraded|alert_sink_recovered|telegram alert failed"
+  # expect: no alert_sink_degraded, no "telegram alert failed"
+  ```
 
 ## 8 · Rollback notes (data-level, §6-compatible)
 
@@ -178,6 +205,16 @@ curl -s "$BASE/health"                     # healthy, db ok
 - **App-level rollback** (§6 table) still applies on top: revoke a misbehaving
   imported app via the operator plane; Render → Rollback reverts *code*, not
   data — only a generation re-push reverts *data*.
+- **Alert sink degraded at flip time** (see §7): this is **not** a data problem,
+  so do not roll the DB back for it. Read `sink` and `lastError` from the
+  `alert_sink_degraded` line first — a wrong `TELEGRAM_CHAT_ID`, a stale bot
+  token, or a bad `ALERT_WEBHOOK_URL` all present identically. Fix the env var
+  and redeploy; there is no data to restore, and rolling back would discard real
+  post-flip traffic for a config-only fault. If the sink was already degraded
+  before the flip, note it as pre-existing baseline (like the ISSUE-38 device
+  rows) rather than attributing it to the import. Counters are process-local, so
+  a redeploy resets them — a clean counter after redeploy is expected, not proof
+  the sink is healthy. Confirm with one real alert delivery instead.
 - **v4 is never a fallback** (§6 "truth first"): rollback lands you on a
   pre-import **v5**, not on v4.
 
