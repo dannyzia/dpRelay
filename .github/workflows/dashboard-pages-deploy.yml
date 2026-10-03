@@ -64,10 +64,11 @@ jobs:
         if: env.HAS_CLOUDFLARE == 'true'
         uses: cloudflare/wrangler-action@v3
         id: pages
-        # Step-level env so $CLOUDFLARE_PAGES_PROJECT expands inside the
-        # command below — wrangler-action only exports its own known vars.
-        env:
-          CLOUDFLARE_PAGES_PROJECT: ${{ secrets.CLOUDFLARE_PAGES_PROJECT }}
+        # Job-level env is the single source of truth for the project name;
+        # this step's `command` expands $CLOUDFLARE_PAGES_PROJECT for the
+        # wrangler process (the action only exports its own known vars). The
+        # step-level env key with the same name is removed so it can't shadow
+        # the job env and feed wrangler the literal text.
         with:
           # Pin wrangler major 4 deliberately; upgrade intentionally, not implicitly.
           wranglerVersion: '4'
