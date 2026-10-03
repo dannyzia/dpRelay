@@ -272,11 +272,48 @@ export function findStaleDevices(db: FastifyInstance["db"], staleSec: number): S
   return db
     .prepare(
       "SELECT id, user_id, label, last_seen_at FROM devices " +
-        "WHERE revoked_at IS NULL AND ((last_seen_at IS NULL AND created_at < ?) OR " +
+        "WHERE revoked_at IS NULL AND quarantined_at IS NULL AND " +
+        "((last_seen_at IS NULL AND created_at < ?) OR " +
         "(last_seen_at IS NOT NULL AND last_seen_at < ?)) " +
         "ORDER BY last_seen_at IS NOT NULL, last_seen_at ASC",
     )
     .all(cutoff, cutoff) as StaleDevice[];
+}
+
+/**
+ * Silently quarantines devices that have never sent a heartbeat and are older
+ * than `quarantineSec`.
+ *
+ * Scoped to never-seen devices ON PURPOSE. A device that once worked and then
+ * went quiet is a genuine outage signal and must keep alerting — reaping on that
+ * basis could cut over the only working gateway during an incident. A device that
+ * has never once checked in is almost certainly an abandoned enrolment, and the
+ * only thing it accomplishes is permanent alert noise.
+ *
+ * Quarantine is NOT revocation: the device keeps working and a single heartbeat
+ * clears it (see the heartbeat handler). There is no device unrevoke route, so
+ * revocation stays a deliberate operator decision.
+ *
+ * Returns the ids quarantined by THIS call, so the caller logs a real
+ * transition rather than a count including rows it did not touch.
+ */
+export function quarantineNeverSeenDevices(
+  db: FastifyInstance["db"],
+  quarantineSec: number,
+): string[] {
+  const cutoff = Math.floor(Date.now() / 1000) - quarantineSec;
+  const candidates = db
+    .prepare(
+      "SELECT id FROM devices " +
+        "WHERE revoked_at IS NULL AND quarantined_at IS NULL AND " +
+        "last_seen_at IS NULL AND created_at < ?",
+    )
+    .all(cutoff) as { id: string }[];
+  if (candidates.length === 0) return [];
+  const mark = db.prepare("UPDATE devices SET quarantined_at = ? WHERE id = ?");
+  const now = Math.floor(Date.now() / 1000);
+  for (const c of candidates) mark.run(now, c.id);
+  return candidates.map((c) => c.id);
 }
 
 /**
@@ -347,6 +384,15 @@ export async function watchdogTick(
   app: FastifyInstance,
 ): Promise<StaleDevice[]> {
   const config = app.config;
+  // Reap first: quarantined devices must be excluded before the stale set is
+  // computed, otherwise this tick would still alert on the device it just muted.
+  const reaped = quarantineNeverSeenDevices(app.db, config.deviceQuarantineSec);
+  if (reaped.length > 0) {
+    app.log.info(
+      { job: "heartbeat_watchdog", count: reaped.length, deviceIds: reaped, quarantineSec: config.deviceQuarantineSec },
+      "quarantined never-seen devices — muted, not revoked; any heartbeat clears them",
+    );
+  }
   const stale = findStaleDevices(app.db, config.watchdogStaleSec);
   if (stale.length === 0) {
     app.log.info({ job: "heartbeat_watchdog" }, "no stale devices");

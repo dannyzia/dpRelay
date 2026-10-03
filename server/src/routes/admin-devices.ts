@@ -27,6 +27,7 @@ interface DeviceRow {
   created_at: number;
   revocable: number;
   revoked_at: number | null;
+  quarantined_at: number | null;
 }
 
 const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
@@ -54,7 +55,8 @@ const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
 
     const rows = db
       .prepare(
-        "SELECT id, user_id, label, last_seen_at, created_at, revocable, revoked_at FROM devices " +
+        "SELECT id, user_id, label, last_seen_at, created_at, revocable, revoked_at, quarantined_at " +
+          "FROM devices " +
           "WHERE (? = 1 OR revoked_at IS NULL) ORDER BY last_seen_at IS NOT NULL, last_seen_at ASC LIMIT ?",
       )
       .all(includeRevoked ? 1 : 0, limit) as DeviceRow[];
@@ -71,15 +73,23 @@ const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
       stale: staleIds.has(r.id),
       revocable: r.revocable === 1,
       revokedAt: r.revoked_at,
+      /**
+       * Muted, not dead: still authenticated and still able to heartbeat, just
+       * excluded from the stale set until it does.
+       */
+      quarantined: r.quarantined_at !== null,
+      quarantinedAt: r.quarantined_at,
     }));
 
     return {
       ok: true,
       staleThresholdSec: app.config.watchdogStaleSec,
       alertRepeatSec: app.config.watchdogAlertRepeatSec,
+      quarantineSec: app.config.deviceQuarantineSec,
       total: devices.length,
       staleCount: devices.filter((d) => d.stale).length,
       neverSeenCount: devices.filter((d) => d.neverSeen).length,
+      quarantinedCount: devices.filter((d) => d.quarantined).length,
       devices: staleOnly ? devices.filter((d) => d.stale) : devices,
     };
   });
@@ -120,6 +130,39 @@ const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
     db.prepare("UPDATE devices SET revoked_at = ? WHERE id = ?").run(nowSec, deviceId);
     app.log.warn({ deviceId }, "device revoked by operator");
     return { ok: true, deviceId: row.id, revoked: true, revokedAt: nowSec, alreadyRevoked: false };
+  });
+
+  /**
+   * Clears a quarantine without waiting for the device to heartbeat.
+   *
+   * Quarantine already self-heals on the next heartbeat, so this exists for the
+   * case where an operator wants a device reporting immediately — the phone is
+   * in hand and silent right now. Without it, the only way back is the device
+   * itself, which is a poor answer for "I am looking at this phone".
+   *
+   * Deliberately cannot revive a revoked device: there is no unrevoke route for
+   * devices, and adding one here would quietly undo the one-way door.
+   */
+  app.post("/v5/admin/devices/:id/unquarantine", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const deviceId = asString(params.id, 64);
+    if (deviceId === null) return fail(reply, 400, "invalid_device_id", "Device id is required");
+
+    const row = db
+      .prepare("SELECT id, quarantined_at, revoked_at FROM devices WHERE id = ?")
+      .get(deviceId) as { id: string; quarantined_at: number | null; revoked_at: number | null } | undefined;
+    if (!row) return fail(reply, 404, "device_not_found", "Device not found");
+    if (row.revoked_at !== null) {
+      return fail(reply, 409, "device_revoked", "Device is revoked and cannot be unquarantined");
+    }
+    if (row.quarantined_at === null) {
+      // Idempotent, matching revoke: a retried operator script reads no state first.
+      return { ok: true, deviceId: row.id, quarantined: false, alreadyClear: true };
+    }
+
+    db.prepare("UPDATE devices SET quarantined_at = NULL WHERE id = ?").run(deviceId);
+    app.log.info({ deviceId }, "device quarantine cleared by operator");
+    return { ok: true, deviceId: row.id, quarantined: false, alreadyClear: false };
   });
 };
 

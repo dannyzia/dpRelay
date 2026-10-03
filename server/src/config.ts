@@ -46,6 +46,14 @@ export interface Config {
    * would be announced once and forgotten.
    */
   watchdogAlertRepeatSec: number;
+  /**
+   * Age (seconds since creation) after which a device that has NEVER
+   * heartbeaten is silently quarantined. Quarantine hides it from the stale set
+   * and from alerting without revoking it, so a phone that was merely never
+   * brought online stops generating alerts but keeps working, and any heartbeat
+   * clears the quarantine. Revoking would be irreversible.
+   */
+  deviceQuarantineSec: number;
   /** Idle seconds after which the next request counts as a wake (Render guard). */
   wakeIdleThresholdSec: number;
   /** Shared secret for phone enrollment (POST /v5/device/enroll). Empty = enrollment disabled. */
@@ -201,6 +209,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       env.WATCHDOG_ALERT_REPEAT_SEC,
       "WATCHDOG_ALERT_REPEAT_SEC",
       3600,
+    ),
+    deviceQuarantineSec: parsePositiveInt(
+      env.DEVICE_QUARANTINE_SEC,
+      "DEVICE_QUARANTINE_SEC",
+      86400,
     ),
     wakeIdleThresholdSec: parsePositiveInt(
       env.WAKE_IDLE_THRESHOLD_SEC,
