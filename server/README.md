@@ -61,6 +61,8 @@ Single Fastify process hosts the node-cron job runner (constraint R3 — one pro
 
 All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `WATCHDOG_CRON`, `CATCH_UP_CRON`, `BULK_QUEUE_CRON`, `STATS_CRON`.
 
+**Dead-sink detection.** Alert delivery is best-effort by design — a failing sink must never take the job runner down — which historically made a permanently broken sink look exactly like a healthy one: every tick returned `log-only` and emitted the same per-failure error line, so a dead receiver was indistinguishable from routine noise. Each sink now keeps an in-process consecutive-failure count and emits a distinct, greppable event at the transition: **`alert_sink_degraded`** (`error`, once when the count reaches `ALERT_SINK_FAILURE_THRESHOLD` and again on each further multiple of it, carrying `sink`, `consecutiveFailures`, `threshold`, `degradedSince` and `lastError`) and **`alert_sink_recovered`** (`info`, on the first success after a degradation, carrying how many failures and how long). The two sinks are counted independently, so a dead Telegram does not implicate a healthy webhook fallback. Counters are process-local and unpersisted — the watchdog is a single-process cron (R3), so a restart legitimately starts clean. Alert on `alert_sink_degraded` in your log pipeline; it is the signal that the alerting path itself is broken.
+
 ## Bulk campaigns (M4 pass 2, PLAN §10)
 
 App-scoped (requireApp) campaign plane riding the device queue:

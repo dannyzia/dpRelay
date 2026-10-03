@@ -73,6 +73,105 @@ function formatAlertHtml(alert: OpsAlert): string {
   }
 }
 
+/** Which configured alert sink a health record refers to. */
+type AlertSinkKind = "telegram" | "webhook";
+
+interface AlertSinkHealth {
+  /** Consecutive failed dispatches; reset to 0 by the first success. */
+  consecutiveFailures: number;
+  /** ISO time of the failure that first crossed the threshold; null while healthy. */
+  degradedSince: string | null;
+  /** Most recent failure detail, carried into the escalation line. */
+  lastError: string;
+}
+
+/**
+ * Per-sink failure counters, keyed by sink kind.
+ *
+ * dispatchAlert swallows failures by contract — an alerting path must never take
+ * the job runner down — but that contract has a blind spot: a permanently broken
+ * ALERT_WEBHOOK_URL is indistinguishable from "no sink configured". Both return
+ * "log-only" on every tick, and both emit only a per-failure error line that
+ * reads like routine noise once the watchdog has been firing for a while. Nothing
+ * in the log stream marks the transition into "we have been shouting into a dead
+ * receiver for an hour", which is exactly the failure an operator needs to notice.
+ *
+ * Deliberately in-process and unpersisted. The watchdog is a single-process cron
+ * (constraint R3), so a restart legitimately returns to a clean slate, and a new
+ * table would buy a migration for state that carries no meaning across restarts.
+ */
+const alertSinkHealth = new Map<AlertSinkKind, AlertSinkHealth>();
+
+/**
+ * Records one dispatch outcome against its sink and emits the degraded/recovered
+ * transitions. Mirrors its callers' contract: never throws, never rejects.
+ *
+ * `alert_sink_degraded` fires once when the consecutive-failure count reaches the
+ * threshold, then again on each further multiple of the threshold, so the signal
+ * survives log rotation without degenerating into a per-tick wall of duplicates.
+ */
+function recordSinkOutcome(
+  log: FastifyBaseLogger,
+  config: Config,
+  kind: AlertSinkKind,
+  delivered: boolean,
+  detail: string,
+): void {
+  const threshold = config.alertSinkFailureThreshold;
+  const health = alertSinkHealth.get(kind) ?? {
+    consecutiveFailures: 0,
+    degradedSince: null,
+    lastError: "",
+  };
+
+  if (delivered) {
+    if (health.degradedSince !== null) {
+      log.info(
+        {
+          sink: kind,
+          consecutiveFailures: health.consecutiveFailures,
+          degradedSince: health.degradedSince,
+        },
+        "alert_sink_recovered",
+      );
+    }
+    health.consecutiveFailures = 0;
+    health.degradedSince = null;
+    health.lastError = "";
+    alertSinkHealth.set(kind, health);
+    return;
+  }
+
+  health.consecutiveFailures += 1;
+  health.lastError = detail;
+  const crossed = health.consecutiveFailures === threshold;
+  const repeats = health.consecutiveFailures > threshold && health.consecutiveFailures % threshold === 0;
+  if (crossed) {
+    health.degradedSince = new Date().toISOString();
+  }
+  if (crossed || repeats) {
+    log.error(
+      {
+        sink: kind,
+        consecutiveFailures: health.consecutiveFailures,
+        threshold,
+        degradedSince: health.degradedSince,
+        lastError: health.lastError,
+      },
+      "alert_sink_degraded",
+    );
+  }
+  alertSinkHealth.set(kind, health);
+}
+
+/**
+ * Clears the sink health counters. Exported for tests only — in production the
+ * counters are process-lifetime by design.
+ */
+export function resetAlertSinkHealth(): void {
+  alertSinkHealth.clear();
+}
+
 /**
  * Telegram Bot API sendMessage. Same best-effort contract as the webhook
  * channel: bounded timeout, failures logged and swallowed.
@@ -90,11 +189,14 @@ async function dispatchTelegram(
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
+      recordSinkOutcome(log, config, "telegram", false, `HTTP ${res.status}`);
       log.error({ status: res.status }, "telegram alert failed");
       return "log-only";
     }
+    recordSinkOutcome(log, config, "telegram", true, "");
     return "telegram";
   } catch (err) {
+    recordSinkOutcome(log, config, "telegram", false, err instanceof Error ? err.message : String(err));
     log.error({ err }, "telegram alert failed");
     return "log-only";
   }
@@ -121,11 +223,14 @@ async function dispatchWebhook(
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
+      recordSinkOutcome(log, config, "webhook", false, `HTTP ${res.status}`);
       log.error({ status: res.status }, "watchdog webhook alert failed");
       return "log-only";
     }
+    recordSinkOutcome(log, config, "webhook", true, "");
     return "webhook";
   } catch (err) {
+    recordSinkOutcome(log, config, "webhook", false, err instanceof Error ? err.message : String(err));
     log.error({ err }, "watchdog webhook alert failed");
     return "log-only";
   }

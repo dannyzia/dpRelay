@@ -11,7 +11,12 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
-import { dispatchAlert, type OpsAlert, type WatchdogAlert } from "../src/jobs.js";
+import {
+  dispatchAlert,
+  resetAlertSinkHealth,
+  type OpsAlert,
+  type WatchdogAlert,
+} from "../src/jobs.js";
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
@@ -226,6 +231,9 @@ function cfg(env: Record<string, string>) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Sink health is process-lifetime by design, so it must be reset between
+  // tests or one test's failure count silently degrades the next test's sink.
+  resetAlertSinkHealth();
 });
 
 describe("telegram alert sink", () => {
@@ -345,5 +353,143 @@ describe("telegram alert sink", () => {
     );
     expect(result).toBe("log-only");
     expect(calls).toHaveLength(0);
+  });
+});
+
+/** One recorded logger call. */
+interface RecordedLog {
+  level: "warn" | "info" | "error";
+  msg: string;
+  payload: Record<string, unknown>;
+}
+
+/** Logger that records calls so tests can assert on the escalation transitions. */
+function recordingLog(): { log: FastifyBaseLogger; entries: RecordedLog[] } {
+  const entries: RecordedLog[] = [];
+  const push =
+    (level: RecordedLog["level"]) =>
+    (payload: Record<string, unknown>, msg?: string): void => {
+      entries.push({ level, msg: String(msg), payload });
+    };
+  const log = { warn: push("warn"), info: push("info"), error: push("error"), debug() {} };
+  return { log: log as unknown as FastifyBaseLogger, entries };
+}
+
+/** fetch stub that fails every call with `status`, for consecutive-failure runs. */
+function stubAlwaysFailing(status: number): FetchCall[] {
+  return stubFetch(...Array.from({ length: 20 }, () => ({ status })));
+}
+
+const SINK_URL = "https://sink.example.com/hook";
+
+describe("alert sink health", () => {
+  it("stays quiet while a failing sink is below the threshold", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(500);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+
+    expect(entries.filter((e) => e.msg === "alert_sink_degraded")).toHaveLength(0);
+    // The per-failure line is untouched — this adds a transition signal, it does
+    // not replace or quiet the existing error.
+    expect(entries.filter((e) => e.msg === "watchdog webhook alert failed")).toHaveLength(2);
+  });
+
+  it("emits alert_sink_degraded once consecutive failures reach the threshold", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(500);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.level).toBe("error");
+    expect(degraded[0]?.payload.sink).toBe("webhook");
+    expect(degraded[0]?.payload.consecutiveFailures).toBe(3);
+    expect(degraded[0]?.payload.threshold).toBe(3);
+    expect(String(degraded[0]?.payload.lastError)).toContain("500");
+    expect(String(degraded[0]?.payload.degradedSince)).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("re-emits the degradation on each further multiple of the threshold", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(500);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 6; i += 1) {
+      await dispatchAlert(log, conf, STALE_ALERT);
+    }
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(2);
+    expect(degraded.map((e) => e.payload.consecutiveFailures)).toEqual([3, 6]);
+  });
+
+  it("emits alert_sink_recovered and really resets the counter when the sink returns", async () => {
+    const { log, entries } = recordingLog();
+    stubFetch({ status: 500 }, { status: 500 }, { status: 500 }, { status: 200 });
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+    expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("webhook");
+
+    const recovered = entries.filter((e) => e.msg === "alert_sink_recovered");
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.level).toBe("info");
+    expect(recovered[0]?.payload.sink).toBe("webhook");
+    expect(recovered[0]?.payload.consecutiveFailures).toBe(3);
+
+    // Counter must be back to zero: two further failures cannot re-trip it.
+    vi.unstubAllGlobals();
+    stubAlwaysFailing(500);
+    for (let i = 0; i < 2; i += 1) {
+      await dispatchAlert(log, conf, STALE_ALERT);
+    }
+    expect(entries.filter((e) => e.msg === "alert_sink_degraded")).toHaveLength(1);
+  });
+
+  it("tracks sinks independently so a dead Telegram does not implicate the webhook", async () => {
+    const { log, entries } = recordingLog();
+    // Three telegram rejections, each followed by a webhook that accepts.
+    stubFetch(
+      { status: 500 }, { status: 200 },
+      { status: 500 }, { status: 200 },
+      { status: 500 }, { status: 200 },
+    );
+    const conf = cfg({
+      TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN",
+      TELEGRAM_CHAT_ID: "-100200300",
+      ALERT_WEBHOOK_URL: SINK_URL,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("webhook");
+    }
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.payload.sink).toBe("telegram");
+  });
+
+  it("honours ALERT_SINK_FAILURE_THRESHOLD", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(503);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL, ALERT_SINK_FAILURE_THRESHOLD: "1" });
+
+    await dispatchAlert(log, conf, STALE_ALERT);
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.payload.threshold).toBe(1);
+    expect(degraded[0]?.payload.consecutiveFailures).toBe(1);
+    expect(String(degraded[0]?.payload.lastError)).toContain("503");
   });
 });
