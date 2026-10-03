@@ -218,7 +218,10 @@ describe("wake guard + boot sweep (R5)", () => {
  */
 interface FetchCall {
   url: string;
-  init: { method?: string; headers?: Record<string, string>; body?: string };
+  // `signal` is captured because the bounded timeout is load-bearing rather than
+  // decorative: without it a hung Bot API request stalls the watchdog tick
+  // forever, and alerting stops without ever logging an error.
+  init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal };
 }
 
 /** Stubs global fetch with scripted (status, body) responses, in order. */
@@ -509,5 +512,116 @@ describe("alert sink health", () => {
     expect(degraded[0]?.payload.threshold).toBe(1);
     expect(degraded[0]?.payload.consecutiveFailures).toBe(1);
     expect(String(degraded[0]?.payload.lastError)).toContain("503");
+  });
+});
+
+/**
+ * Telegram delivery regressions.
+ *
+ * Everything above exercises dispatchAlert as a unit. These tests exist because
+ * a green unit suite proved compatible with the watchdog never reaching the Bot
+ * API at all: nothing drove a stale device through runWatchdog into a Telegram
+ * send, so a broken wiring would have shipped silently. The first test below is
+ * the one that closes that hole; the rest pin the request shape and the
+ * loud-on-failure contract that make a silent break detectable.
+ */
+describe("telegram delivery cannot silently break", () => {
+  const TELEGRAM_ENV = { TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN", TELEGRAM_CHAT_ID: "-100200300" };
+
+  it("reaches the Bot API when a stale device trips the real watchdog", async () => {
+    const calls = stubFetch({ status: 200 });
+    const app = makeApp(TELEGRAM_ENV);
+    await app.ready();
+    seedUser(app, "user-1");
+    seedDevice(app, "dev-dark", "user-1", "k1".repeat(32), Math.floor(Date.now() / 1000) - 3600);
+
+    const stale = await app.runWatchdog();
+
+    expect(stale.map((d) => d.id)).toEqual(["dev-dark"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://api.telegram.org/bot12345:TEST-TOKEN/sendMessage");
+    const body = JSON.parse(calls[0].init.body ?? "{}") as { chat_id: string; text: string };
+    expect(body.chat_id).toBe("-100200300");
+    expect(body.text).toContain("device_heartbeat_stale");
+    expect(body.text).toContain("dev-dark");
+    await app.close();
+  });
+
+  it("POSTs JSON under a bounded timeout", async () => {
+    const calls = stubFetch({ status: 200 });
+
+    await dispatchAlert(noopLog, cfg(TELEGRAM_ENV), STALE_ALERT);
+
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.headers?.["Content-Type"]).toBe("application/json");
+    expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("never carries the bot token in the message body", async () => {
+    const calls = stubFetch({ status: 200 });
+
+    await dispatchAlert(noopLog, cfg(TELEGRAM_ENV), STALE_ALERT);
+
+    const body = JSON.parse(calls[0].init.body ?? "{}") as { text: string; chat_id: string };
+    expect(body.text).not.toContain("TEST-TOKEN");
+    expect(body.chat_id).not.toContain("TEST-TOKEN");
+  });
+
+  it("treats a 400 chat-not-found as a failed delivery and falls back", async () => {
+    // Telegram reports sendMessage rejections as HTTP 4xx with ok:false in the
+    // body; the HTTP status is the signal this sink acts on.
+    const { log, entries } = recordingLog();
+    const calls = stubFetch(
+      { status: 400, body: { ok: false, error_code: 400, description: "Bad Request: chat not found" } },
+      { status: 200 },
+    );
+
+    const result = await dispatchAlert(
+      log,
+      cfg({ ...TELEGRAM_ENV, ALERT_WEBHOOK_URL: SINK_URL }),
+      STALE_ALERT,
+    );
+
+    expect(result).toBe("webhook");
+    expect(calls).toHaveLength(2);
+    const failure = entries.find((e) => e.msg === "telegram alert failed");
+    expect(failure?.level).toBe("error");
+    expect(failure?.payload.status).toBe(400);
+  });
+
+  it("logs the Bot API rejection even when the fallback rescues delivery", async () => {
+    const { log, entries } = recordingLog();
+    stubFetch({ status: 500 }, { status: 200 });
+
+    const result = await dispatchAlert(
+      log,
+      cfg({ ...TELEGRAM_ENV, ALERT_WEBHOOK_URL: SINK_URL }),
+      STALE_ALERT,
+    );
+
+    // A successful fallback must not mask the primary sink's failure.
+    expect(result).toBe("webhook");
+    const failures = entries.filter((e) => e.msg === "telegram alert failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.level).toBe("error");
+    expect(failures[0]?.payload.status).toBe(500);
+  });
+
+  it("degrades then recovers the telegram sink health independently", async () => {
+    const { log, entries } = recordingLog();
+    stubFetch({ status: 500 }, { status: 500 }, { status: 500 }, { status: 200 });
+    const conf = cfg(TELEGRAM_ENV);
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+    expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("telegram");
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.payload.sink).toBe("telegram");
+    const recovered = entries.filter((e) => e.msg === "alert_sink_recovered");
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.payload.sink).toBe("telegram");
   });
 });
