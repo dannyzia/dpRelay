@@ -55,6 +55,48 @@ jobs:
       - name: Build (tsc strict + vite)
         run: npm run build
 
+      # Fail fast on credentials with an unambiguous verdict, instead of letting
+      # wrangler report an auth error whose Cloudflare code does not say which
+      # of "empty token" / "wrong token" / "wrong account" it was. Verified by
+      # hand against the API: an absent Authorization header returns
+      # 9106 "Missing X-Auth-Email header", a token-shaped but invalid one
+      # returns 9109 "Invalid access token", and a malformed header returns
+      # 6003/6111. Those three are otherwise indistinguishable from a wrangler
+      # stack trace, which cost several blind dispatch cycles (runs
+      # 36981226537…37092682243). The token value is never echoed; only
+      # Cloudflare's own verdict and the account-name lookup are printed.
+      - name: "Preflight: verify Cloudflare credentials"
+        if: env.HAS_CLOUDFLARE == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -eu
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN resolved to an empty value in the step environment"
+            exit 1
+          fi
+          token_resp=$(curl -sS --max-time 30 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            'https://api.cloudflare.com/client/v4/user/tokens/verify')
+          case "$token_resp" in
+            *'"success":true'*)
+              echo "preflight: API token accepted by Cloudflare" ;;
+            *)
+              echo "::error::Cloudflare rejected the API token: ${token_resp}"
+              exit 1 ;;
+          esac
+          acct_resp=$(curl -sS --max-time 30 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}")
+          case "$acct_resp" in
+            *'"success":true'*)
+              echo "preflight: account ${CLOUDFLARE_ACCOUNT_ID} reachable with this token" ;;
+            *)
+              echo "::error::token is valid but cannot reach account ${CLOUDFLARE_ACCOUNT_ID}: ${acct_resp}"
+              exit 1 ;;
+          esac
+
       - name: Publish to Cloudflare Pages
         # Skip (with a loud notice below, never silently) until the owner sets
         # the Cloudflare secrets — an unset token makes wrangler fail with "Not
