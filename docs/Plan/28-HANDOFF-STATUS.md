@@ -70,9 +70,31 @@ Workstream 6 starts **only** after **all** of the following — in order:
 > the same day — verdict **GO**, zero unexplained deltas — while the
 > re-export + production import remain owner-gated at flip time; item 4
 > follows the cutover. Live tracker and audit trail: Rhizome **ISSUE-36**.
-> Related: ISSUE-37 (runbook execution) — the webhook-fallback alert path was
-> proven end-to-end on 2026-09-28 with authenticated receipts; the Telegram
-> sink is still owner-gated.
+> Related: ISSUE-37 (runbook execution) — the **webhook-fallback alert path is
+> proven end-to-end** (2026-09-28) and was re-verified and hash-anchored on
+> 2026-10-03: 16/16 receipt lines parse 1:1, the temporary-override **and its
+> revert** are both visible in delivered payloads (`threshold_sec` 60 at
+> 07:44:45 and 07:45:01, then 900 at 07:47:59 and twice at 07:50:01, same three
+> device ids throughout), and auth is enforced three ways (wrong secret,
+> absent auth, tampered body all rejected). Hashes are recorded in
+> `29-OWNER-CHECKLIST.md` §3 and in ISSUE-37.
+>
+> The **Telegram primary path (§1.4) is closed by owner attestation as of
+> 2026-10-03 — agent-unverified.** The owner observed the alert land in the ops
+> group and accepted the proof on that basis; the agent could not corroborate it.
+> Production `dprelay-api` (`srv-dal3bae7bikc73e7k7pg`) held **16 env keys with no
+> `TELEGRAM_*`** on every check that day, the live deploy was unchanged since
+> 2026-09-29, and a 3000-line log sweep showed 30 `watchdog_alert` emissions, all
+> `threshold=900`, with zero `threshold=60`. Production was therefore still
+> log-only and the observed alert is attributable to a local `sendMessage` probe.
+> **Residual risk:** if the sink is in fact unset, no incident will page anyone.
+> One env read settles it — 18 keys with both `TELEGRAM_*` corroborates the
+> attestation, 16 keys means §1.4 should be reopened.
+>
+> Also still open on ISSUE-37: the §1.5(c) Pages publish is gated on a valid
+> `CLOUDFLARE_API_TOKEN` (repo secret currently returns `6003`/`6111` "Invalid
+> format for Authorization header" — a malformed value). The workflow defect is
+> fixed and proven on `docs-load-repro`; `master` is untouched.
 
 ## Owner action items (outside agent gates)
 
