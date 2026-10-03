@@ -14,6 +14,7 @@
  */
 import { describe, expect, it, afterEach } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
+import os from "node:os";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, dirname } from "node:path";
@@ -129,6 +130,10 @@ function run(
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const childEnv = { ...process.env };
   delete childEnv.DRY_RUN;
+  // Supplied explicitly so the suite does not depend on a machine-local
+  // .kilo/kilo.jsonc — which is exactly the coupling that made this script
+  // crash on CI. The value is a non-secret placeholder.
+  childEnv.RENDER_API_KEY = "test-render-key-not-a-secret";
   if (env.dryRun !== undefined) childEnv.DRY_RUN = env.dryRun;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [scriptPath, ...args], {
@@ -309,5 +314,20 @@ describe("set-alert-channel.cjs failure modes", () => {
     // The usage text is where an operator learns the refusal exists at all.
     expect(res.stderr).toContain("DRY_RUN");
     expect(res.stderr).toContain("refuses to run");
+  });
+
+  it("does not need a machine-local credential file to print usage", () => {
+    // The CI failure this pins: with the repo root resolved from an absolute
+    // owner-machine path and the key read eagerly at module load, this spawn
+    // died with a bare ENOENT before printing anything.
+    const res = spawnSync(process.execPath, [scriptPath], {
+      encoding: "utf8",
+      // A cwd far from the repo, and no RENDER_API_KEY, so any eager read of
+      // .kilo/kilo.jsonc would surface here.
+      cwd: os.tmpdir(),
+      env: { PATH: process.env.PATH ?? "" },
+    });
+    expect(res.stderr).not.toContain("ENOENT");
+    expect(res.stderr).toContain("usage: set-alert-channel.cjs");
   });
 });

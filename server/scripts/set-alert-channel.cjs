@@ -19,6 +19,8 @@
  *     token/chatId are never echoed, and only the bot's public @username is
  *     printed. TELEGRAM_API_BASE / RENDER_API_BASE override the two API origins
  *     (local verification of this script only, mirroring each other).
+ *     RENDER_API_KEY supplies the Render credential, falling back to
+ *     .kilo/kilo.jsonc under the repo root when the variable is unset.
  *
  * DRY_RUN is treated as a HAZARD, not a rehearsal switch. If it is present and
  * non-empty this script REFUSES to run at all: the check fires before any network
@@ -35,6 +37,7 @@
  * Secrets are never printed — only key names and status codes.
  */
 const { readFileSync } = require('node:fs');
+const path = require('node:path');
 const { randomBytes } = require('node:crypto');
 const https = require('node:https');
 const http = require('node:http');
@@ -52,24 +55,54 @@ const clientFor = (url) => (url.startsWith('http://') ? http : https);
 /** Exit code meaning "refused to start; nothing was sent, written or deployed". */
 const EXIT_REFUSED = 2;
 
-// The hazard gate, placed above everything that can fail or reach the network.
-// It must sit below EXIT_REFUSED (that const is not hoisted) and above the
-// credential read below: reading .kilo/kilo.jsonc throws on a missing or
-// malformed file, and a driver with DRY_RUN set deserves the loud refusal
-// rather than a TypeError about an unrelated property. Function declarations
-// hoist, so calling this ahead of its definition below is fine — and if it were
-// ever moved above EXIT_REFUSED, every DRY_RUN test would fail on a TDZ
-// ReferenceError instead of exiting 2.
+// The hazard gate, the first executable statement in this file. It must sit
+// below EXIT_REFUSED (that const is not hoisted) — if it were ever moved above
+// it, every DRY_RUN test would fail on a TDZ ReferenceError instead of exiting
+// 2. Function declarations hoist, so calling it ahead of its definition below
+// is fine.
 refuseIfDryRun();
 /** Per-request ceiling. A hung API call must fail loudly, not freeze the shell. */
 const REQUEST_TIMEOUT_MS = 15_000;
 
-const repoRoot = '/home/zia/Documents/My Projects/Authenticator';
-const kiloRaw = readFileSync(`${repoRoot}/.kilo/kilo.jsonc`, 'utf8');
-const kiloClean = kiloRaw.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
-const apiKey = JSON.parse(kiloClean).mcp.render.environment.RENDER_API_KEY;
+// Derived from this file's own location. The path it replaces was an absolute
+// owner-machine path, so on any other machine — a CI runner above all — the
+// script died with a bare ENOENT before doing anything at all.
+const repoRoot = path.resolve(__dirname, '..', '..');
 const serviceId = 'srv-dal3bae7bikc73e7k7pg';
 const base = `${process.env.RENDER_API_BASE || 'https://api.render.com/v1/services'}/${serviceId}`;
+
+/**
+ * The Render API key, read lazily and only when a Render call is actually made.
+ *
+ * This used to be a module-level `readFileSync`. That made *every* invocation
+ * depend on a machine-local file, including ones that never talk to Render —
+ * `set-alert-channel.cjs` with no arguments printed a stack trace instead of
+ * its usage text. Reading on demand keeps "what does this need" and "what is
+ * this doing" separate.
+ */
+let cachedApiKey = null;
+function renderApiKey() {
+  if (cachedApiKey !== null) return cachedApiKey;
+  // The environment wins, so the script is usable anywhere — CI, a teammate's
+  // machine, a shell with the key exported — instead of only where one specific
+  // file happens to exist. The file is the fallback for the owner's workflow.
+  const fromEnv = process.env.RENDER_API_KEY;
+  if (fromEnv !== undefined && fromEnv !== '') {
+    cachedApiKey = fromEnv;
+    return cachedApiKey;
+  }
+  const kiloPath = path.join(repoRoot, '.kilo', 'kilo.jsonc');
+  let raw;
+  try {
+    raw = readFileSync(kiloPath, 'utf8');
+  } catch {
+    throw new Error(`cannot read ${kiloPath} — Render API access requires it`);
+  }
+  // .kilo/kilo.jsonc is JSONC; strip // comments before parsing.
+  const cleaned = raw.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  cachedApiKey = JSON.parse(cleaned).mcp.render.environment.RENDER_API_KEY;
+  return cachedApiKey;
+}
 
 /**
  * Refuses to start when DRY_RUN is present and non-empty.
@@ -133,7 +166,7 @@ function request(path, method, payload) {
       {
         method,
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${renderApiKey()}`,
           'Content-Type': 'application/json',
           ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
         },
