@@ -14,6 +14,7 @@ import { loadConfig } from "../src/config.js";
 import {
   dispatchAlert,
   resetAlertSinkHealth,
+  resetStaleAlertDedupe,
   type OpsAlert,
   type WatchdogAlert,
 } from "../src/jobs.js";
@@ -45,13 +46,15 @@ function seedDevice(
   userId: string,
   rawKey: string,
   lastSeenAt: number | null,
+  /** Overridable so tests can age a never-seen device past the grace window. */
+  createdAt: number = Math.floor(Date.now() / 1000),
 ): void {
   app.db
     .prepare(
       "INSERT INTO devices (id, user_id, label, api_key_hash, last_seen_at, revocable, revoked_at, created_at) " +
-        "VALUES (?, ?, ?, ?, ?, 1, NULL, unixepoch())",
+        "VALUES (?, ?, ?, ?, ?, 1, NULL, ?)",
     )
-    .run(id, userId, `device-${id}`, app.sha256Hex(rawKey), lastSeenAt);
+    .run(id, userId, `device-${id}`, app.sha256Hex(rawKey), lastSeenAt, createdAt);
 }
 
 /** Minimal local HTTP sink to observe the watchdog webhook POST. */
@@ -83,14 +86,29 @@ afterEach(async () => {
   while (cleanup.length > 0) {
     await cleanup.pop()!();
   }
+  // Dedupe state is module-global by design; without this a test would inherit
+  // the previous test's alerted set and silently suppress its own alert.
+  resetStaleAlertDedupe();
 });
 
 describe("heartbeat watchdog", () => {
-  it("reports devices with no heartbeat yet as stale (never-seen guard)", async () => {
-    const app = makeApp();
+  it("does not report a never-seen device that is still inside the grace window", async () => {
+    const app = makeApp({ WATCHDOG_STALE_SEC: "900" });
     await app.ready();
     seedUser(app, "user-1");
-    seedDevice(app, "dev-quiet", "user-1", "k1".repeat(32), null);
+    // Enrolled one minute ago, never heartbeaten: not yet an outage, so not stale.
+    seedDevice(app, "dev-quiet", "user-1", "k1".repeat(32), null, Math.floor(Date.now() / 1000) - 60);
+    const stale = await app.runWatchdog();
+    expect(stale).toEqual([]);
+    await app.close();
+  });
+
+  it("reports a never-seen device once it ages past the grace window", async () => {
+    const app = makeApp({ WATCHDOG_STALE_SEC: "900" });
+    await app.ready();
+    seedUser(app, "user-1");
+    // Enrolled 30 minutes ago and still silent → the device never came up.
+    seedDevice(app, "dev-quiet", "user-1", "k1".repeat(32), null, Math.floor(Date.now() / 1000) - 1800);
     const stale = await app.runWatchdog();
     expect(stale.map((d) => d.id)).toEqual(["dev-quiet"]);
     await app.close();

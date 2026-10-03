@@ -40,6 +40,12 @@ export interface Config {
    * identical to a healthy one in the log stream.
    */
   alertSinkFailureThreshold: number;
+  /**
+   * Re-alert interval for an UNCHANGED stale-device set. Without it, dedupe
+   * would mean "alert once then never again", so a device dead for a month
+   * would be announced once and forgotten.
+   */
+  watchdogAlertRepeatSec: number;
   /** Idle seconds after which the next request counts as a wake (Render guard). */
   wakeIdleThresholdSec: number;
   /** Shared secret for phone enrollment (POST /v5/device/enroll). Empty = enrollment disabled. */
@@ -190,6 +196,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       env.ALERT_SINK_FAILURE_THRESHOLD,
       "ALERT_SINK_FAILURE_THRESHOLD",
       3,
+    ),
+    watchdogAlertRepeatSec: parsePositiveInt(
+      env.WATCHDOG_ALERT_REPEAT_SEC,
+      "WATCHDOG_ALERT_REPEAT_SEC",
+      3600,
     ),
     wakeIdleThresholdSec: parsePositiveInt(
       env.WAKE_IDLE_THRESHOLD_SEC,

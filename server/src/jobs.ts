@@ -254,16 +254,29 @@ declare module "fastify" {
   }
 }
 
-/** Finds devices whose last heartbeat is older than `staleSec` (or never seen but expected). */
+/**
+ * Finds devices whose last heartbeat is older than `staleSec`.
+ *
+ * A device that has NEVER been seen (last_seen_at IS NULL) is measured against
+ * `created_at` instead, not against the clock at large. The previous query tested
+ * `last_seen_at IS NULL` with no age bound at all, which made every freshly
+ * enrolled phone stale the instant its row was created and kept it stale forever
+ * if it never heartbeated — both provisioning routes insert NULL deliberately, so
+ * this was the normal state of any unenrolled device rather than an anomaly. The
+ * net effect was a permanent alert every tick for a phone nobody had finished
+ * setting up, which is exactly the noise that stopped anyone reading the watchdog
+ * (ISSUE-38).
+ */
 export function findStaleDevices(db: FastifyInstance["db"], staleSec: number): StaleDevice[] {
   const cutoff = Math.floor(Date.now() / 1000) - staleSec;
   return db
     .prepare(
       "SELECT id, user_id, label, last_seen_at FROM devices " +
-        "WHERE revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?) " +
+        "WHERE revoked_at IS NULL AND ((last_seen_at IS NULL AND created_at < ?) OR " +
+        "(last_seen_at IS NOT NULL AND last_seen_at < ?)) " +
         "ORDER BY last_seen_at IS NOT NULL, last_seen_at ASC",
     )
-    .all(cutoff) as StaleDevice[];
+    .all(cutoff, cutoff) as StaleDevice[];
 }
 
 /**
@@ -307,8 +320,28 @@ export async function dispatchAlert(
 }
 
 /**
+ * Tracks the last alerted stale-device set so an UNCHANGED set is not
+ * re-announced on every tick. Process-local for the same reason as the sink
+ * health counters: the watchdog is a single-process cron (R3) and a restart
+ * legitimately returns to a clean slate. The consequence is a single repeat
+ * alert after a restart, which is the safe direction to err in.
+ */
+let lastStaleSignature: string | null = null;
+let lastStaleAlertAtMs: number | null = null;
+
+/** Clears the stale-alert dedupe state. Test-only; see lastStaleSignature. */
+export function resetStaleAlertDedupe(): void {
+  lastStaleSignature = null;
+  lastStaleAlertAtMs = null;
+}
+
+/**
  * One watchdog pass: find stale devices, dispatch alert when any, log when none.
- * Exported for direct use by the catch-up sweep and tests.
+ *
+ * Dedupe: the alert fires when the stale set CHANGES (a device goes stale or
+ * recovers), or when an unchanged set has gone unannounced for
+ * `watchdogAlertRepeatSec`. Suppressed ticks log at info rather than silently,
+ * so the log still shows the watchdog is alive and seeing the same thing.
  */
 export async function watchdogTick(
   app: FastifyInstance,
@@ -317,8 +350,37 @@ export async function watchdogTick(
   const stale = findStaleDevices(app.db, config.watchdogStaleSec);
   if (stale.length === 0) {
     app.log.info({ job: "heartbeat_watchdog" }, "no stale devices");
+    // A recovered set must not pin the next alert as "unchanged", so clear here
+    // rather than comparing against an empty set forever.
+    lastStaleSignature = null;
+    lastStaleAlertAtMs = null;
     return [];
   }
+  const signature = stale
+    .map((d) => d.id)
+    .sort()
+    .join(",");
+  const nowMs = Date.now();
+  const unchanged = signature === lastStaleSignature;
+  const repeatDue =
+    lastStaleAlertAtMs !== null &&
+    nowMs - lastStaleAlertAtMs >= config.watchdogAlertRepeatSec * 1000;
+
+  if (unchanged && !repeatDue) {
+    app.log.info(
+      {
+        job: "heartbeat_watchdog",
+        deviceIds: stale.map((d) => d.id),
+        count: stale.length,
+        suppressedForSec:
+          lastStaleAlertAtMs === null ? null : Math.floor((nowMs - lastStaleAlertAtMs) / 1000),
+        repeatInSec: config.watchdogAlertRepeatSec,
+      },
+      "watchdog_alert_suppressed_unchanged_set",
+    );
+    return stale;
+  }
+
   const alert: WatchdogAlert = {
     type: "device_heartbeat_stale",
     deviceIds: stale.map((d) => d.id),
@@ -327,6 +389,8 @@ export async function watchdogTick(
     detected_at: new Date().toISOString(),
   };
   await dispatchAlert(app.log, config, alert);
+  lastStaleSignature = signature;
+  lastStaleAlertAtMs = nowMs;
   return stale;
 }
 
