@@ -111,9 +111,22 @@ set):**
    `curl -s -i -X OPTIONS "$BASE/v5/auth/login" -H "Origin:
    https://dprelay-dashboard.pages.dev" -H "Access-Control-Request-Method:
    POST"` → expect HTTP **204** with `access-control-allow-origin` echoing the
-   origin. Today (allow-list unset, fail-closed) the same probe returns HTTP
-   **404** with no CORS headers — the 404→204 flip after set + deploy is the
-   proof the dashboard can talk to the API.
+   origin.
+   **CONFIRMED 2026-10-03 against live production** (`dprelay-api-hug8.onrender.com`):
+   - allow-list is set to the single entry `https://dprelay-dashboard.pages.dev`;
+   - `OPTIONS /health` with that Origin → **204**,
+     `access-control-allow-origin: https://dprelay-dashboard.pages.dev`,
+     `access-control-allow-methods: GET, POST, PATCH, DELETE, OPTIONS`;
+   - **negative control** `Origin: https://evil.example` → **204** with **no**
+     `access-control-allow-origin` header, i.e. refused. The positive result
+     only means something because the unlisted origin is denied.
+   The earlier "404 with no CORS headers" note described the fail-closed state
+   before the allow-list existed; that state is over and the 404→204 flip has
+   happened.
+   **Residual gap:** `dprelay-dashboard.pages.dev` does not resolve yet
+   (NXDOMAIN) — no dashboard has ever been published, because (c) has never
+   gone green. The API therefore allow-lists a correct origin that currently
+   serves nothing. CORS is not the blocker; the Pages deploy is.
 
 **(c) Cloudflare Pages deploy — automated (ISSUE-27, workflow
 `.github/workflows/dashboard-pages-deploy.yml`):**
@@ -129,6 +142,30 @@ set):**
    `https://dprelay-dashboard.pages.dev` or the custom domain). If it
    differs from the (b) value, update `CORS_ALLOWED_ORIGINS` and redeploy
    the API — which is why (b) comes first.
+   **BLOCKED on a Cloudflare token that Cloudflare rejects.** All three
+   secrets exist (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`,
+   `CLOUDFLARE_PAGES_PROJECT`; token last rotated 2026-10-02T08:07:27Z), and
+   the non-empty check passes, but the workflow's credential preflight fails
+   with `code 6003 "Invalid request headers"`, inner `6111 "Invalid format
+   for Authorization header"`. Latest failing run **37100586782**
+   (2026-10-03T05:40:39Z, `workflow_dispatch`); `master` last attempted
+   **36982301978** (2026-10-02T08:07:49Z), also failed.
+   **That error is not evidence of a malformed token.** Probing the live
+   endpoint shows `6003`/`6111` is Cloudflare's *generic* invalid-token
+   response: a 40-char token of the right length, a short one, one with a
+   trailing space, and one wrapped in quotes all return the identical code,
+   while an absent header returns `1001` (not `9106`) and a wrong-but-
+   well-formed token returns `6003` (not `9109`). So the previous reading —
+   "the value is malformed" — is unsupported; expired, revoked, wrong-scope
+   and wrong-account are all equally consistent, and this run cannot tell
+   them apart.
+   **Why it cannot yet:** the preflight checks *token verify* before *account
+   reachability*, so the account check never executes. That ordering hides
+   the one distinction that matters (invalid token vs valid token lacking
+   Pages:Edit on this account). Reversing the two checks would make the next
+   failure actionable.
+   Owner action: mint a fresh token with Account · Cloudflare Pages · Edit and
+   replace the secret — see `docs/Plan/29-OWNER-CHECKLIST.md` §4.
 3. Drive the dashboard against production: log in (JWT plane), campaigns
    list loads; Connect App (app plane) and Operator views unlock with their
    respective credentials.
@@ -295,7 +332,7 @@ Rollback notes:
 
 ---
 
-## 7. Residual gaps (fix-before-flip candidates, none blocking today)
+## 7. Residual gaps (fix-before-flip candidates — gaps 1-6 none blocking today; gap 7 is owner-blocking)
 
 1. **Kill switch has no operator route.** ✅ **CLOSED 2026-09-25 (PR #20,
    `0f20194`):** `requireOperator`-gated `POST /v5/admin/kill-switch` shipped
@@ -311,6 +348,22 @@ Rollback notes:
    still unset in production, so §1.4 remains open until the owner sets the
    Telegram vars and one real alert is delivered. Owner steps + proof:
    **§1.5(a)**.
+   → **§1.4 SPLIT INTO TWO GATES 2026-10-03**, because a single box could only
+   ever report the weaker half. **Gate A (credential + membership) is
+   owner-verified**: valid token, bot in the ops group, chat id resolves, probe
+   delivered. Agent could not corroborate — those credentials have never
+   existed on this machine and `staging/` holds no Telegram receipt, so it is
+   recorded on the same owner-attested basis as §1.4, not as a sign-off.
+   **Gate B (production delivery) is still OPEN**: on every check the service
+   held 16 env keys with no `TELEGRAM_*`, the live deploy was unchanged since
+   2026-09-29, and a 3000-line log sweep showed 30 `watchdog_alert` emissions,
+   all `threshold=900`, zero `threshold=60` — so production never dispatched to
+   Telegram and remains log-only. **Gate B does not depend on gate A**: valid
+   creds that were never deployed is an ordinary state.
+   Settle it with one env read: 18 keys with both `TELEGRAM_*` corroborates the
+   attestation and closes gate B; 16 keys means reopen §1.4. Service id is
+   `srv-dal3bae7bikc73e7k7pg` (an earlier ISSUE-37 attestation comment
+   mistyped it as `...k7kg`; corrected there in comment `01M40N1P7CPKJRZMAJK28TQW9F`).
 3. **No staging environment** — prod is the only v5 environment; the canary
    app in §4 step 3 is the staging substitute. Acceptable at this scale, but
    it means every verification happens against real SMS credit.
@@ -318,11 +371,34 @@ Rollback notes:
    recovery is re-enrolling a replacement (§0 procedure in `11-ENV-VARS.md`).
 5. `/health` version is manually bumped per milestone — keep bumping
    `server/package.json` per pass or staleness checks silently degrade.
-6. **`CORS_ALLOWED_ORIGINS` unset** (new 2026-09-25): the clean-room
-   `dashboard/` SPA (PR #29) cannot call the API from a browser until the
-   owner sets this fail-closed allow-list (the Cloudflare Pages origin) on
-   Render and redeploys. curl/mobile clients are unaffected. Owner steps:
-   **§1.5(b)**.
+6. ~~**`CORS_ALLOWED_ORIGINS` unset**~~ — **RESOLVED 2026-10-03.** This gap
+   (opened 2026-09-25) blocked the clean-room `dashboard/` SPA (PR #29) from
+   calling the API from a browser. The owner set the fail-closed allow-list to
+   `https://dprelay-dashboard.pages.dev` on Render and redeployed; the flip is
+   live-verified (allowed origin → 204 echoing `access-control-allow-origin`;
+   unlisted origin → 204 with no such header). Owner steps: **§1.5(b)**.
+   *Residual, and not a CORS problem:* that origin is currently NXDOMAIN,
+   because the Pages publish has never succeeded — cause is gap 7 below, not
+   CORS. The API is ready for the dashboard the moment the deploy lands.
+7. **Cloudflare token gate unresolved — the sole blocker on the dashboard.**
+   The dashboard has never been published because `CLOUDFLARE_API_TOKEN` is
+   rejected by Cloudflare with `6003` "Invalid request headers" / inner `6111`
+   "Invalid format for Authorization header". All three Pages secrets exist and
+   the non-empty check passes, so this is not a missing-secret problem.
+   **`6003`/`6111` is Cloudflare's generic invalid-token response, not a
+   malformed-value signal:** a 40-char token, a short one, one with a trailing
+   space and one wrapped in quotes all return the identical code; an absent
+   header returns `1001` and a wrong-but-well-formed token returns `6003`.
+   Expired, revoked, wrong-scope and wrong-account remain indistinguishable,
+   because the preflight verifies the token *before* testing account
+   reachability, so the account check never runs.
+   The workflow defect is fixed and proven on `docs-load-repro` (project-name
+   expansion `6fd5ff3`, credential preflight `86e48c3`); `master` is untouched
+   and automatic Pages deploys stay inactive until it lands, since the
+   workflow triggers on `push: [master]` only.
+   Latest failing run **37100586782** (2026-10-03T05:40:39Z, `workflow_dispatch`).
+   **Owner action:** mint a fresh token with Account · Cloudflare Pages · Edit
+   and replace the secret — `29-OWNER-CHECKLIST.md` §4. Detail: **§1.5(c)**.
 
 ---
 

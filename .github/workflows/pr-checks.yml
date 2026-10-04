@@ -85,6 +85,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Blocks a credential from reaching the index. Deliberately separate from
+      # the dependency check below: that finds vulnerable packages, this finds
+      # leaked secrets, and only one of them is about what we committed.
+      # Works on the default shallow checkout: the gate reads `git ls-files` and
+      # the working tree only, never history, so fetch-depth: 0 is not needed.
+      - name: Secret gate
+        run: bash scripts/secret-scan.sh
       # v4 functions/ plane removed (decommission) — the npm-audit step that
       # scanned it went with it; remediation is moot post-decommission.
       - name: Run dependency check

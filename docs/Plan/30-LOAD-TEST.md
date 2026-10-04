@@ -201,3 +201,31 @@ phone-facing claim path kept its ~1 ms tail. The p99 remains a timeout
 *wait*, not a failure. The disk finding from the original §7 run is thereby
 completed, not contradicted: with the constraint removed, SQLite's behavior
 under 16-writer sustained contention is the same story the formal runs told.
+
+### 7.2 Reproduction run on d1c4013 (2026-10-01)
+
+Fresh execution of the identical profile (`--seconds 30 --workers 16`) against
+master `d1c4013` after PRs #50–#52 merged, to confirm §7.1's numbers
+reproduce. Same environment contract: node v20.9.0 (nvm), WAL,
+`busy_timeout` 5000 ms, bench DB on the `/` partition via `TMPDIR=/tmp`
+(7.3 GB free). Raw JSON: `staging/bench-30s-16w-2026-10-01.json`
+(gitignored); stderr empty; exit 0 on the first attempt.
+
+| Metric (30 s phases, 16 workers) | d1c4013 (this run) | §7.1 (36ca8f1, 09-30) | Read |
+|---|---|---|---|
+| Campaigns / create txs / recipient rows | 3 164 / 3 225 / 316 400 | 3 012 / 3 060 / 301 200 | ~5% more work in the same window — same regime |
+| Create throughput | 66.01 tx/s (6 476 msg/s) | 72.51 tx/s (7 137 msg/s) | −9%: within run-to-run variance for a contention-bound profile |
+| Create latency p50 / p95 / p99 / max | 6.34 / 38.24 / 5 007 / 40 669 ms | 10.06 / 67.59 / 5 008 / 24 406 ms | p50/p95 improved; p99 unchanged (5 s busy-timeout ceiling); max tail longer but rarer |
+| `SQLITE_BUSY` events (create / claim) | 61 / 20 — **81 absorbed, 0 surfaced** | 48 / 22 — 70 absorbed, 0 surfaced | same magnitude; every event absorbed by the default timeout |
+| Claim txs / throughput / p50 / p99 | 80 004 / 63.87 /s / 0.32 / 1.04 ms | 64 122 / 62.91 /s / 0.40 / 1.21 ms | phone-facing claim tail still ~1 ms at full create concurrency |
+| Drain (production / stress) | 60 ticks / 3 889 msgs/min | 58 ticks / 3 652 msgs/min | stress ceiling ~+6% — same shape |
+| `wal_checkpoint(TRUNCATE)` | 1 735.64 ms | 1 107.48 ms | scales with WAL volume (5% more rows), still sub-2 s |
+| `PRAGMA foreign_key_check` / row accounting | ok / reconciles exactly (3 164 campaigns, 2 000 sent, 0 pending) | ok / reconciles | — |
+
+**Verdict check (AC3, fourth run): the no-mitigation verdict holds —
+reproduced independently on a different master tip.** The deltas are all
+second-order (±~9% throughput, same ~1 ms claim tail, same zero surfaced
+errors, same busy-timeout p99 ceiling), and the run needed none of the
+§7-era repro traps to be debugged again — only the two documented
+conventions (nvm Node 20 PATH, `TMPDIR=/tmp`). §7.1 remains the
+representative run; this section is the reproducibility receipt.

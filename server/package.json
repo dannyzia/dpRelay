@@ -12,7 +12,9 @@
     "build": "node scripts/download-litestream.mjs && tsc -p tsconfig.json",
     "start": "node scripts/start-server.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "regen:openapi": "tsx src/scripts/regen-openapi-spec.ts",
+    "selftest:alerts": "tsx scripts/alert-channel-selftest.ts"
   },
   "dependencies": {
     "@fastify/cors": "^8.5.0",
