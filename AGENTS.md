@@ -395,3 +395,26 @@ FINISH:
 - **If you discover out-of-scope work**, create a separate Rhizome issue and link it (`blocks`/`related_to`), don't expand the current one.
 - **Pre-merge gate**: lint + tests + Rhizome-linked commits. The CI run-script is `bash scripts/run-all-checks.sh`.
 
+---
+
+## Orchestrator Protocol (dP Relay v5)
+
+> **Activation:** active while Rhizome ISSUE-64 ("ORCHESTRATOR LOOP — dP Relay v5 build-out") is open. On its closure this section retires and normal single-agent workflow applies.
+
+Two roles cooperate through Rhizome only — the **orchestrator** (instructs, answers questions, verifies work; skill: `rhizome-orchestrator`) and the **builder** (builds, reports after every step, asks questions; skill: `rhizome-builder`). Load your skill at session start.
+
+- **Hub: ISSUE-64.** All coordination — stage orders, step reports, questions, answers — happens as comments there.
+- **Builder tags:** `STEP <n>:` after every build step (even small ones), `STAGE REPORT:` at stage end, `QUESTION:` for clarifications and follow-ups.
+- **Orchestrator tags:** stage orders, `ANSWER:` replies, `OWNER-DECISION:` outcomes after relaying to the owner.
+- The builder never contacts the owner; anything business/risk/money/irreversible routes through the orchestrator as a `QUESTION:`.
+- Both roles check Rhizome intermittently (session start, after each report or question, when idle). **Silence never means approval.**
+- **Verification rule:** a stage advances only after the orchestrator checks claims against the repo, CI (all jobs green on the exact PR head SHA), and production (`https://dprelay-api-hug8.onrender.com/health` — the `version` field must match master tip; "healthy" alone is not "current").
+
+### Project standing rules for both roles
+
+- AGPL clean-room vs httpSMS: `scripts/agpl-grep.sh` passes before every merge; never copy rival code, config, schema, or identifiers.
+- Secrets never printed or committed; `.kilo/kilo.jsonc` is never staged.
+- Render env-var PUTs do NOT deploy — explicit deploy trigger (`POST /v1/services/srv-dal3bae7bikc73e7k7pg/deploys`) + poll to live.
+- Never edit an already-applied SQLite migration; `tsc` ignores `.mjs` (run `node --check`); `tsc` drops `.sql` (the copy-migrations build step stays).
+- Commit format `type(scope): subject` + `Refs: ISSUE-N`; version bump per merged milestone.
+- v4 Firebase is measured-dead (zero traffic since Aug 9, verified from RTDB) — never build against v4.
