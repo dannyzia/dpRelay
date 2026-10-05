@@ -387,6 +387,31 @@ exit 64
   });
 });
 
+/**
+ * Reads a repo file when this checkout has it, or null when it does not.
+ *
+ * Several guarded files are owner-local by design: `staging/` is gitignored,
+ * and `server/scripts/rotate-secret.cjs` and `verify-otp-contract.cjs` were
+ * never tracked. A CI checkout therefore has ENOENT where the owner's machine
+ * has a file, and asserting those paths unconditionally turns every clean
+ * clone into a red build. That is not hypothetical — it is what PR #55's first
+ * CI run did. The precedent is rotate-fcm-key-validation.test.ts, which skips
+ * an absent staging script.
+ *
+ * The cost is real and deliberately not hidden: on CI these guards read fewer
+ * files, so they prove less there. `coveredFiles` is what stops that decaying
+ * into a test that asserts nothing at all.
+ */
+function readIfPresent(rel: string): string | null {
+  const p = join(repoRoot, rel);
+  return existsSync(p) ? readFileSync(p, "utf8") : null;
+}
+
+/** The subset of `rels` this checkout actually has, so a skip stays visible. */
+function coveredFiles(rels: string[]): string[] {
+  return rels.filter((rel) => existsSync(join(repoRoot, rel)));
+}
+
 describe("the plaintext stores stay gone", () => {
   const GONE = [
     "staging/fcm-rotation-backup.json",
@@ -414,9 +439,15 @@ describe("the plaintext stores stay gone", () => {
       "server/scripts/rotate-secret.cjs",
       "staging/rotate-fcm-key.cjs",
     ];
-    for (const rel of writers) {
-      const src = readFileSync(join(repoRoot, rel), "utf8");
-      expect(src, `${rel} must not write a secret to disk`).not.toMatch(/writeFileSync/);
+    const checked = coveredFiles(writers);
+    // The two this repo tracks are asserted present, so a checkout that had
+    // somehow lost them fails loudly rather than skipping to a green vacuous
+    // assertion.
+    expect(checked).toEqual(
+      expect.arrayContaining(["server/scripts/render-key.cjs", "server/scripts/secret-store.cjs"]),
+    );
+    for (const rel of checked) {
+      expect(readIfPresent(rel), `${rel} must not write a secret to disk`).not.toMatch(/writeFileSync/);
     }
   });
 
@@ -429,8 +460,10 @@ describe("the plaintext stores stay gone", () => {
       "server/scripts/verify-otp-contract.cjs",
       "staging/rotate-fcm-key.cjs",
     ];
-    for (const rel of files) {
-      const src = readFileSync(join(repoRoot, rel), "utf8");
+    const checked = coveredFiles(files);
+    expect(checked).toEqual(expect.arrayContaining(["server/scripts/render-key.cjs", "server/scripts/secret-store.cjs"]));
+    for (const rel of checked) {
+      const src = readIfPresent(rel)!;
       // Comments are allowed to name the retired path so the history is legible.
       const code = src.replace(/^\s*(\*|\/\/).*$/gm, "");
       expect(code, `${rel} still references a retired plaintext path`).not.toMatch(
@@ -450,9 +483,10 @@ describe("the plaintext stores stay gone", () => {
       "server/scripts/provision-production-app.cjs",
       "staging/rotate-fcm-key.cjs",
     ];
-    for (const rel of files) {
-      const src = readFileSync(join(repoRoot, rel), "utf8");
-      expect(src, `${rel} hardcodes a machine path`).not.toContain(
+    const checked = coveredFiles(files);
+    expect(checked).toEqual(expect.arrayContaining(["server/scripts/secret-store.cjs", "server/scripts/render-key.cjs"]));
+    for (const rel of checked) {
+      expect(readIfPresent(rel), `${rel} hardcodes a machine path`).not.toContain(
         "/home/zia/Documents/My Projects/Authenticator",
       );
     }
@@ -500,19 +534,28 @@ describe("account literals cannot drift out of the allowlist", () => {
 
   it("matches every declared account at least once", () => {
     const found = new Set<string>();
+    // Whether the reverse direction is checkable depends on this checkout:
+    // staging/ is gitignored, so on CI two of the accounts have no call site
+    // at all and asserting coverage would be asserting the shape of the
+    // checkout, not of the code.
+    const allPresent = LITERALS.every(({ file }) => existsSync(join(repoRoot, file)));
     for (const { file, pattern } of LITERALS) {
-      const src = readFileSync(join(repoRoot, file), "utf8");
+      const src = readIfPresent(file);
+      if (src === null) continue; // owner-local script, absent from this checkout
       const m = src.match(pattern);
       expect(m, `${file} no longer declares its account with the expected form`).not.toBeNull();
       found.add(m![1]!);
     }
-    for (const account of ACCOUNTS) {
-      expect([...found].includes(account), `no call site declares "${account}"`).toBe(true);
-    }
     // And the other direction: a literal that has drifted to a name no longer
-    // in ACCOUNTS must fail here, not silently read nothing at runtime.
+    // in ACCOUNTS must fail here, not silently read nothing at runtime. This
+    // half always holds, whatever the checkout contains.
     for (const account of found) {
       expect(ACCOUNTS, `"${account}" is declared by a call site but absent from ACCOUNTS`).toContain(account);
+    }
+    if (allPresent) {
+      for (const account of ACCOUNTS) {
+        expect([...found].includes(account), `no call site declares "${account}"`).toBe(true);
+      }
     }
   });
 
