@@ -331,3 +331,72 @@ describe("set-alert-channel.cjs failure modes", () => {
     expect(res.stderr).toContain("usage: set-alert-channel.cjs");
   });
 });
+
+describe("set-alert-channel.cjs real-run banner", () => {
+  it("announces itself BEFORE it changes production, not after", async () => {
+    const mocks = await startMocks();
+    stopMocks = mocks.stop;
+
+    const res = await run(["telegram", FAKE_TOKEN, FAKE_CHAT_ID], {
+      tgUrl: mocks.tgUrl,
+      renderUrl: mocks.renderUrl,
+    });
+
+    // The run really happened, so the banner is not vacuous...
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("PUT env status");
+    // ...and it was said first. A banner printed after the write would be a
+    // receipt, not a warning, which is the opposite of what this is for.
+    expect(res.stdout).toContain("REAL RUN");
+    expect(res.stdout.indexOf("REAL RUN")).toBeLessThan(res.stdout.indexOf("PUT env status"));
+  });
+
+  it("names the actual consequence for the mode being run", async () => {
+    const mocks = await startMocks();
+    stopMocks = mocks.stop;
+
+    const res = await run(["revert"], {
+      tgUrl: mocks.tgUrl,
+      renderUrl: mocks.renderUrl,
+    });
+
+    // Not a generic "you are running for real": the operator has to be told
+    // what this specific mode is about to do to production.
+    expect(res.stdout).toContain("mode: revert removes WATCHDOG_STALE_SEC");
+  });
+
+  it("calls wait-live READ-ONLY rather than claiming it will change production", () => {
+    // No mock: wait-live only needs the banner, which prints before any I/O.
+    const res = spawnSync(process.execPath, [scriptPath, "wait-live"], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "", RENDER_API_KEY: "test-render-key-not-a-secret", RENDER_API_BASE: "http://127.0.0.1:1" },
+    });
+    expect(res.stdout).toContain("READ-ONLY");
+    // A banner that overstates a status poll trains the eye to skip it.
+    expect(res.stdout).not.toContain("WILL act on production\n  mode: wait-live sets");
+  });
+
+  it("stays silent on the bare usage path, which changes nothing", () => {
+    const res = spawnSync(process.execPath, [scriptPath], { encoding: "utf8" });
+    expect(res.status).toBe(1);
+    // A banner that fired here would be pure noise on `node script` with no args.
+    expect(res.stdout).not.toContain("REAL RUN");
+  });
+
+  it("never prints the real-run banner on a run it refused", async () => {
+    const mocks = await startMocks();
+    stopMocks = mocks.stop;
+
+    const res = await run(["telegram", FAKE_TOKEN, FAKE_CHAT_ID], {
+      tgUrl: mocks.tgUrl,
+      renderUrl: mocks.renderUrl,
+      dryRun: "1",
+    });
+
+    expect(res.status).toBe(2);
+    expect(res.stderr).toContain("REFUSING TO RUN");
+    // "Real run" and "refused" in the same output is exactly the ambiguity
+    // both banners exist to remove.
+    expect(res.stdout).not.toContain("REAL RUN");
+  });
+});
