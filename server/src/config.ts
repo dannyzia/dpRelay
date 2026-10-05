@@ -47,6 +47,20 @@ export interface Config {
    */
   watchdogAlertRepeatSec: number;
   /**
+   * Consecutive FCM wake failures before an operator alert fires — for the
+   * transient and token classes. A credential-class failure ignores this and
+   * alerts immediately, because a revoked key does not fix itself on retry.
+   * The wake runs on every OTP send, so without a threshold a single network
+   * blip would page someone.
+   */
+  fcmWakeAlertThreshold: number;
+  /**
+   * Re-alert interval while FCM wake keeps failing. Without it, a credential
+   * broken at 03:00 is announced once and then never again, which is the same
+   * silence in slower motion.
+   */
+  fcmWakeAlertRepeatSec: number;
+  /**
    * Age (seconds since creation) after which a device that has NEVER
    * heartbeaten is silently quarantined. Quarantine hides it from the stale set
    * and from alerting without revoking it, so a phone that was merely never
@@ -130,6 +144,21 @@ export interface Config {
   corsAllowedOrigins: string;
   /** How often the aggregate-stats snapshot refreshes (node-cron pattern). */
   statsCron: string;
+  /**
+   * Daily synthetic alert canary. OFF by default: it sends a real message into
+   * the real ops channel, and a deployment must opt in to that rather than
+   * discover it after a deploy. With the Telegram sink unconfigured the canary
+   * is inert regardless.
+   */
+  alertCanaryEnabled: boolean;
+  /** How often the canary runs (node-cron pattern). Daily by default. */
+  alertCanaryCron: string;
+  /**
+   * Age of the last delivery receipt beyond which the canary reports itself
+   * overdue. Default 26h = one daily run plus slack, so a single missed run is
+   * tolerated and two is a real signal.
+   */
+  alertCanaryMaxAgeSec: number;
 }
 
 /**
@@ -196,6 +225,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     watchdogStaleSec: parsePositiveInt(env.WATCHDOG_STALE_SEC, "WATCHDOG_STALE_SEC", 900),
     watchdogCron: env.WATCHDOG_CRON ?? "*/5 * * * *",
     catchUpCron: env.CATCH_UP_CRON ?? "*/10 * * * *",
+    alertCanaryEnabled: parseBoolean(env.ALERT_CANARY_ENABLED, "ALERT_CANARY_ENABLED", false),
+    alertCanaryCron: env.ALERT_CANARY_CRON ?? "0 9 * * *",
+    alertCanaryMaxAgeSec: parsePositiveInt(
+      env.ALERT_CANARY_MAX_AGE_SEC,
+      "ALERT_CANARY_MAX_AGE_SEC",
+      26 * 60 * 60,
+    ),
     alertWebhookUrl: env.ALERT_WEBHOOK_URL ?? "",
     alertWebhookSecret: env.ALERT_WEBHOOK_SECRET ?? "",
     telegramBotToken: env.TELEGRAM_BOT_TOKEN ?? "",
@@ -208,6 +244,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     watchdogAlertRepeatSec: parsePositiveInt(
       env.WATCHDOG_ALERT_REPEAT_SEC,
       "WATCHDOG_ALERT_REPEAT_SEC",
+      3600,
+    ),
+    fcmWakeAlertThreshold: parsePositiveInt(
+      env.FCM_WAKE_ALERT_THRESHOLD,
+      "FCM_WAKE_ALERT_THRESHOLD",
+      3,
+    ),
+    fcmWakeAlertRepeatSec: parsePositiveInt(
+      env.FCM_WAKE_ALERT_REPEAT_SEC,
+      "FCM_WAKE_ALERT_REPEAT_SEC",
       3600,
     ),
     deviceQuarantineSec: parsePositiveInt(
