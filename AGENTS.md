@@ -405,7 +405,7 @@ Two roles cooperate through Rhizome only — the **orchestrator** (instructs, an
 
 - **Hub: ISSUE-64.** All coordination — stage orders, step reports, questions, answers — happens as comments there.
 - **Builder tags:** `STEP <n>:` after every build step (even small ones), `STAGE REPORT:` at stage end, `QUESTION:` for clarifications and follow-ups.
-- **Orchestrator tags:** stage orders, `ANSWER:` replies, `OWNER-DECISION:` outcomes after relaying to the owner.
+- **Orchestrator tags:** stage orders, `ANSWER:` replies, `OWNER-DECISION:` outcomes after relaying to the owner, `VERIFIED:` stage-advance posts.
 - The builder never contacts the owner; anything business/risk/money/irreversible routes through the orchestrator as a `QUESTION:`.
 - Both roles check Rhizome intermittently (session start, after each report or question, when idle). **Silence never means approval.**
 - **Verification rule:** a stage advances only after the orchestrator checks claims against the repo, CI (all jobs green on the exact PR head SHA), and production (`https://dprelay-api-hug8.onrender.com/health` — the `version` field must match master tip; "healthy" alone is not "current").

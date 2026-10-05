@@ -30,7 +30,7 @@ You are starting the loop for this project:
 
 1. Create the hub issue: title `ORCHESTRATOR LOOP — <project> build-out`, status `ready`, priority high/critical. Description must contain the protocol (tags, cadence, verification rule, report formats, escalation boundary) — copy the structure from the AGENTS.md template in §10.
 2. **Author the project's AGENTS.md section** (§10) — instantiate every placeholder with this project's specifics. This is a required duty, not optional: the skills are generic on purpose; AGENTS.md is where the project speaks.
-3. Post the first stage orders as a hub comment (§6).
+3. Post the first stage orders as a hub comment (§5).
 4. Record on the hub how the builder should boot (read AGENTS.md → read this hub → execute current stage).
 
 ## 4. What the orchestrator owns (and what it does not)
@@ -133,31 +133,11 @@ Partial completions: verify what landed, post `advanced with notes`, and make th
 
 ## 10. AGENTS.md template you author per project
 
-```markdown
-## Orchestrator Protocol (<project>)
+The full copy-paste template lives at `references/AGENTS-md-template.md` — read it whenever you bootstrap a new hub (§3) or amend the protocol section of an existing project. The file is canonical; this section is the orientation.
 
-> **Activation:** active while Rhizome <HUB-ISSUE-ID> ("ORCHESTRATOR LOOP") is open.
-> On its closure this section retires and normal single-agent workflow applies.
+**The shape, in one paragraph:** a top-level `## Orchestrator Protocol (<project>)` heading, an activation note (`active while Rhizome <HUB-ISSUE-ID> is open; retires on closure`), the two roles + skill names, the canonical tag vocabulary, the verification rule with the project's live-surface definition, and a short list of non-negotiables (secrets, licensing, deploy quirks, commit format, migration discipline).
 
-Roles: **orchestrator** (instructs, answers, verifies — skill: rhizome-orchestrator)
-and **builder** (builds, reports, asks — skill: rhizome-builder). Load your skill
-at session start.
-
-- Hub: <HUB-ISSUE-ID>. All coordination is comments there.
-- Builder tags: `STEP <n>:` after every build step (even small), `STAGE REPORT:`
-  at stage end, `QUESTION:` for clarifications and follow-ups.
-- Orchestrator tags: stage orders, `ANSWER:`, `OWNER-DECISION:`, `VERIFIED:`.
-- The builder never contacts the owner; business/risk/money/irreversible items
-  route through the orchestrator.
-- Both roles check Rhizome intermittently; silence never means approval.
-- Verification rule: a stage advances only after three-pillar verification
-  (repo, CI on the exact head SHA, and <LIVE SURFACE — e.g. /health version
-  must match master tip; "healthy" is not "current">).
-- Project standing rules: <per-project non-negotiables — secrets, licensing/
-  clean-room constraints, deploy quirks, commit format, migration discipline>.
-```
-
-Keep the section small and stable — it is the constitution, not the agenda. Stage state lives on the hub only.
+**The discipline, in one sentence:** keep the section small and stable — it is the constitution, not the agenda. Stage state lives on the hub only; ad-hoc decisions live on the hub as `ANSWER:` / `OWNER-DECISION:`. The template file's "How to use this file" block walks through placeholder substitution, the commit timing, and the retirement text.
 
 ## 11. Retirement
 

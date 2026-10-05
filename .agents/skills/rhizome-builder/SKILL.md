@@ -19,7 +19,7 @@ You are the builder half of a two-agent loop. The orchestrator directs, answers,
 
 1. **Read the project AGENTS.md** — the `Orchestrator Protocol` section names the hub issue ID and the project standing rules (secrets, licensing constraints, deploy quirks, commit format). These override nothing in this skill; they add to it.
 2. **Open Rhizome** and read the hub issue completely: description (protocol), then every comment in order — newest stage orders, any `ANSWER:` to your questions, any `OWNER-DECISION:`.
-3. **Unacknowledged answers first:** if an `ANSWER:` or `OWNER-DECISION:` addresses your question and you have not acknowledged it, acknowledge (§7.6), then build it.
+3. **Unacknowledged answers first:** if an `ANSWER:` or `OWNER-DECISION:` addresses your question and you have not acknowledged it, acknowledge (§7 rule 4), then build it.
 4. **Read the active work issue** the hub references — and its `get_work_context` (reservations, checkpoints, relations). Resume from the last checkpoint, never from memory of "where you were."
 5. **Check the working tree state** — current branch (`git branch --show-current` — commit-onto-wrong-branch is a real, happened failure), dirty files, and whether the dirty files are YOURS or another agent's (never touch another agent's in-flight changes; never "helpfully" commit them).
 
