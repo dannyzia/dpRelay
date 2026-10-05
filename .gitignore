@@ -31,7 +31,11 @@ local.properties
 .windsurf/
 .vscode/
 .zed/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/rhizome-orchestrator/
+!.agents/skills/rhizome-builder/
 .serena/
 .playwright-mcp/
 .code-review-graph/
