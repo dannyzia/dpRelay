@@ -36,22 +36,42 @@ const { resolveRenderApiKey } = require_(join(repoRoot, "server/scripts/render-k
   resolveRenderApiKey: (opts?: { env?: Record<string, string | undefined> }) => string;
 };
 
-/** Every ops script that touches Render, tracked or gitignored alike. */
-const READERS = [
+/**
+ * Ops scripts that ship in git. Their existence is a HARD requirement: a clean
+ * checkout (CI included) must have every one of them, so a missing file here is
+ * a red suite, not a skip.
+ */
+const TRACKED_READERS = [
   "server/scripts/set-alert-channel.cjs",
   "server/scripts/fcm-wake-probe.cjs",
   "server/scripts/set-production-gates.cjs",
   "server/scripts/provision-production-app.cjs",
+  "server/scripts/alert-channel-selftest.ts",
+];
+
+/**
+ * Owner-local ops tools: gitignored (`staging/`) or not yet committed.
+ *
+ * A CI checkout cannot contain them, so presence is not asserted — the same
+ * contract `rotate-fcm-key-validation.test.ts` documents: skip what the runner
+ * cannot have rather than run permanently red. When the file IS present (the
+ * operator's machine, which is where these run) it faces every check a tracked
+ * reader does — filtered here so "absent in CI" and "broken locally" stay
+ * distinguishable instead of collapsing into one failure message.
+ */
+const LOCAL_READERS = [
   "server/scripts/rotate-secret.cjs",
   "server/scripts/diag-env-shape.cjs",
   "server/scripts/diag-deploy-state.cjs",
-  "server/scripts/alert-channel-selftest.ts",
   "staging/render-log-sweep.cjs",
   "staging/rotate-core-secrets.cjs",
   "staging/rotate-fcm-key.cjs",
   "staging/telegram-proof-runner.cjs",
   "staging/telegram-stagecheck.cjs",
-];
+].filter((rel) => existsSync(join(repoRoot, rel)));
+
+/** Every ops script that touches Render — tracked, plus local ones if present. */
+const READERS = [...TRACKED_READERS, ...LOCAL_READERS];
 
 /**
  * A stand-in credential. Deliberately NOT shaped like a real Render key: the
