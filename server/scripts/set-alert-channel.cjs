@@ -159,6 +159,13 @@ function refuseIfDryRun() {
  * Declared as a const above the call site on purpose: this file has already
  * been bitten once by a TDZ ReferenceError from a declaration that sat below
  * its own use.
+ *
+ * stderr, not stdout, and deliberately so. This banner is a warning about the
+ * operator's action, while stdout here is a receipt of what the script did —
+ * `node … > deploy.log` is a natural way to keep that receipt, and a warning
+ * on stdout disappears into the log exactly when nobody is watching the
+ * terminal. Diagnostics belong on stderr; that is what stderr is for. It also
+ * matches refuseIfDryRun above, so the two halves of this guard read alike.
  */
 function announceRealRun() {
   const mode = process.argv[2];
@@ -169,10 +176,10 @@ function announceRealRun() {
     ? REAL_RUN_EFFECT[mode]
     : undefined;
   if (effect === undefined) return;
-  console.log('============================================================');
-  console.log('REAL RUN — DRY_RUN is not set, so this WILL act on production');
-  console.log(`  mode: ${mode} ${effect}`);
-  console.log('============================================================');
+  console.error('============================================================');
+  console.error('REAL RUN — DRY_RUN is not set, so this WILL act on production');
+  console.error(`  mode: ${mode} ${effect}`);
+  console.error('============================================================');
 }
 
 /** Renders a Render error body as a message without ever dumping env values. */

@@ -332,8 +332,65 @@ describe("set-alert-channel.cjs failure modes", () => {
   });
 });
 
+/**
+ * Runs the script with stderr folded into stdout, giving one ordered stream.
+ *
+ * Both banners went to stderr on purpose, so that they survive a redirected
+ * stdout. The side effect is that "the banner was said before the write" is no
+ * longer observable inside `stdout` alone - and that ordering is the property
+ * which makes the banner a warning rather than a receipt. Folding the streams
+ * here reproduces what an operator actually sees: both in a terminal, or with
+ * `2>&1`.
+ */
+async function runMerged(
+  args: string[],
+  env: { tgUrl: string; renderUrl: string },
+): Promise<{ status: number | null; output: string }> {
+  const childEnv = { ...process.env };
+  delete childEnv.DRY_RUN;
+  childEnv.RENDER_API_KEY = "test-render-key-not-a-secret";
+  // The redirect is appended unquoted: quoting it would hand the script a
+  // literal "2>&1" argv entry instead of folding the streams.
+  const cmd =
+    [process.execPath, scriptPath, ...args].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ") + " 2>&1";
+  return new Promise((resolve, reject) => {
+    // spawn, never spawnSync: the mock APIs are HTTP servers in THIS process,
+    // so a synchronous spawn would block the event loop that has to answer the
+    // child. That failure mode is nasty rather than obvious - the child just
+    // waits out its 15s request timeout and exits 1.
+    const child = spawn("sh", ["-c", cmd], {
+      env: { ...childEnv, TELEGRAM_API_BASE: env.tgUrl, RENDER_API_BASE: env.renderUrl },
+    });
+    let output = "";
+    // `2>&1` in the command already folds the inner process's stderr into this
+    // pipe; the second listener is belt-and-braces for anything sh itself emits.
+    child.stdout.on("data", (d) => (output += String(d)));
+    child.stderr.on("data", (d) => (output += String(d)));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ status: code, output }));
+  });
+}
+
 describe("set-alert-channel.cjs real-run banner", () => {
   it("announces itself BEFORE it changes production, not after", async () => {
+    const mocks = await startMocks();
+    stopMocks = mocks.stop;
+
+    const res = await runMerged(["telegram", FAKE_TOKEN, FAKE_CHAT_ID], {
+      tgUrl: mocks.tgUrl,
+      renderUrl: mocks.renderUrl,
+    });
+
+    // The run really happened, so the banner is not vacuous...
+    expect(res.status).toBe(0);
+    expect(res.output).toContain("PUT env status");
+    // ...and it was said first. A banner printed after the write would be a
+    // receipt, not a warning, which is the opposite of what this is for.
+    expect(res.output).toContain("REAL RUN");
+    expect(res.output.indexOf("REAL RUN")).toBeLessThan(res.output.indexOf("PUT env status"));
+  });
+
+  it("survives stdout being redirected away, which is the point of stderr", async () => {
     const mocks = await startMocks();
     stopMocks = mocks.stop;
 
@@ -342,13 +399,12 @@ describe("set-alert-channel.cjs real-run banner", () => {
       renderUrl: mocks.renderUrl,
     });
 
-    // The run really happened, so the banner is not vacuous...
-    expect(res.status).toBe(0);
+    // The receipt stays on stdout, where `> deploy.log` collects it...
     expect(res.stdout).toContain("PUT env status");
-    // ...and it was said first. A banner printed after the write would be a
-    // receipt, not a warning, which is the opposite of what this is for.
-    expect(res.stdout).toContain("REAL RUN");
-    expect(res.stdout.indexOf("REAL RUN")).toBeLessThan(res.stdout.indexOf("PUT env status"));
+    // ...and the warning does not go with it. On stdout, `node … > deploy.log`
+    // would swallow the one line that says production is about to change.
+    expect(res.stderr).toContain("REAL RUN");
+    expect(res.stdout).not.toContain("REAL RUN");
   });
 
   it("names the actual consequence for the mode being run", async () => {
@@ -362,7 +418,7 @@ describe("set-alert-channel.cjs real-run banner", () => {
 
     // Not a generic "you are running for real": the operator has to be told
     // what this specific mode is about to do to production.
-    expect(res.stdout).toContain("mode: revert removes WATCHDOG_STALE_SEC");
+    expect(res.stderr).toContain("mode: revert removes WATCHDOG_STALE_SEC");
   });
 
   it("calls wait-live READ-ONLY rather than claiming it will change production", () => {
@@ -371,16 +427,19 @@ describe("set-alert-channel.cjs real-run banner", () => {
       encoding: "utf8",
       env: { PATH: process.env.PATH ?? "", RENDER_API_KEY: "test-render-key-not-a-secret", RENDER_API_BASE: "http://127.0.0.1:1" },
     });
-    expect(res.stdout).toContain("READ-ONLY");
+    expect(res.stderr).toContain("READ-ONLY");
     // A banner that overstates a status poll trains the eye to skip it.
-    expect(res.stdout).not.toContain("WILL act on production\n  mode: wait-live sets");
+    expect(res.stderr).not.toContain("WILL act on production\n  mode: wait-live sets");
   });
 
   it("stays silent on the bare usage path, which changes nothing", () => {
     const res = spawnSync(process.execPath, [scriptPath], { encoding: "utf8" });
     expect(res.status).toBe(1);
     // A banner that fired here would be pure noise on `node script` with no args.
+    // Both streams are checked because the banner now lives on stderr; checking
+    // stdout alone would pass whether or not the banner fired.
     expect(res.stdout).not.toContain("REAL RUN");
+    expect(res.stderr).not.toContain("REAL RUN");
   });
 
   it("never prints the real-run banner on a run it refused", async () => {
@@ -396,7 +455,8 @@ describe("set-alert-channel.cjs real-run banner", () => {
     expect(res.status).toBe(2);
     expect(res.stderr).toContain("REFUSING TO RUN");
     // "Real run" and "refused" in the same output is exactly the ambiguity
-    // both banners exist to remove.
-    expect(res.stdout).not.toContain("REAL RUN");
+    // both banners exist to remove. stderr is where both now print, so this
+    // has to be asserted there rather than on stdout.
+    expect(res.stderr).not.toContain("REAL RUN");
   });
 });
