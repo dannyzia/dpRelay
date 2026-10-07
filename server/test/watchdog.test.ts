@@ -11,7 +11,13 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
-import { dispatchAlert, type OpsAlert, type WatchdogAlert } from "../src/jobs.js";
+import {
+  dispatchAlert,
+  resetAlertSinkHealth,
+  resetStaleAlertDedupe,
+  type OpsAlert,
+  type WatchdogAlert,
+} from "../src/jobs.js";
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
@@ -40,13 +46,15 @@ function seedDevice(
   userId: string,
   rawKey: string,
   lastSeenAt: number | null,
+  /** Overridable so tests can age a never-seen device past the grace window. */
+  createdAt: number = Math.floor(Date.now() / 1000),
 ): void {
   app.db
     .prepare(
       "INSERT INTO devices (id, user_id, label, api_key_hash, last_seen_at, revocable, revoked_at, created_at) " +
-        "VALUES (?, ?, ?, ?, ?, 1, NULL, unixepoch())",
+        "VALUES (?, ?, ?, ?, ?, 1, NULL, ?)",
     )
-    .run(id, userId, `device-${id}`, app.sha256Hex(rawKey), lastSeenAt);
+    .run(id, userId, `device-${id}`, app.sha256Hex(rawKey), lastSeenAt, createdAt);
 }
 
 /** Minimal local HTTP sink to observe the watchdog webhook POST. */
@@ -78,14 +86,29 @@ afterEach(async () => {
   while (cleanup.length > 0) {
     await cleanup.pop()!();
   }
+  // Dedupe state is module-global by design; without this a test would inherit
+  // the previous test's alerted set and silently suppress its own alert.
+  resetStaleAlertDedupe();
 });
 
 describe("heartbeat watchdog", () => {
-  it("reports devices with no heartbeat yet as stale (never-seen guard)", async () => {
-    const app = makeApp();
+  it("does not report a never-seen device that is still inside the grace window", async () => {
+    const app = makeApp({ WATCHDOG_STALE_SEC: "900" });
     await app.ready();
     seedUser(app, "user-1");
-    seedDevice(app, "dev-quiet", "user-1", "k1".repeat(32), null);
+    // Enrolled one minute ago, never heartbeaten: not yet an outage, so not stale.
+    seedDevice(app, "dev-quiet", "user-1", "k1".repeat(32), null, Math.floor(Date.now() / 1000) - 60);
+    const stale = await app.runWatchdog();
+    expect(stale).toEqual([]);
+    await app.close();
+  });
+
+  it("reports a never-seen device once it ages past the grace window", async () => {
+    const app = makeApp({ WATCHDOG_STALE_SEC: "900" });
+    await app.ready();
+    seedUser(app, "user-1");
+    // Enrolled 30 minutes ago and still silent → the device never came up.
+    seedDevice(app, "dev-quiet", "user-1", "k1".repeat(32), null, Math.floor(Date.now() / 1000) - 1800);
     const stale = await app.runWatchdog();
     expect(stale.map((d) => d.id)).toEqual(["dev-quiet"]);
     await app.close();
@@ -195,7 +218,10 @@ describe("wake guard + boot sweep (R5)", () => {
  */
 interface FetchCall {
   url: string;
-  init: { method?: string; headers?: Record<string, string>; body?: string };
+  // `signal` is captured because the bounded timeout is load-bearing rather than
+  // decorative: without it a hung Bot API request stalls the watchdog tick
+  // forever, and alerting stops without ever logging an error.
+  init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal };
 }
 
 /** Stubs global fetch with scripted (status, body) responses, in order. */
@@ -226,6 +252,9 @@ function cfg(env: Record<string, string>) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Sink health is process-lifetime by design, so it must be reset between
+  // tests or one test's failure count silently degrades the next test's sink.
+  resetAlertSinkHealth();
 });
 
 describe("telegram alert sink", () => {
@@ -345,5 +374,254 @@ describe("telegram alert sink", () => {
     );
     expect(result).toBe("log-only");
     expect(calls).toHaveLength(0);
+  });
+});
+
+/** One recorded logger call. */
+interface RecordedLog {
+  level: "warn" | "info" | "error";
+  msg: string;
+  payload: Record<string, unknown>;
+}
+
+/** Logger that records calls so tests can assert on the escalation transitions. */
+function recordingLog(): { log: FastifyBaseLogger; entries: RecordedLog[] } {
+  const entries: RecordedLog[] = [];
+  const push =
+    (level: RecordedLog["level"]) =>
+    (payload: Record<string, unknown>, msg?: string): void => {
+      entries.push({ level, msg: String(msg), payload });
+    };
+  const log = { warn: push("warn"), info: push("info"), error: push("error"), debug() {} };
+  return { log: log as unknown as FastifyBaseLogger, entries };
+}
+
+/** fetch stub that fails every call with `status`, for consecutive-failure runs. */
+function stubAlwaysFailing(status: number): FetchCall[] {
+  return stubFetch(...Array.from({ length: 20 }, () => ({ status })));
+}
+
+const SINK_URL = "https://sink.example.com/hook";
+
+describe("alert sink health", () => {
+  it("stays quiet while a failing sink is below the threshold", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(500);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+
+    expect(entries.filter((e) => e.msg === "alert_sink_degraded")).toHaveLength(0);
+    // The per-failure line is untouched — this adds a transition signal, it does
+    // not replace or quiet the existing error.
+    expect(entries.filter((e) => e.msg === "watchdog webhook alert failed")).toHaveLength(2);
+  });
+
+  it("emits alert_sink_degraded once consecutive failures reach the threshold", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(500);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.level).toBe("error");
+    expect(degraded[0]?.payload.sink).toBe("webhook");
+    expect(degraded[0]?.payload.consecutiveFailures).toBe(3);
+    expect(degraded[0]?.payload.threshold).toBe(3);
+    expect(String(degraded[0]?.payload.lastError)).toContain("500");
+    expect(String(degraded[0]?.payload.degradedSince)).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("re-emits the degradation on each further multiple of the threshold", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(500);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 6; i += 1) {
+      await dispatchAlert(log, conf, STALE_ALERT);
+    }
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(2);
+    expect(degraded.map((e) => e.payload.consecutiveFailures)).toEqual([3, 6]);
+  });
+
+  it("emits alert_sink_recovered and really resets the counter when the sink returns", async () => {
+    const { log, entries } = recordingLog();
+    stubFetch({ status: 500 }, { status: 500 }, { status: 500 }, { status: 200 });
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL });
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+    expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("webhook");
+
+    const recovered = entries.filter((e) => e.msg === "alert_sink_recovered");
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.level).toBe("info");
+    expect(recovered[0]?.payload.sink).toBe("webhook");
+    expect(recovered[0]?.payload.consecutiveFailures).toBe(3);
+
+    // Counter must be back to zero: two further failures cannot re-trip it.
+    vi.unstubAllGlobals();
+    stubAlwaysFailing(500);
+    for (let i = 0; i < 2; i += 1) {
+      await dispatchAlert(log, conf, STALE_ALERT);
+    }
+    expect(entries.filter((e) => e.msg === "alert_sink_degraded")).toHaveLength(1);
+  });
+
+  it("tracks sinks independently so a dead Telegram does not implicate the webhook", async () => {
+    const { log, entries } = recordingLog();
+    // Three telegram rejections, each followed by a webhook that accepts.
+    stubFetch(
+      { status: 500 }, { status: 200 },
+      { status: 500 }, { status: 200 },
+      { status: 500 }, { status: 200 },
+    );
+    const conf = cfg({
+      TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN",
+      TELEGRAM_CHAT_ID: "-100200300",
+      ALERT_WEBHOOK_URL: SINK_URL,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("webhook");
+    }
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.payload.sink).toBe("telegram");
+  });
+
+  it("honours ALERT_SINK_FAILURE_THRESHOLD", async () => {
+    const { log, entries } = recordingLog();
+    stubAlwaysFailing(503);
+    const conf = cfg({ ALERT_WEBHOOK_URL: SINK_URL, ALERT_SINK_FAILURE_THRESHOLD: "1" });
+
+    await dispatchAlert(log, conf, STALE_ALERT);
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.payload.threshold).toBe(1);
+    expect(degraded[0]?.payload.consecutiveFailures).toBe(1);
+    expect(String(degraded[0]?.payload.lastError)).toContain("503");
+  });
+});
+
+/**
+ * Telegram delivery regressions.
+ *
+ * Everything above exercises dispatchAlert as a unit. These tests exist because
+ * a green unit suite proved compatible with the watchdog never reaching the Bot
+ * API at all: nothing drove a stale device through runWatchdog into a Telegram
+ * send, so a broken wiring would have shipped silently. The first test below is
+ * the one that closes that hole; the rest pin the request shape and the
+ * loud-on-failure contract that make a silent break detectable.
+ */
+describe("telegram delivery cannot silently break", () => {
+  const TELEGRAM_ENV = { TELEGRAM_BOT_TOKEN: "12345:TEST-TOKEN", TELEGRAM_CHAT_ID: "-100200300" };
+
+  it("reaches the Bot API when a stale device trips the real watchdog", async () => {
+    const calls = stubFetch({ status: 200 });
+    const app = makeApp(TELEGRAM_ENV);
+    await app.ready();
+    seedUser(app, "user-1");
+    seedDevice(app, "dev-dark", "user-1", "k1".repeat(32), Math.floor(Date.now() / 1000) - 3600);
+
+    const stale = await app.runWatchdog();
+
+    expect(stale.map((d) => d.id)).toEqual(["dev-dark"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://api.telegram.org/bot12345:TEST-TOKEN/sendMessage");
+    const body = JSON.parse(calls[0].init.body ?? "{}") as { chat_id: string; text: string };
+    expect(body.chat_id).toBe("-100200300");
+    expect(body.text).toContain("device_heartbeat_stale");
+    expect(body.text).toContain("dev-dark");
+    await app.close();
+  });
+
+  it("POSTs JSON under a bounded timeout", async () => {
+    const calls = stubFetch({ status: 200 });
+
+    await dispatchAlert(noopLog, cfg(TELEGRAM_ENV), STALE_ALERT);
+
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.headers?.["Content-Type"]).toBe("application/json");
+    expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("never carries the bot token in the message body", async () => {
+    const calls = stubFetch({ status: 200 });
+
+    await dispatchAlert(noopLog, cfg(TELEGRAM_ENV), STALE_ALERT);
+
+    const body = JSON.parse(calls[0].init.body ?? "{}") as { text: string; chat_id: string };
+    expect(body.text).not.toContain("TEST-TOKEN");
+    expect(body.chat_id).not.toContain("TEST-TOKEN");
+  });
+
+  it("treats a 400 chat-not-found as a failed delivery and falls back", async () => {
+    // Telegram reports sendMessage rejections as HTTP 4xx with ok:false in the
+    // body; the HTTP status is the signal this sink acts on.
+    const { log, entries } = recordingLog();
+    const calls = stubFetch(
+      { status: 400, body: { ok: false, error_code: 400, description: "Bad Request: chat not found" } },
+      { status: 200 },
+    );
+
+    const result = await dispatchAlert(
+      log,
+      cfg({ ...TELEGRAM_ENV, ALERT_WEBHOOK_URL: SINK_URL }),
+      STALE_ALERT,
+    );
+
+    expect(result).toBe("webhook");
+    expect(calls).toHaveLength(2);
+    const failure = entries.find((e) => e.msg === "telegram alert failed");
+    expect(failure?.level).toBe("error");
+    expect(failure?.payload.status).toBe(400);
+  });
+
+  it("logs the Bot API rejection even when the fallback rescues delivery", async () => {
+    const { log, entries } = recordingLog();
+    stubFetch({ status: 500 }, { status: 200 });
+
+    const result = await dispatchAlert(
+      log,
+      cfg({ ...TELEGRAM_ENV, ALERT_WEBHOOK_URL: SINK_URL }),
+      STALE_ALERT,
+    );
+
+    // A successful fallback must not mask the primary sink's failure.
+    expect(result).toBe("webhook");
+    const failures = entries.filter((e) => e.msg === "telegram alert failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.level).toBe("error");
+    expect(failures[0]?.payload.status).toBe(500);
+  });
+
+  it("degrades then recovers the telegram sink health independently", async () => {
+    const { log, entries } = recordingLog();
+    stubFetch({ status: 500 }, { status: 500 }, { status: 500 }, { status: 200 });
+    const conf = cfg(TELEGRAM_ENV);
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("log-only");
+    }
+    expect(await dispatchAlert(log, conf, STALE_ALERT)).toBe("telegram");
+
+    const degraded = entries.filter((e) => e.msg === "alert_sink_degraded");
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]?.payload.sink).toBe("telegram");
+    const recovered = entries.filter((e) => e.msg === "alert_sink_recovered");
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.payload.sink).toBe("telegram");
   });
 });

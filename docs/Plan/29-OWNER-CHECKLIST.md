@@ -35,15 +35,54 @@ Then trigger ONE deploy: **Manual Deploy → Deploy latest commit**, or
 until live (`server/scripts/set-alert-channel.cjs wait-live` automates the
 poll). Env PUTs alone never deploy.
 
-## 2 · Create the Telegram bot (§1.5(a) setup; feeds step 1)
+## 2 · Telegram credential + membership proof (gate A — feeds step 1)
 
-- [ ] @BotFather → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`
-- [ ] Add the bot to the ops group; post one message in it
-- [ ] Open `https://api.telegram.org/bot<TOKEN>/getUpdates` → copy the
-      group's `"chat":{"id":...}` into `TELEGRAM_CHAT_ID`
-- [ ] Save both vars → Manual Deploy again (or batch with step 1's deploy)
+> **Why this is a separate gate.** "Do we hold a working credential, and is the bot
+> actually in the ops group with a resolvable chat id?" (gate A) and "did an alert
+> land *from the deployed service*?" (gate B, step 3) are independent. Only gate B
+> requires production to carry the `TELEGRAM_*` vars. A green gate A beside a red
+> gate B is an ordinary state — valid creds that were never deployed — so they are
+> tracked as separate items instead of one conflated "alert channel" checkbox. A
+> single combined box could only ever report the weaker of the two.
+>
+> **Status — owner-verified, agent-uncorroborated.** The owner confirmed a valid
+> bot token and that the bot is in the ops group. The agent did not and cannot
+> corroborate it: the token and chat id have never existed on this machine, and
+> `staging/` holds no Telegram receipt — the single line in
+> `staging/alerts-received.log` is the *webhook* self-test (`/alerts`,
+> `selftest-not-a-real-device`), not Telegram. Recorded on the same owner-attested
+> basis as the §1.4 note below. **This item asserts nothing about production
+> state**; for that, see step 3.
 
-## 3 · Prove the alert channel (the §1.4 gate)
+- [x] @BotFather → `/newbot` → copy the token into `TELEGRAM_BOT_TOKEN`
+      — *owner-verified; token never present on this machine*
+- [x] Add the bot to the ops group; post one message in it
+      — *owner-verified*
+- [x] Open `https://api.telegram.org/bot<TOKEN>/getUpdates` → copy the
+      group's `"chat":{"id":...}` into `TELEGRAM_CHAT_ID` — *owner-verified*
+- [ ] Save both vars to Render → Manual Deploy (or batch with step 1's deploy)
+      — **this is gate B, not gate A.** Still open: 16 env keys, no
+      `TELEGRAM_*`, as of 2026-10-03.
+
+## 3 · Production delivery proof (gate B — the §1.4 gate)
+
+> **§1.4 status — 2026-10-03.** The **primary (Telegram) path is closed by owner
+> attestation**: the owner observed the alert land in the ops group and elected to
+> accept the proof on that basis. The agent could **not** corroborate it. On every
+> check on 2026-10-03 the service `dprelay-api` (`srv-dal3bae7bikc73e7k7pg`) held
+> **16 env keys** with neither `TELEGRAM_BOT_TOKEN` nor `TELEGRAM_CHAT_ID`, and the
+> live deploy was unchanged since 2026-09-29, so production was still log-only. A log
+> sweep over 3000 lines showed 30 `watchdog_alert` emissions, every one
+> `threshold=900`, and **zero** occurrences of `threshold=60`. Treat §1.4 as
+> *owner-attested, agent-unverified* — see Rhizome ISSUE-37.
+>
+> **Disconfirming check (one env read, whenever convenient):** 18 keys with both
+> `TELEGRAM_*` present corroborates the attestation; 16 keys means the alert path is
+> still unconfigured and §1.4 should be reopened. If the sink is unset, the next
+> incident is silent — the watchdog logs and nobody is told.
+>
+> The **fallback (webhook) path is independently proven** — see the evidence note
+> below.
 
 - [ ] One command does setup + proof:
       `node server/scripts/set-alert-channel.cjs telegram <botToken> <chatId>`
@@ -72,16 +111,84 @@ poll). Env PUTs alone never deploy.
 > deliveries while the sink is unset and a return to the 5-min watchdog
 > cadence (`threshold_sec=900`) — i.e. teardown was clean and no sink was
 > left half-configured.
+>
+> **Evidence re-verified and hash-anchored 2026-10-03** (ISSUE-37). The receipts parse
+> 1:1 as JSON across all 16 lines with no gaps. Integrity hashes:
+> `staging/alert-drill-receipts.log` `89dd59593343f118f82adc5614be2228cf985c6a9923b02d6b6d1d8320df3c41`;
+> `staging/alerts-received.log` `b5cb940a48bfe991ee74dddfc20161f45d7a7bbe5ba3aa23dd34443b03c87e53`;
+> `staging/alert-receiver.cjs` `b5afd7af73f936a342e49de6691e25bf24b727be73a32ccc004421291000cc17`.
+> (All three are local and gitignored under `staging/` — `.gitignore:113` — so these
+> hashes anchor a local record, not a committed artifact.)
+>
+> **The override → revert cycle is provable from the payloads alone.** Same three device
+> ids (`efa227c5…`, `8cafb30e…`, `0854bdd5…`) throughout, so these are successive ticks
+> of one continuous run:
+>
+> | Delivered at (UTC) | `threshold_sec` | `devices` | `authValid` |
+> |---|---|---|---|
+> | 07:44:45 | **60** (override armed) | 3 | true |
+> | 07:45:01 | **60** | 3 | true |
+> | 07:47:59 | **900** (reverted) | 3 | true |
+> | 07:50:01 | **900** | 3 | true |
+> | 07:50:01 | **900** | 3 | true |
+>
+> The `60 → 900` transition is the revert taking effect end to end, delivered rather
+> than asserted.
+>
+> **Auth is genuinely enforced, not merely present** — the three-way matrix, with every
+> negative case exercised: wrong secret → `authValid=false`; absent auth → `authValid=false`;
+> tampered body (`{}` where a signed payload was expected) → `authValid=false`. The
+> `edge_probe_positive` receipt at 07:26:32 is annotated "pre-drill rehearsal of dispatcher
+> path", so the positive case is covered too. The earlier `staging/alerts-received.log`
+> drill (2026-09-24, 9 lines) shows the same receiver accepting `threshold_sec` 1, 5 and
+> 900 across three sessions, so behaviour predates and matches the 09-28 drill.
+>
+> **Tooling defect — FIXED (was the likely cause of the repeated no-op staging
+> attempts on this gate).** `set-alert-channel.cjs` used to exit **0** after printing
+> `chat verified` whenever `DRY_RUN` was present, skipping the Render write and the
+> deploy with no error, so a `DRY_RUN` inherited from a shell wrapper, sudo or an
+> agent runner made a "real" run look successful while doing nothing. Worse, the
+> guard sat *after* the probe `sendMessage` (so a rehearsal still messaged the ops
+> group) and applied *only* in `telegram` mode (`set`/`set-stale`/`revert`/`deploy`
+> wrote to Render regardless).
+>
+> `DRY_RUN` is now a **hazard gate, not a rehearsal switch**. If it is present
+> and non-empty the script **refuses to run**: it exits **2** before any network
+> call — before the Bot API probe, before any Render write — and prints a loud
+> banner on stderr naming the skipped Render write and the exact command to run
+> for real. There is deliberately no rehearsal mode; only an explicitly unset
+> value permits a run (`DRY_RUN= node …`, `unset DRY_RUN`, or a fresh shell).
+> It fails closed: a whitespace-only value blocks too, so a blank-looking hazard
+> cannot slip past the gate. Exit codes are `0` succeeded, `1` failed,
+> `2` refused. A genuine run prints `PUT env status: 200` then
+> `POST deploys status: 201`. Regression tests:
+> `server/test/set-alert-channel.test.ts`.
 
 ## 4 · GitHub secrets (3) — enables §1.5(c)
 
-- [ ] `CLOUDFLARE_API_TOKEN` — Cloudflare → My Profile → API Tokens →
-      Create Token with **Account · Cloudflare Pages · Edit**
-- [ ] `CLOUDFLARE_ACCOUNT_ID` — Cloudflare dashboard right sidebar
-- [ ] `CLOUDFLARE_PAGES_PROJECT` = `dprelay-dashboard`
+- [x] `CLOUDFLARE_ACCOUNT_ID` — Cloudflare dashboard right sidebar
+- [x] `CLOUDFLARE_PAGES_PROJECT` = `dprelay-dashboard`
+- [ ] `CLOUDFLARE_API_TOKEN` — **set but rejected by Cloudflare. Replace it.**
+      Cloudflare → My Profile → API Tokens → Create Token with
+      **Account · Cloudflare Pages · Edit**
 
-Until these exist, the Pages workflow runs **green with a warning** and
-skips publish (verified: run 36323346697).
+All three exist as repo secrets (token last rotated 2026-10-02T08:07:27Z), and
+the workflow's non-empty check passes — but the credential preflight fails with
+`6003 "Invalid request headers"` / inner `6111`, so the Pages publish has never
+run. Latest failing run **37100586782** (2026-10-03T05:40:39Z).
+
+**Replacing the token is the action; re-diagnosing the error code is not.** The
+previous note here said the workflow "runs green with a warning and skips
+publish" — that stopped being true in `86e48c3`, which made the preflight
+blocking. It now fails the run, which is the intended behaviour: a rejected
+credential must not read as a successful deploy.
+
+`6003`/`6111` does **not** identify the token as malformed. Verified against the
+live endpoint: a 40-char token of the correct length, a short one, one with a
+trailing space and one in quotes all return that identical code, while an absent
+header returns `1001`. Expired, revoked, wrong-scope and wrong-account all fit
+the evidence equally, so the cheapest next step is simply to mint a fresh token
+with the right scope rather than to keep decoding the response.
 
 ## 5 · Cloudflare Pages — automated from here (§1.5(c))
 

@@ -55,6 +55,126 @@ jobs:
       - name: Build (tsc strict + vite)
         run: npm run build
 
+      # Fail fast on credentials with an unambiguous verdict, instead of letting
+      # wrangler report an auth error whose Cloudflare code does not say which
+      # of "empty token" / "wrong token" / "wrong account" it was. Verified by
+      # hand against the API on 2026-10-03: an absent Authorization header
+      # returns 1001 "Missing Authorization header", and EVERY rejected token
+      # returns the same 6003 / inner 6111 — a 40-char token of the real
+      # length, a short one, one with a trailing space, one wrapped in quotes.
+      # CORRECTION: an earlier version of this comment claimed 9106 for an
+      # absent header and 9109 for an invalid token, and concluded that
+      # 6003/6111 meant a malformed value. Both were wrong; 6003/6111 is
+      # Cloudflare's generic invalid-token response and does NOT distinguish a
+      # contaminated token from an expired, revoked, wrong-scope or
+      # wrong-account one. Those blind dispatch cycles (runs
+      # 36981226537…37092682243) cost more than the check saved.
+      # SCOPE LIMIT, recorded so nobody re-derives it: Cloudflare cannot tell
+      # you *which* credential is bad. 6003/6111 comes back identically for
+      # every rejected token form, so "this value is malformed" is unprovable
+      # from the API. What the preflight below CAN do is separate the three
+      # secrets and the failure classes that ARE distinguishable — absent
+      # secret, rejected token, token-valid-but-account-unreachable, and
+      # token-and-account-ok-but-no-Pages-permission — and report every one of
+      # them in a single run. That was the real cost of the blind dispatch
+      # cycles: the old version exited on the first failure, so three broken
+      # secrets cost three round trips.
+      # The token value is never echoed; only Cloudflare's own verdicts are.
+      - name: "Preflight: verify Cloudflare credentials"
+        if: env.HAS_CLOUDFLARE == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ secrets.CLOUDFLARE_PAGES_PROJECT }}
+        run: |
+          set -u
+          # Report EVERY problem, then exit once. The previous version exited on
+          # the first failure, so an owner with more than one bad secret had to
+          # rediscover the others one round trip at a time.
+          failures=0
+          note_fail() { echo "::error::$1"; failures=$((failures + 1)); }
+
+          # [1/3] Presence. The job-level HAS_CLOUDFLARE predicate only covers
+          # the TOKEN, so an empty CLOUDFLARE_ACCOUNT_ID or
+          # CLOUDFLARE_PAGES_PROJECT used to surface as a confusing API error
+          # instead of "that secret is not set".
+          for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_PAGES_PROJECT; do
+            eval "val=\${$var:-}"
+            if [ -z "$val" ]; then
+              note_fail "$var is unset or empty in this repo's Actions secrets. Fix: Settings -> Secrets and variables -> Actions -> $var."
+            fi
+          done
+
+          token_ok=0
+          account_ok=0
+
+          # [2/3] Token. A rejection here is the single most common failure and
+          # the one the API cannot narrow: wrong length, trailing space, quoted,
+          # expired and revoked all return the same 6003/6111.
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            token_resp=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              'https://api.cloudflare.com/client/v4/user/tokens/verify')
+            case "$token_resp" in
+              *'"success":true'*)
+                token_ok=1
+                echo "preflight: [2/3] API token accepted by Cloudflare" ;;
+              *)
+                note_fail "CLOUDFLARE_API_TOKEN is REJECTED by Cloudflare: ${token_resp}  ->  the CREDENTIAL AT FAULT IS THE TOKEN. Cloudflare returns this identical code for every rejected form, so expired / revoked / wrong-scope / wrong-account cannot be separated from here. Fix: mint a token with Account -> Cloudflare Pages -> Edit and replace CLOUDFLARE_API_TOKEN."
+                ;;
+            esac
+          fi
+
+          # [3/3] Account, and then Pages permission. Both are skipped rather
+          # than run when the token already failed: their result would be a
+          # consequence of the token, not a cause, and reporting it would send
+          # the owner to fix the wrong secret.
+          if [ "$token_ok" -eq 1 ]; then
+            acct_resp=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}")
+            case "$acct_resp" in
+              *'"success":true'*)
+                account_ok=1
+                echo "preflight: [3/3] account ${CLOUDFLARE_ACCOUNT_ID} reachable with this token" ;;
+              *)
+                note_fail "the token is VALID but cannot read account ${CLOUDFLARE_ACCOUNT_ID}: ${acct_resp}  ->  either the token has no access to that account, or CLOUDFLARE_ACCOUNT_ID is wrong. Fix one of those two; the token itself is not the problem."
+                ;;
+            esac
+          else
+            if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+              echo "preflight: [3/3] account check SKIPPED - Cloudflare rejected the token above, so this would only restate that same problem"
+            else
+              echo "preflight: [3/3] account check SKIPPED - no API token was provided to verify"
+            fi
+          fi
+
+          # Pages scope. A 404 is EXPECTED on a first publish - wrangler creates
+          # the project - so it must not fail the preflight. Only an explicit
+          # 401/403 is actionable; anything else is surfaced as a warning rather
+          # than a hard stop, because this status mapping is inferred from
+          # observed API behaviour rather than documented, and a wrong guess here
+          # would block a legitimate deploy.
+          if [ "$account_ok" -eq 1 ]; then
+            pages_code=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CLOUDFLARE_PAGES_PROJECT}")
+            case "$pages_code" in
+              200) echo "preflight: pages project '${CLOUDFLARE_PAGES_PROJECT}' exists" ;;
+              404) echo "preflight: pages project '${CLOUDFLARE_PAGES_PROJECT}' does not exist yet - expected on a first publish, wrangler will create it" ;;
+              401|403)
+                note_fail "the token can read the account but not its Pages projects (HTTP ${pages_code})  ->  the token is missing Account -> Cloudflare Pages -> Edit. Fix: re-mint the token with that permission." ;;
+              *)
+                echo "::warning::unexpected HTTP ${pages_code} from the Pages project probe for '${CLOUDFLARE_PAGES_PROJECT}' - not treated as a failure, proceeding to wrangler" ;;
+            esac
+          fi
+
+          if [ "$failures" -ne 0 ]; then
+            echo "::error::Preflight found ${failures} problem(s). All are listed above - fix them in one pass; this step reports every problem rather than stopping at the first."
+            exit 1
+          fi
+          echo "preflight: all Cloudflare credentials usable - proceeding to wrangler"
+
       - name: Publish to Cloudflare Pages
         # Skip (with a loud notice below, never silently) until the owner sets
         # the Cloudflare secrets — an unset token makes wrangler fail with "Not
@@ -64,10 +184,6 @@ jobs:
         if: env.HAS_CLOUDFLARE == 'true'
         uses: cloudflare/wrangler-action@v3
         id: pages
-        # Step-level env so $CLOUDFLARE_PAGES_PROJECT expands inside the
-        # command below — wrangler-action only exports its own known vars.
-        env:
-          CLOUDFLARE_PAGES_PROJECT: ${{ secrets.CLOUDFLARE_PAGES_PROJECT }}
         with:
           # Pin wrangler major 4 deliberately; upgrade intentionally, not implicitly.
           wranglerVersion: '4'
@@ -76,7 +192,16 @@ jobs:
           workingDirectory: dashboard
           # --branch=main makes these production deployments (the auto-created
           # project's production branch is "main"); master is this repo's trunk.
-          command: pages deploy dist --project-name=$CLOUDFLARE_PAGES_PROJECT --branch=main
+          #
+          # The project name MUST be a ${{ secrets.* }} expression here, not a
+          # shell `$VAR`. wrangler-action spawns wrangler directly from argv
+          # without a shell, so `$CLOUDFLARE_PAGES_PROJECT` reached Cloudflare
+          # verbatim and the API was asked for a project literally named
+          # "$CLOUDFLARE_PAGES_PROJECT" (runs 36981649891…37092609336). Setting
+          # the name in step `env:` does not help for the same reason. Actions
+          # resolves `${{ }}` before argv is built, so that is what makes the
+          # real name arrive.
+          command: pages deploy dist --project-name=${{ secrets.CLOUDFLARE_PAGES_PROJECT }} --branch=main
 
       - name: Report deployment URL
         # wrangler-action exposes the deployment URL of this upload. Block
