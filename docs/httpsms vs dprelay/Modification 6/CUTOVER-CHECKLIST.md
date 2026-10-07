@@ -389,9 +389,12 @@ Rollback notes:
    malformed-value signal:** a 40-char token, a short one, one with a trailing
    space and one wrapped in quotes all return the identical code; an absent
    header returns `1001` and a wrong-but-well-formed token returns `6003`.
-   Expired, revoked, wrong-scope and wrong-account remain indistinguishable,
-   because the preflight verifies the token *before* testing account
-   reachability, so the account check never runs.
+   Expired, revoked, wrong-scope and wrong-account remain indistinguishable:
+   `6003`/`6111` is the same code for all four, so the API cannot name which.
+   The preflight now probes **account reachability first**, so a wrong
+   `CLOUDFLARE_ACCOUNT_ID` no longer hides behind a token verdict. The
+   superseded token-first ordering, and why it was reversed, is recorded as
+   **ADR-018** (`docs/Plan/04-ADR.md`).
    The workflow defect is fixed and proven on `docs-load-repro` (project-name
    expansion `6fd5ff3`, credential preflight `86e48c3`); `master` is untouched
    and automatic Pages deploys stay inactive until it lands, since the

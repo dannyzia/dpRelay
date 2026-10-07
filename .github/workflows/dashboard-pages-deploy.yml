@@ -107,46 +107,71 @@ jobs:
 
           token_ok=0
           account_ok=0
+          token_rejected=0
 
-          # [2/3] Token. A rejection here is the single most common failure and
-          # the one the API cannot narrow: wrong length, trailing space, quoted,
-          # expired and revoked all return the same 6003/6111.
-          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            token_resp=$(curl -sS --max-time 30 \
-              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-              'https://api.cloudflare.com/client/v4/user/tokens/verify')
-            case "$token_resp" in
-              *'"success":true'*)
-                token_ok=1
-                echo "preflight: [2/3] API token accepted by Cloudflare" ;;
-              *)
-                note_fail "CLOUDFLARE_API_TOKEN is REJECTED by Cloudflare: ${token_resp}  ->  the CREDENTIAL AT FAULT IS THE TOKEN. Cloudflare returns this identical code for every rejected form, so expired / revoked / wrong-scope / wrong-account cannot be separated from here. Fix: mint a token with Account -> Cloudflare Pages -> Edit and replace CLOUDFLARE_API_TOKEN."
-                ;;
-            esac
-          fi
-
-          # [3/3] Account, and then Pages permission. Both are skipped rather
-          # than run when the token already failed: their result would be a
-          # consequence of the token, not a cause, and reporting it would send
-          # the owner to fix the wrong secret.
-          if [ "$token_ok" -eq 1 ]; then
+          # [2/3] Account FIRST. ORDER REVERSED 2026-10-05 - see ADR-018 in
+          # docs/Plan/04-ADR.md for the superseded ordering and why it was
+          # wrong. The old order led with /user/tokens/verify, but that endpoint
+          # can only ever speak about the token: it says nothing about account
+          # access, so leading with it spends a round trip to learn the one half
+          # of the answer that the account read gives for free. A successful
+          # account read proves BOTH facts at once - the token is accepted AND
+          # it can reach this account - settling the common case in one call.
+          # It also discriminates better on failure: 6003/6111 still means the
+          # token is rejected, but any OTHER failure now separates "token is
+          # probably fine, the account id is wrong" from the
+          # indistinguishable-token-rejection class that the token endpoint
+          # cannot narrow at all.
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
             acct_resp=$(curl -sS --max-time 30 \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}")
             case "$acct_resp" in
               *'"success":true'*)
                 account_ok=1
-                echo "preflight: [3/3] account ${CLOUDFLARE_ACCOUNT_ID} reachable with this token" ;;
+                # Implied rather than assumed: Cloudflare cannot return
+                # success:true for an account it did not accept a bearer token
+                # for. Setting token_ok here is what lets [3/3] skip its own
+                # call instead of restating a verdict already in hand.
+                token_ok=1
+                echo "preflight: [2/3] account ${CLOUDFLARE_ACCOUNT_ID} reachable, which also proves the token is accepted" ;;
+              *6003*|*6111*)
+                # Recorded separately from note_fail so [3/3] can recognise it
+                # as already-reported rather than re-proving it.
+                token_rejected=1
+                note_fail "CLOUDFLARE_API_TOKEN is REJECTED by Cloudflare, so the account was never tested: ${acct_resp}  ->  the CREDENTIAL AT FAULT IS THE TOKEN. Cloudflare returns this identical code for every rejected form, so expired / revoked / wrong-scope / wrong-account cannot be separated from here. Fix: mint a token with Account -> Cloudflare Pages -> Edit and replace CLOUDFLARE_API_TOKEN."
+                ;;
               *)
-                note_fail "the token is VALID but cannot read account ${CLOUDFLARE_ACCOUNT_ID}: ${acct_resp}  ->  either the token has no access to that account, or CLOUDFLARE_ACCOUNT_ID is wrong. Fix one of those two; the token itself is not the problem."
+                note_fail "the token may be VALID but cannot read account ${CLOUDFLARE_ACCOUNT_ID}: ${acct_resp}  ->  either the token has no access to that account, or CLOUDFLARE_ACCOUNT_ID is wrong. Fix one of those two; the token itself is not necessarily the problem."
+                ;;
+            esac
+          fi
+
+          # [3/3] Token, run ONLY when the account read left it undecided. Two
+          # skips, and both are the same invariant the old ordering enforced in
+          # the other direction: never report a consequence as if it were a
+          # cause, because that sends the owner to fix the wrong secret.
+          #   - account succeeded: the token is already proven accepted.
+          #   - account reported a token rejection: re-running would only
+          #     restate the same 6003/6111 a second time.
+          if [ "$account_ok" -eq 1 ]; then
+            echo "preflight: [3/3] token check SKIPPED - the account read above already proved the token is accepted"
+          elif [ "$token_rejected" -eq 1 ]; then
+            echo "preflight: [3/3] token check SKIPPED - the account read already reported the token as rejected, so this would only restate that same problem"
+          elif [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            token_resp=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              'https://api.cloudflare.com/client/v4/user/tokens/verify')
+            case "$token_resp" in
+              *'"success":true'*)
+                token_ok=1
+                echo "preflight: [3/3] API token accepted by Cloudflare on its own - so CLOUDFLARE_ACCOUNT_ID is what is wrong" ;;
+              *)
+                note_fail "CLOUDFLARE_API_TOKEN is REJECTED by Cloudflare: ${token_resp}  ->  the CREDENTIAL AT FAULT IS THE TOKEN. Cloudflare returns this identical code for every rejected form, so expired / revoked / wrong-scope / wrong-account cannot be separated from here. Fix: mint a token with Account -> Cloudflare Pages -> Edit and replace CLOUDFLARE_API_TOKEN."
                 ;;
             esac
           else
-            if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
-              echo "preflight: [3/3] account check SKIPPED - Cloudflare rejected the token above, so this would only restate that same problem"
-            else
-              echo "preflight: [3/3] account check SKIPPED - no API token was provided to verify"
-            fi
+            echo "preflight: [3/3] token check SKIPPED - no API token was provided to verify"
           fi
 
           # Pages scope. A 404 is EXPECTED on a first publish - wrangler creates

@@ -564,3 +564,38 @@ Use RTDB write only. The dedicated authenticator phone runs on a stable Wi-Fi co
 - **Easier:** Single write path; no deduplication logic; straightforward test surface
 - **Harder:** Verifications are delayed (not failed) during Wi-Fi outages; no mobile-data fallback in MVP
 - **Trigger for revisit:** Wi-Fi failure rate on the dedicated phone increases, or TD-15 is promoted to a production incident
+
+## ADR-018: Cloudflare Pages preflight probes account reachability before token validity
+
+**Status:** Decided — 2026-10-05
+**Deciders:** Project team
+**Supersedes:** the check order introduced in `42bfb57` (token first). Recorded rather than deleted, because the reasoning behind it was sound in intent and is worth keeping.
+
+### Context
+The Pages preflight in `.github/workflows/dashboard-pages-deploy.yml` separates the failure classes the Cloudflare API can actually distinguish: absent secret, rejected token, token-valid-but-account-unreachable, and token-and-account-ok-but-no-Pages-permission.
+
+`42bfb57` ordered it token-first: call `/user/tokens/verify`, then only if that returned `success:true`, call `/accounts/{id}`. The stated reason was that expired, revoked, wrong-scope and wrong-account all return the identical `6003`/`6111`, so leading with the token check stops an account verdict from being reported as a consequence of a broken token.
+
+That reasoning was right about the hazard and wrong about which probe is more informative. `/user/tokens/verify` can only ever speak about the token — it returns nothing about whether that token can reach a given account. Leading with it spends a round trip to learn the one half of the answer that `/accounts/{id}` yields for free. On the wrong-account case it reports "token rejected" for a token that is perfectly valid, and then *skips* the account probe, so the run finishes with a confidently wrong verdict and no data at all.
+
+### Options considered
+| Option | Pros | Cons | Chosen? |
+|--------|------|------|---------|
+| Token first, account gated on it (`42bfb57`) | Never reports an account problem downstream of a broken token | Wastes a round trip on the token-only endpoint; a wrong `CLOUDFLARE_ACCOUNT_ID` surfaces as "token rejected" and the account probe never runs, so the run learns the least about the most common owner error | no |
+| Account first, token gated on it | One call settles the common case — `success:true` proves the token is accepted AND the account is reachable; on failure `6003`/`6111` still isolates a rejected token while any other code isolates an account problem | The account probe must classify its own response code to tell "token rejected" from "account unreachable" instead of asking first | yes |
+| Probe both unconditionally | Maximum data on every run | Reports consequences as causes; one broken token yields two errors naming the same secret, which is the confusion the preflight exists to remove | no |
+
+### Decision
+Probe `/accounts/{id}` first. A successful read sets both `account_ok` and `token_ok`, because Cloudflare cannot return `success:true` for an account it did not accept a bearer token for. Call `/user/tokens/verify` only when the account read left the question open, and skip it in both directions the invariant requires:
+
+- **account succeeded** — the token is already proven accepted, so a second call only restates a verdict in hand;
+- **account reported `6003`/`6111`** — the token fault is already reported, and re-proving it would double-count one cause against one secret.
+
+The anti-consequence rule from `42bfb57` is preserved unchanged; only its direction flipped.
+
+### Consequences
+- **Easier:** The healthy case costs one API call instead of two, and a wrong account id is now named as an account problem rather than a token problem.
+- **Harder:** The account probe now classifies its own response to separate token-rejection from account-failure, so the preflight carries one more branch than the version it supersedes.
+- **Trigger for revisit:** Cloudflare returning `success:true` for an account the token cannot use, or publishing a distinct documented code for token-vs-account failure that would make that classification unnecessary.
+
+---
