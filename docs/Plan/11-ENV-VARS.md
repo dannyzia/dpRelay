@@ -59,6 +59,7 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | ALERT_CANARY_ENABLED | no | false | Daily synthetic canary: sends a real message through the Telegram sink and treats the returned `message_id` as the delivery receipt. Off by default because it posts into the real ops channel. Requires TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to do anything. | — |
 | ALERT_CANARY_CRON | no | 0 9 * * * | Canary schedule (node-cron). Only runs when ALERT_CANARY_ENABLED=true. | — |
 | ALERT_CANARY_MAX_AGE_SEC | no | 93600 (26h) | Age of the last receipt beyond which the canary reports itself overdue on `/health/alerts` (503). One daily run plus slack, so a single missed run does not page. | — |
+| ALERTING_REQUIRED | no | `true` | Boot guard (ISSUE-41): when `true`, the server **refuses to start** unless a complete alert sink is configured (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID, or ALERT_WEBHOOK_URL). Kills the “alerting silently log-only” failure class. `false` = explicit dev opt-out. | — |
 | WAKE_IDLE_THRESHOLD_SEC | no | 900 | Idle seconds before the next request counts as a wake (R5 catch-up sweep). | — |
 | DEVICE_ENROLLMENT_SECRET | for M2 | — (empty = enrollment disabled) | Enrollment secret for `POST /v5/device/enroll` (ADR-016 exchange → device API key). Compared in constant time. | `openssl rand -base64 32` |
 | OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |

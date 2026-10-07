@@ -64,6 +64,7 @@ When a gateway phone reports a result for an OTP-linked message, or an app verif
 ## Background jobs (R3, R5)
 
 Single Fastify process hosts the node-cron job runner (constraint R3 — one process):  - `heartbeat_watchdog` — devices stale past `WATCHDOG_STALE_SEC` (default 15 min) trigger an alert (Telegram sink preferred when `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set, else `ALERT_WEBHOOK_URL`) and a structured log line; log-only when no sink is configured. A never-seen device is aged from `created_at` instead (same window — see **Never-seen grace** below).
+- **Alerting boot guard (ISSUE-41)** — `start-server.mjs` refuses to start when no complete sink is configured (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, or `ALERT_WEBHOOK_URL`) unless `ALERTING_REQUIRED=false` is set explicitly (local dev only), so the log-only state cannot survive a deploy.
 - `catch_up_sweep` — runs on boot and on the **first request after each wake** (Render spin-down guard, constraint R5), so scheduled work cannot be silently skipped while asleep.
 
 All job knobs are env-configurable (see `.env.example`): `WATCHDOG_STALE_SEC`, `WATCHDOG_ALERT_REPEAT_SEC`, `WATCHDOG_CRON`, `CATCH_UP_CRON`, `BULK_QUEUE_CRON`, `STATS_CRON`, `FCM_WAKE_ALERT_THRESHOLD`, `FCM_WAKE_ALERT_REPEAT_SEC`, `ALERT_CANARY_ENABLED`, `ALERT_CANARY_CRON`, `ALERT_CANARY_MAX_AGE_SEC`.

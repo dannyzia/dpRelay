@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { assertAlertingArmed } from "./alert-guard.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = join(root, "litestream.yml");
@@ -29,6 +30,21 @@ function run(args) {
       resolve(1);
     });
   });
+}
+
+// 0. Alerting boot guard (ISSUE-41): fail loud BEFORE any boot path (dev or
+// litestream-supervised) when no complete alert sink is configured. Without
+// this, production boots with watchdog alerts going to logs only — the §1.4
+// incident class. ALERTING_REQUIRED=false opts out explicitly (local dev only).
+try {
+  const guard = assertAlertingArmed(process.env);
+  if (guard.optOut) {
+    console.log("ALERTING_REQUIRED=false — booting without an alert sink (dev opt-out)");
+  } else {
+    console.log("Alert guard: alert sink armed");
+  }
+} catch (err) {
+  fail(`alerting boot guard: ${err.message}`);
 }
 
 // Durability-first default: when unset, assume Litestream IS configured (R2) and
