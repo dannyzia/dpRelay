@@ -49,17 +49,19 @@
  * Env:
  *   FCM_PROBE_TOKEN     device token (alternative to --token-file)
  *   RENDER_SERVICE_ID   override the target service (default: the dprelay-api one)
- *   RENDER_API_KEY      override the API key (default: read from .kilo/kilo.jsonc)
+ *   RENDER_API_KEY      override the API key (default: ~/.config/dprelay/render-api-key)
  *
  * Neither the device token nor the service-account private key is ever printed,
  * logged, or written. Only key identity (project, private_key_id), status codes,
  * error codes, and the FCM message id are printed.
  */
 const { readFileSync, existsSync } = require("node:fs");
+const path = require("node:path");
 const https = require("node:https");
 const { createSign } = require("node:crypto");
+const { resolveRenderApiKey } = require("./render-key.cjs");
 
-const repoRoot = "/home/zia/Documents/My Projects/Authenticator";
+const repoRoot = path.resolve(__dirname, "..", "..");
 const DEFAULT_SERVICE_ID = "srv-dal3bae7bikc73e7k7pg";
 const SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 
@@ -96,20 +98,9 @@ function request(url, { method = "GET", payload = null, body = null, headers = {
   });
 }
 
-/** Render API key: env override, else the same source the sibling ops scripts use. */
+/** Render API key: shared resolution, so this probe and the ops scripts agree. */
 function renderApiKey() {
-  if (process.env.RENDER_API_KEY) return process.env.RENDER_API_KEY;
-  const kiloPath = `${repoRoot}/.kilo/kilo.jsonc`;
-  if (!existsSync(kiloPath)) {
-    throw new Error(`no Render API key: set RENDER_API_KEY or provide ${kiloPath}`);
-  }
-  const kilo = readFileSync(kiloPath, "utf8")
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("//"))
-    .join("\n");
-  const key = JSON.parse(kilo)?.mcp?.render?.environment?.RENDER_API_KEY;
-  if (!key) throw new Error("RENDER_API_KEY not found in .kilo/kilo.jsonc");
-  return key;
+  return resolveRenderApiKey({ repoRoot });
 }
 
 const serviceId = process.env.RENDER_SERVICE_ID || DEFAULT_SERVICE_ID;

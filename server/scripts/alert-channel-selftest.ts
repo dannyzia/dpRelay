@@ -42,6 +42,7 @@
  */
 import pino from "pino";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadConfig, type Config } from "../src/config.js";
@@ -53,24 +54,22 @@ import {
 } from "../src/jobs.js";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// The shared key resolver is CommonJS so plain `node script.cjs` works for its
+// nine .cjs callers. createRequire is the bridge; reimplementing the lookup here
+// is exactly the drift that put a credential in a config file eleven times over.
+const require_ = createRequire(import.meta.url);
+const { resolveRenderApiKey } = require_("./render-key.cjs") as {
+  resolveRenderApiKey: (opts: { repoRoot: string }) => string;
+};
 const DRY_RUN = process.argv.includes("--dry-run");
 const ENV_FILE_IDX = process.argv.indexOf("--env-file");
 const ENV_FILE = ENV_FILE_IDX > -1 ? process.argv[ENV_FILE_IDX + 1] : null;
 const SERVICE_ID = process.env.RENDER_SERVICE_ID ?? "srv-dal3bae7bikc73e7k7pg";
 const RENDER_BASE = `https://api.render.com/v1/services/${SERVICE_ID}`;
 
-/** The live Render API key, from env or the same source the sibling scripts use. */
+/** The live Render API key, from the same resolver every sibling script uses. */
 function renderApiKey(): string {
-  if (process.env.RENDER_API_KEY) return process.env.RENDER_API_KEY;
-  const kiloPath = join(repoRoot, ".kilo/kilo.jsonc");
-  const kilo = readFileSync(kiloPath, "utf8")
-    .split("\n")
-    .filter((l) => !l.trim().startsWith("//"))
-    .join("\n");
-  const key = (JSON.parse(kilo) as { mcp?: { render?: { environment?: { RENDER_API_KEY?: string } } } })
-    .mcp?.render?.environment?.RENDER_API_KEY;
-  if (!key) throw new Error(`no Render API key: set RENDER_API_KEY or provide ${kiloPath}`);
-  return key;
+  return resolveRenderApiKey({ repoRoot });
 }
 
 /** Live production env vars, exactly as the running service sees them. */
