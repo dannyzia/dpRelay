@@ -3,15 +3,16 @@
 Execution-ordered. Do them top to bottom; each step carries its verification.
 Full context: `CUTOVER-CHECKLIST.md` §1.5 (detail), `28-HANDOFF-STATUS.md`
 (state). Secrets are never printed anywhere — real values only, never
-placeholders. Base: master `6c77657`, production `5.3.7-alpha.0`.
+placeholders. Base: master `6c77657` → PR #54 merge `5dee74a` (22 commits,
+`dc4ef59`…`d53c526`), production `5.3.7-alpha.0`.
 
 **Gate map** — what each step closes:
 
 | Step | CUTOVER-CHECKLIST gate(s) closed | Status-doc item |
 |---|---|---|
 | 1 · Render env batch + deploy | §1.5(a)+(b) vars; §0 alert/CORS rows | 1–2 |
-| 2 · Telegram bot | enables §1.5(a) | 1 |
-| 3 · Alert proof | **§1.4 alert channel live** | 1 |
+| 2 · Telegram credential + membership (gate A) | §1.4 gate A — enables §1.5(a) | 1 |
+| 3 · Production delivery proof (gate B) | **§1.4 gate B — alert channel live** | 1 |
 | 4 · GitHub secrets | enables §1.5(c) | 3 |
 | 5 · Cloudflare Pages | §1.5(b) proof (CORS flip) + §1.5(c) | 2–3 |
 | 6 · Dashboard drive-through | §1.5(c) verify bullet | 3 |
@@ -76,10 +77,58 @@ poll). Env PUTs alone never deploy.
 > `threshold=900`, and **zero** occurrences of `threshold=60`. Treat §1.4 as
 > *owner-attested, agent-unverified* — see Rhizome ISSUE-37.
 >
-> **Disconfirming check (one env read, whenever convenient):** 18 keys with both
-> `TELEGRAM_*` present corroborates the attestation; 16 keys means the alert path is
-> still unconfigured and §1.4 should be reopened. If the sink is unset, the next
-> incident is silent — the watchdog logs and nobody is told.
+> **§1.4 sharpened — PR #54 ships the /health/alerts endpoint (`d53c526`) so the
+> alert-channel state is now pollable rather than log-only.** Against the current
+> production build the verified first-tick result is:
+>
+> ```
+> $ curl -s https://dprelay-api-hug8.onrender.com/health/alerts | jq .
+> {
+>   "degraded": false,
+>   "reason": "ok — every configured alert sink is delivering",
+>   "sinks": [
+>     { "sink": "telegram", "configured": false, "consecutiveFailures": 0, "degradedSince": null },
+>     { "sink": "webhook",  "configured": true,  "consecutiveFailures": 0, "degradedSince": null }
+>   ]
+> }
+> $ curl -s -o /dev/null -w '%{http_code}' https://dprelay-api-hug8.onrender.com/health/alerts
+> 200
+> $ curl -s -o /dev/null -w '%{http_code}' https://dprelay-api-hug8.onrender.com/health
+> 200
+> $ curl -s -o /dev/null -w '%{http_code}' https://dprelay-api-hug8.onrender.com/healthz
+> 200
+> ```
+>
+> **Read carefully:** production today shows `degraded: false` and returns **200**
+> because the **webhook sink is configured and currently delivering** (`configured:
+> true`, `degradedSince: null`), even though Telegram is not wired (`configured:
+> false`). The endpoint answers "is every *configured* sink delivering" — not
+> "is every sink that could exist configured". An unconfigured Telegram sink does
+> not degrade the response; a dead webhook sink would.
+
+> The **200 is not a defect** and does not mean "alerting is fully healthy". It
+> means "whatever is wired is working". The 503 path is real and verified by test
+> (`alert-sink-health-endpoint.test.ts`: degraded fires after `ALERT_SINK_FAILURE_
+> THRESHOLD` consecutive webhook failures, clears on the first success, and never
+> leaks the failing URL or secret). If the webhook sink breaks, `/health/alerts`
+> goes 503 independently of /health and /healthz, which stay 200 — that separation
+> is the point of `d53c526`.
+>
+> **Current state (2026-10-07): `/health/alerts` returns 503.** The webhook sink is
+> configured but **degraded** — its `ALERT_WEBHOOK_URL` still points at a dead
+> `trycloudflare.com` quick-tunnel hostname (DNS `ENOTFOUND`, so every dispatch
+> fails before it leaves Render). The receiver itself is healthy; only the URL is
+> stale. The fix is to repoint `ALERT_WEBHOOK_URL` at a hostname that survives the
+> tunnel process, then redeploy (an env PUT alone does not deploy). The first-tick
+> 200 above remains the record of the PR #54 verification, not today's state.
+
+> **Disconfirming check (one env read, whenever convenient):** test the
+> `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` **names**, not a key count — unrelated
+> keys come and go (the service went 16 → 17 between 2026-10-03 and 2026-10-07 with
+> no Telegram var appearing). Both names present corroborates the attestation; either
+> name absent means the alert path is still unarmed on the primary sink and §1.4
+> should be reopened. If the sink is unset, the next incident is silent — the
+> watchdog logs and nobody is told.
 >
 > The **fallback (webhook) path is independently proven** — see the evidence note
 > below.

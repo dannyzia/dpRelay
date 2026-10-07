@@ -17,7 +17,7 @@ import contactGroupRoutes from "./routes/contact-groups.js";
 import messageTemplateRoutes from "./routes/message-templates.js";
 import adminAppRoutes from "./routes/admin-apps.js";
 import adminDeviceRoutes from "./routes/admin-devices.js";
-import { registerJobs, alertSinkStatus } from "./jobs.js";
+import { registerJobs, alertCanaryStatus, alertSinkStatus } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
 
 /** ESM-compatible require — reads package.json for the /health version field. */
@@ -152,8 +152,14 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
    */
   app.get("/health/alerts", async (_request, reply) => {
     const status = alertSinkStatus(config);
-    if (status.degraded) reply.code(503);
-    return status;
+    // The canary's evidence rides along here because this is the only channel
+    // that does not depend on the sink being verified: when Telegram is dead,
+    // this endpoint is how a monitor finds out, and `lastReceiptAt` tells it
+    // whether the channel ever worked or has been broken since deploy.
+    const canary = alertCanaryStatus(config);
+    const canaryDegraded = canary.enabled && canary.overdue;
+    if (status.degraded || canaryDegraded) reply.code(503);
+    return { ...status, canary };
   });
 
   // Auth/service + middleware plugins first, then routes (they rely on decorators).

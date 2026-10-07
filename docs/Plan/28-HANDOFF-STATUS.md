@@ -9,9 +9,36 @@ secret material are never duplicated here — pointers only.
 **Production posture:** `https://dprelay-api-hug8.onrender.com` live at
 **5.3.7-alpha.0** (server parity `0321a97` #30; master tip `800d1ed` adds the
 docs-only merges #31/#32), `/docs/json` serving the OpenAPI spec (45 paths),
-server suite **173/173**, AGPL gate clean, CI 6/6 on recent merges, deploy
-guard active. All five implementation workstreams (W1–W5) are review-closed:
+server suite **584/39** (post-PR54; was 173/173), AGPL gate clean, CI 6/6 on
+recent merges, deploy guard active. All five implementation workstreams (W1–W5) are review-closed:
 Rhizome ISSUE-20 through ISSUE-25 approved and **done** (2026-09-27).
+
+**Alert-channel hardening (PR #54, merged `5dee74a`):** 22-commit squash merge
+(`dc4ef59`…`d53c526`) shipping the /health/alerts sink-reachability endpoint
+(`d53c526`), the DRY_RUN hazard gate in `set-alert-channel.cjs` (`7bf9492`),
+the one-command alert-channel self-test (`8eac6ab`), Telegram dispatch
+regression tests (`f9f99f1`), the never-heartbeated device quarantine
+(`3f8e867`, migration 010), operator device levers (`944996e`), FCM key
+proof-by-real-send (`b28de27`), the Cloudflare credential preflight that
+names every bad credential (`42bfb57`, `86e48c3`), the DRY_RUN→hazard and
+machine-filesystem fixes (`0efe324`), the split §1.4 attestation with the
+Cloudflare token gate recorded (`8b7f7a4`), the CORS-gap close and workflow
+error-taxonomy correction (`a61b825`), and the full evidence anchoring in
+`29-OWNER-CHECKLIST.md` (`b2671e3`) + flip-day alert-sink verification
+(`5593083`). **Verified first-tick result (live against production `dprelay-api-hug8`):**
+`GET /health/alerts` returns **200** with `{"degraded":false,"reason":"ok —
+every configured alert sink is delivering","sinks":[{"sink":"telegram","configured":false,
+"consecutiveFailures":0,"degradedSince":null},{"sink":"webhook","configured":true,
+"consecutiveFailures":0,"degradedSince":null}]}` — the webhook sink is wired and
+delivering, Telegram is not wired (no `TELEGRAM_*` on the 16-key Render env) but
+an unconfigured sink does not degrade the response. `GET /health` and `GET /healthz`
+independently return **200**, confirming the endpoint does not conflate alerting
+health with API health. The 503 path is real: it fires when a *configured* sink
+crosses `ALERT_SINK_FAILURE_THRESHOLD` consecutive failures and clears on the first
+success, and is regression-locked by `alert-sink-health-endpoint.test.ts`. Suite now **584 tests / 39 files**
+(pre-PR54: 173/173 → post-PR54: 584/39; 92 new tests in PR54: 6 + 14 + 17 +
+27 + 19 + 9). Test-count trajectory across the cycle: 143 → 158 → 169 → 172
+→ 173 → **584**.
 
 ## Workstream record
 
@@ -19,7 +46,7 @@ Rhizome ISSUE-20 through ISSUE-25 approved and **done** (2026-09-27).
 |---|---|---|---|
 | 1 | M4 pass 3 deferred routes | ✅ Done | Contact groups/templates CRUD (#17 `d196f23`); admin app plane + migration 009 + rotate/revoke/webhook-update (#18 `50a5f0e`); `POST /v5/apps/revoke`, `GET …/credentials-status`, operator `GET /v5/admin/metrics` + `GET /v5/admin/campaigns` (#25 `d3b3873`); operator kill-switch (#20 `0f20194`). Migration 008 audited: spec already satisfied, no duplicate created. ISSUE-20 **done**. |
 | 2 | Android parallel-run APK | ✅ Done | #26 `6656179`: `SmsRateLimiter` confirmed a process-wide singleton shared by both planes (regression-locked by `SmsRateLimiterDualPlaneTest`); `V5_SERVER_URL`/`V5_API_ENABLED=true` BuildConfig verified; JDK 17 build green (lint + 49 unit tests + assembleRelease); APK `app-release.apk` 5,773,851 bytes, sha256 `5b72f60f…f38df2`. Toggle-additivity report: `docs/httpsms vs dprelay/Modification 6/w2-toggle-additivity.md` (erratum `f2ee336`). **No enrollment performed.** ISSUE-21 **done**. |
-| 3 | v4 import + reconciliation | ✅ Done (local baseline) | #27 `84b1ad1`: apply-safety fixes (deterministic timestamp fallback, FK id-space binding, per-bucket error context, idempotent re-runs); local `--apply` on a **copy** of the frozen export — packages=12, apps=11, credit_transactions=3, app_credits=3, integrity ok, 0 FK violations, 11/11 hashed secrets. Report: `docs/Plan/26-V4-IMPORT-RECONCILIATION.md` — 56 source rows → 29 imported / 8 skipped / 4 orphans, **every delta rule-based**; checksums pinned with methods (review erratum `943d580`). `dprelay-prod-2` verified live (200 ok; wrong secret → 401). ISSUE-22 **done**. |
+| 3 | v4 import + reconciliation | ✅ Done (local baseline) | #27 `84b1ad1`: apply-safety fixes (deterministic timestamp fallback, FK id-space binding, per-bucket error context, idempotent re-runs); local `--apply` on a **copy** of the frozen export — packages=12, apps=11, credit_transactions=3, app_credits=3, integrity ok, 0 FK violations, 11/11 hashed secrets. Report: `docs/Plan/26-V4-IMPORT-RECONCILIATION.md` — 56 source rows → 29 imported / 8 skipped / 4 orphans, **every delta rule-based**; checksums pinned with methods (review erratum `943d580`). `dprelay-prod-2` verified live (200 ok; wrong secret → 401). ISSUE-22 **done**. (`dprelay-prod-2` revoked and reprovisioned as `dprelay-prod-3` on 2026-10-04 — ISSUE-52.) |
 | 4 | M3 tails | ✅ Done | #28 `f6a186f`: OpenAPI at `/docs` + `/docs/json` generated from route definitions, spec committed (`docs/Plan/27-OPENAPI-SPEC.json`) with a drift test; per-phone OTP resend cooldown (`OTP_RESEND_COOLDOWN_SEC`, default 60, `0` disables); webhook exhaustion damping (`WEBHOOK_EXHAUSTION_DAMPING_SEC`, `0` restores legacy semantics). #30 `0321a97`: damping default retuned to **900 s ⇒ ≤4 re-alerts/hour** (the handoff's stated default). Live-verified in production. ISSUE-23 **done** (review-approved 2026-09-27; reviewer independently re-ran gates and re-verified the 900 s default-lock test, live /health and /docs/json). |
 | 5 | v5 web dashboard | ✅ Done | #29 `0e0fb5d` + `0f167fb`: clean-room `dashboard/` (React 18 + Vite 5 + Tailwind 3, TS strict; `web/` untouched); JWT register/login/refresh wired to `/v5/auth/*` (live-verified); connect-app layer (app credentials verified before store, dropped on 401); campaigns list/create/detail + pause/resume/cancel-with-refund (full lifecycle exercised against a live server); credits overview + buy flow surfacing the bKash destination from `credits/request`; Cloudflare Pages contract (`_redirects`, `VITE_API_BASE_URL`). Server: `@fastify/cors` fail-closed allow-list (`CORS_ALLOWED_ORIGINS`). AC5–AC7 shipped by #32 `800d1ed`: contact groups + templates screens (E.164 dedup counts, 409 duplicate names, member add/remove), apps management (show-once secrets in amber panels, revoke/unrevoke, webhook-secret rotation), operator admin view (session-scoped `OPERATOR_SECRET` verified before store — third credential plane; metrics cards, TrxID approve/reject, kill switch, cross-app oversight). Functional smoke 25/25 incl. revoke → 401 `app_revoked` → unrevoke → restore. ISSUE-24 **done** (review-approved 2026-09-27; reviewer reproduced the build byte-identical, 193.78 kB JS). |
 | — | Handoff docs (post-W5) | ✅ Done | #31 `08cb73d`: CUTOVER-CHECKLIST.md refreshed (5.3.7 pin, Telegram-first alert row, T-0 re-verification framing, §7 gaps CLOSED/SUPERSEDED + new CORS gap) and this doc created. ISSUE-25 **done** (review-approved 2026-09-27). Follow-up docs+CI passes pending review: ISSUE-26 (checklist W1–W5 refresh + §1.5 owner deploy steps) and ISSUE-27 (Cloudflare Pages deploy workflow for `dashboard/`). |
@@ -29,6 +56,9 @@ Also shipped this cycle: Telegram-first alert sink (PR #24 `b32d153`;
 `dispatchAlert` prefers `TELEGRAM_BOT_TOKEN`+`TELEGRAM_CHAT_ID`, webhook
 fallback, log-only when unconfigured), drill scripts (#22 `ee0f0b5`), and the
 cutover checklist itself (#21 `c71783c`).
+
+Also shipped this cycle (alert-channel hardening): PR #54 `5dee74a` (22 commits
+from `dc4ef59` through `d53c526`), with the verified first-tick summary above.
 
 ## Decommission preconditions (Workstream 6 gate)
 
@@ -176,10 +206,12 @@ Workstream 6 starts **only** after **all** of the following — in order:
 - Rhizome issues: ISSUE-20 through ISSUE-35 **done** (epic ISSUE-14);
   ISSUE-36 tracks Workstream 6 (created on the owner's written go; gated on
   items 3–4 above); ISSUE-37 tracks runbook execution steps 2–5 (owner-gated).
-- PRs #17–#45 on `dannyzia/dpRelay`; all merges squash-merged, `Refs:`-linked,
-  no AI attribution.
+- PRs #17–#54 on `dannyzia/dpRelay`; all merges squash-merged, `Refs:`-linked,
+  no AI attribution. PR #54 `5dee74a` (`ops: harden alert-channel tooling,
+  Pages credential preflight, and evidence records`) is the alert-channel
+  hardening merge; its first-tick result is recorded above.
 - Key docs: `docs/Plan/26-V4-IMPORT-RECONCILIATION.md`,
   `docs/Plan/27-OPENAPI-SPEC.json`,
   `docs/httpsms vs dprelay/Modification 6/CUTOVER-CHECKLIST.md`,
   `docs/httpsms vs dprelay/Modification 6/w2-toggle-additivity.md`.
-- Test-count trajectory across the cycle: 143 → 158 → 169 → 172 → 173.
+- Test-count trajectory across the cycle: 143 → 158 → 169 → 172 → 173 → 584.

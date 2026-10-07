@@ -4,6 +4,7 @@
 |---|---|
 | **Purpose** | Owner-attended procedure to load the v4 data (packages / apps / credit transactions / credits) into the production v5 database at flip time — the `--apply` step `31-T0-RUNBOOK.md` rehearses but deliberately does not execute against production. |
 | **Refs** | ISSUE-36 (W6 precondition 3), ISSUE-22 (mechanics), `31-T0-RUNBOOK.md` (export + GO gate), `26-V4-IMPORT-RECONCILIATION.md` (baseline rules), CUTOVER-CHECKLIST §6 (rollback posture) |
+| **§7 push proof** | `fcm_wake_failed` alerting makes a broken push credential *visible after* the fact; it does not make it *proven before* you accept the flip. Any change to `FCM_SERVICE_ACCOUNT_JSON` — rotation, re-upload, IAM edit, or the flip's own restart — is closed by `server/scripts/fcm-wake-probe.cjs` returning `ACCEPTED` (exit 0) **and** the gateway device showing `FCM message received` with an advanced `lastPing`. A stored key plus a green `/health` is not that. §7 has the verdict table, the token handling rules, and the read-only token query. |
 | **Rehearsed** | 2026-09-28/29: full mechanics proven on a throwaway DB — fresh `--apply` exit 0, independent SQL counts match the baseline (12/11/3/3, 1 revoked app, 2 TrxIDs attached, 0 duplicates, FK 0), idempotent re-run inserts nothing (Rhizome ISSUE-36 evidence). Production differs **only** in: DB sourced from the Litestream replica, operator secret material in your hands, and the stop-the-world step. |
 
 ## 0 · Why this shape (architecture constraints, read once)
@@ -189,6 +190,143 @@ curl -s "$BASE/health"                     # healthy, db ok
   node staging/render-log-sweep.cjs | grep -E "alert_sink_degraded|alert_sink_recovered|telegram alert failed"
   # expect: no alert_sink_degraded, no "telegram alert failed"
   ```
+
+- **FCM push — prove it, do not infer it.** This check is not flip-specific and
+  it is **mandatory after every credential change**, not just at flip. A service
+  account can be rotated, re-uploaded, and stored correctly, `/health` can be
+  200, and the key can still be **revoked at the source or missing the FCM
+  sender role**. The FCM wake is best-effort by contract — OTP delivery falls
+  back to the phone's reconcile fetch — so every one of those failures presents
+  as *nothing at all*: OTPs still succeed, phones still wake, and the only
+  symptom is push quietly getting less reliable. `rotate-fcm-key.cjs verify`
+  cannot catch this; it proves the key was **stored**, not that it can push.
+  Send one real message and read the verdict.
+
+  ```bash
+  # after ANY FCM_SERVICE_ACCOUNT_JSON change — rotation, re-upload, IAM edit,
+  # or the flip itself (the import restarts the service and re-points config)
+  node server/scripts/fcm-wake-probe.cjs --token-file /path/to/fcm-token.txt
+  # or, to test a candidate BEFORE it is written to Render:
+  node server/scripts/fcm-wake-probe.cjs --key-file ./new-sa.json --token-file /path/to/fcm-token.txt
+  ```
+
+  The Render credential it uses comes from `server/scripts/render-key.cjs`
+  (`RENDER_API_KEY` → `$RENDER_API_KEY_FILE` → the OS keyring), so it works
+  wherever the other ops scripts do. On the owner's own machine it reads the
+  keyring; on anything without a session bus, export `RENDER_API_KEY` first.
+
+  | Exit | Verdict | Meaning for the flip |
+  |---|---|---|
+  | 0 | `ACCEPTED` | FCM accepted a real send. Credential is healthy. |
+  | 1 | `KEY UNHEALTHY` | **Stop.** Credential cannot authenticate or FCM rejected it. Fix before accepting the flip. |
+  | 2 | no token supplied | Probe refused to guess — not a verdict. Supply the token and re-run. |
+  | 3 | `TOKEN STALE` / `TOKEN BAD` | **The key is healthy** — FCM accepted the credential and refused the target. This is a device problem, not a credential one. |
+  | 4 | `QUOTA` | Key healthy, FCM rate-limiting. Re-run later; not a key fault. |
+  | 5 | `UNEXPECTED` | Read the body it prints before concluding anything. |
+
+  Note the asymmetry that matters on flip day: **exit 1 and exit 3 both mean
+  something broke, but only exit 1 is a credential fault.** Rotating the key
+  because of a `TOKEN STALE` would replace a healthy credential with an
+  unverified one and hide the real problem.
+
+  `--dry-run` mints the token and runs the empty-message auth probe only — it
+  proves the credential authenticates but contacts no device, so it is the
+  right check for “can this key push at all”, **not** the one that satisfies
+  this item. Do not record a dry run as the push proof.
+
+  The token is the device's own, self-registered via `POST /v5/device/fcm-token`;
+  there is deliberately no copy of it in the repo. Use the most recently seen
+  non-revoked device. Pass it via `--token-file`, **not** bare argv — a bare
+  token lands in shell history and in `ps` for every user on the box.
+
+  ```bash
+  # read-only: newest non-revoked device token, written straight to a 0600 file
+  # so it never reaches the terminal, shell history, or a paste-able buffer.
+  # Uses better-sqlite3 like §5, not the sqlite3 CLI — no new dependency, and
+  # `length(fcm_token) > 0` sidesteps the nested-quote trap in `!= ''`.
+  cat > /tmp/fcm-token.cjs <<'EOF'
+  const D = require(require.resolve("better-sqlite3", { paths: [process.cwd()] }));
+  const row = new D(process.argv[2]).prepare(
+    "SELECT fcm_token FROM devices WHERE revoked_at IS NULL " +
+      "AND fcm_token IS NOT NULL AND length(fcm_token) > 0 " +
+      "ORDER BY last_seen_at DESC LIMIT 1",
+  ).get();
+  require("fs").writeFileSync(process.argv[3], row ? row.fcm_token + "\n" : "");
+  require("fs").chmodSync(process.argv[3], 0o600);
+  console.log(row ? "token written (value not printed)" : "no device has registered a token");
+  EOF
+  mv /tmp/fcm-token.cjs ./fcm-token-probe.cjs   # .cjs: the repo root has no "type",
+                                                # and .mjs would force ESM where
+                                                # require() does not exist
+  cd server && node ../fcm-token-probe.cjs "../staging/flip-restore-$(date +%F)/dprelay.db" /tmp/fcm-token.txt
+  cd .. && rm -f fcm-token-probe.cjs
+
+  node server/scripts/fcm-wake-probe.cjs --token-file /tmp/fcm-token.txt
+  shred -u /tmp/fcm-token.txt
+  ```
+
+  If the helper prints `no device has registered a token`, the probe still runs
+  but stops at exit 2 — **note that exit 2 is only reachable once the credential
+  has already passed the auth probe.** The probe checks FCM's authorisation
+  *before* it looks at the token, so while the credential is broken you get exit
+  1 (`KEY UNHEALTHY`) and the missing token is not even reported. Fix the
+  credential first, then expect exit 2 until a gateway device self-registers
+  (its reconcile heartbeat registers it). Do not substitute a token from
+  anywhere else.
+
+  **Corroborate device-side — a 200 alone is half the proof.** The send returns
+  accepted by FCM, not delivered to the phone. On the gateway device, logcat
+  shows `FCM message received` and `/health/{androidId}.lastPing` in Firebase
+  RTDB advances. Both moving is end-to-end proof; **either one alone means look
+  past the key** — the credential is fine and the problem is between FCM and the
+  app. A `200 + message id` with an unmoved `lastPing` is not a green flip.
+
+  Since `fcm_wake_failed` alerting, a credential that breaks in production now
+  raises an operator alert instead of failing silently — but that alert is a
+  tripwire for *after* the flip, not a substitute for proving push before you
+  accept it.
+
+  #### `KEY UNHEALTHY` triage (403) — do this first, it is not a key rotation
+
+  As of 2026-10-04 the live credential is in exactly this state, so expect it on
+  the first run rather than treating it as a surprise. The probe reports:
+
+  ```
+  auth       : OK (OAuth token minted)
+  FCM        : KEY UNHEALTHY — FCM rejected the credential (HTTP 403).
+  ```
+
+  `auth OK` + `403` is the whole diagnosis: **the key is valid and not revoked**,
+  so do **not** rotate it. The permission is missing. FCM returns:
+
+  ```
+  status : PERMISSION_DENIED   reason : IAM_PERMISSION_DENIED
+  permission : cloudmessaging.messages.create
+  resource   : projects/authenticator-15fb7
+  ```
+
+  On this project the cause is **the FCM API itself is not enabled**, not only
+  the role. Every other Firebase API is on (`firebase`, `firebasedatabase`,
+  `firebaseremoteconfig`, `firebaseinstallations`, …) but
+  `cloudmessaging.googleapis.com` is absent from the enabled list — which is
+  also why the error says "or it may not exist". Remediation, in order:
+
+  ```bash
+  gcloud services enable cloudmessaging.googleapis.com --project=authenticator-15fb7
+  # then grant the sender role. It is NOT grantable via
+  #   gcloud projects add-iam-policy-binding --role=roles/firebasemessaging.sender
+  # (rejected: "Role … is not supported for this resource"). Use the Firebase
+  # console → Project settings → Service accounts, or:
+  #   firebase projects:add-iam-policy-binding authenticator-15fb7 \
+  #     --member serviceAccount:authenticator-15fb7@appspot.gserviceaccount.com \
+  #     --role roles/firebasemessaging.sender
+  ```
+
+  Enabling the API is a production change with billing implications — treat it
+  as an owner decision, not a flip-day step. Until it is done, **push is broken
+  and OTP delivery is carried entirely by the phone's reconcile fetch.** The
+  flip itself is unaffected: that fallback is exactly why `wakeGateway` is
+  best-effort.
 
 ## 8 · Rollback notes (data-level, §6-compatible)
 

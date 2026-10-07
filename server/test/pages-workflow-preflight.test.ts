@@ -74,12 +74,42 @@ describe("Pages workflow Cloudflare preflight", () => {
     expect(step).toMatch(/cannot be separated from here|identical code for every rejected form/);
   });
 
-  it("skips the account check when the token failed, so it cannot mislead", () => {
+  it("reads the ACCOUNT before the token, so one call can settle both", () => {
     const step = preflightStep();
-    // Running it would restate the token problem as an account problem and send
-    // the owner to fix the wrong secret.
-    expect(step).toMatch(/if \[ "\$token_ok" -eq 1 \]; then[\s\S]*?account_ok=1/);
-    expect(step).toContain("account check SKIPPED");
+    // ADR-018. /user/tokens/verify can only ever speak about the token, so
+    // leading with it spends a round trip to learn what the account read gives
+    // for free. If this ever flips back, the reason is in the ADR, not in taste.
+    const accountAt = step.indexOf("acct_resp=$(curl");
+    const tokenAt = step.indexOf("token_resp=$(curl");
+    expect(accountAt).toBeGreaterThan(-1);
+    expect(tokenAt).toBeGreaterThan(-1);
+    expect(accountAt).toBeLessThan(tokenAt);
+    // A successful account read also proves the token was accepted - Cloudflare
+    // cannot return success:true for a bearer it rejected. Strip the shell
+    // comments first: the reasoning between the two assignments is prose, and
+    // the claim under test is about the code, not how many lines the note is.
+    const codeOnly = step.replace(/#[^\n]*/g, "");
+    expect(codeOnly).toMatch(/account_ok=1\s*\n\s*token_ok=1/);
+  });
+
+  it("skips the token check when the account read already settled it", () => {
+    const step = preflightStep();
+    // The invariant is unchanged, only its direction: never report a
+    // consequence as if it were a cause, or the owner fixes the wrong secret.
+    // Two settles now qualify - the account answered, or the account read
+    // already reported the token as rejected and a re-run would restate it.
+    expect(step).toMatch(/if \[ "\$account_ok" -eq 1 \]; then[\s\S]*?token check SKIPPED/);
+    expect(step).toMatch(/elif \[ "\$token_rejected" -eq 1 \]; then[\s\S]*?token check SKIPPED/);
+    // The old gate keyed on token_ok no longer exists in this direction.
+    expect(step).not.toContain("account check SKIPPED");
+  });
+
+  it("does not double-report one token rejection across both probes", () => {
+    const step = preflightStep();
+    // A 6003/6111 seen by the account probe is the same fault the token probe
+    // would report. Without the flag, one broken token would produce two
+    // errors pointing at the same secret.
+    expect(step).toMatch(/\*6003\*\|\*6111\*\)[\s\S]{0,200}token_rejected=1/);
   });
 
   it("does NOT fail a legitimate first publish when the Pages project is absent", () => {

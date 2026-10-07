@@ -103,9 +103,10 @@ the current run above. Counts, sum-check, and every §4 delta are unaffected.
 
 ## 6. Verified test app (reconciliation queries against production)
 
-- `dprelay-prod-2` (credentials: gitignored `staging/production-app-credentials.json`, registered 2026-09-20) was **verified live** against `https://dprelay-api-hug8.onrender.com`:
+- `dprelay-prod-2` (credentials: gitignored `staging/production-app-credentials.json` at the time; since moved to the OS keyring as the `production-app-credentials` account — see `server/README.md`, registered 2026-09-20) was **verified live** against `https://dprelay-api-hug8.onrender.com`:
   - `GET /v5/billing/credits` with its credentials → **HTTP 200, `ok: true`**
   - negative control (same appId, wrong secret) → **HTTP 401 `invalid_app_secret`**
+- **Superseded 2026-10-04 (ISSUE-52):** the `dprelay-prod-2` appSecret was exposed, so the app was revoked (its credentials now return `401 app_revoked`) and the standing app was reprovisioned as `dprelay-prod-3`; the `production-app-credentials` keyring account now holds the `-3` credentials. The verification above stands as the record of the 2026-09-20 check.
 - No new registration was performed — the app already existed; this workstream verified it as the standing test app for reconciliation queries.
 
 ## 7. Script fixes made and verified in this workstream (PR ref added on merge)

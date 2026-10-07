@@ -19,8 +19,8 @@
  *     token/chatId are never echoed, and only the bot's public @username is
  *     printed. TELEGRAM_API_BASE / RENDER_API_BASE override the two API origins
  *     (local verification of this script only, mirroring each other).
- *     RENDER_API_KEY supplies the Render credential, falling back to
- *     .kilo/kilo.jsonc under the repo root when the variable is unset.
+ *     The Render credential comes from scripts/render-key.cjs: RENDER_API_KEY,
+ *     else ~/.config/dprelay/render-api-key.
  *
  * DRY_RUN is treated as a HAZARD, not a rehearsal switch. If it is present and
  * non-empty this script REFUSES to run at all: the check fires before any network
@@ -36,8 +36,8 @@
  * Exit codes: 0 = succeeded, 1 = failed, 2 = refused (DRY_RUN set, nothing done).
  * Secrets are never printed — only key names and status codes.
  */
-const { readFileSync } = require('node:fs');
 const path = require('node:path');
+const { resolveRenderApiKey } = require('./render-key.cjs');
 const { randomBytes } = require('node:crypto');
 const https = require('node:https');
 const http = require('node:http');
@@ -60,7 +60,17 @@ const EXIT_REFUSED = 2;
 // it, every DRY_RUN test would fail on a TDZ ReferenceError instead of exiting
 // 2. Function declarations hoist, so calling it ahead of its definition below
 // is fine.
+const REAL_RUN_EFFECT = {
+  telegram: 'sets TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID + WATCHDOG_STALE_SEC=60 on Render, then triggers a deploy',
+  set: 'sets ALERT_WEBHOOK_URL + ALERT_WEBHOOK_SECRET + WATCHDOG_STALE_SEC=60 on Render',
+  'set-stale': 'sets WATCHDOG_STALE_SEC on Render (temporary — forces one real alert)',
+  revert: 'removes WATCHDOG_STALE_SEC from Render',
+  deploy: 'triggers a deploy of the latest commit',
+  'wait-live': 'is READ-ONLY — it only polls the latest deploy until it goes live',
+};
+
 refuseIfDryRun();
+announceRealRun();
 /** Per-request ceiling. A hung API call must fail loudly, not freeze the shell. */
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -78,29 +88,13 @@ const base = `${process.env.RENDER_API_BASE || 'https://api.render.com/v1/servic
  * depend on a machine-local file, including ones that never talk to Render —
  * `set-alert-channel.cjs` with no arguments printed a stack trace instead of
  * its usage text. Reading on demand keeps "what does this need" and "what is
- * this doing" separate.
+ * this doing" separate. The resolution itself now lives in render-key.cjs, so
+ * this script and its siblings cannot drift apart on where the key comes from.
  */
 let cachedApiKey = null;
 function renderApiKey() {
   if (cachedApiKey !== null) return cachedApiKey;
-  // The environment wins, so the script is usable anywhere — CI, a teammate's
-  // machine, a shell with the key exported — instead of only where one specific
-  // file happens to exist. The file is the fallback for the owner's workflow.
-  const fromEnv = process.env.RENDER_API_KEY;
-  if (fromEnv !== undefined && fromEnv !== '') {
-    cachedApiKey = fromEnv;
-    return cachedApiKey;
-  }
-  const kiloPath = path.join(repoRoot, '.kilo', 'kilo.jsonc');
-  let raw;
-  try {
-    raw = readFileSync(kiloPath, 'utf8');
-  } catch {
-    throw new Error(`cannot read ${kiloPath} — Render API access requires it`);
-  }
-  // .kilo/kilo.jsonc is JSONC; strip // comments before parsing.
-  const cleaned = raw.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
-  cachedApiKey = JSON.parse(cleaned).mcp.render.environment.RENDER_API_KEY;
+  cachedApiKey = resolveRenderApiKey({ repoRoot });
   return cachedApiKey;
 }
 
@@ -124,7 +118,7 @@ function renderApiKey() {
 function refuseIfDryRun() {
   const raw = process.env.DRY_RUN;
   if (raw === undefined || raw === '') return;
-  const invocation = ['telegram', 'set', 'set-stale', 'revert', 'deploy', 'wait-live']
+  const invocation = Object.keys(REAL_RUN_EFFECT)
     .find((m) => process.argv[2] === m);
   console.error('');
   console.error('============================================================');
@@ -146,6 +140,46 @@ function refuseIfDryRun() {
   console.error('exit code 2 = refused, nothing happened');
   console.error('============================================================');
   process.exit(EXIT_REFUSED);
+}
+
+/**
+ * Announces a run that really is about to touch production.
+ *
+ * The refusal banner above exists because a silently-skipped "real" run was the
+ * documented way this script got misused. This is the other half of that fix:
+ * a run that genuinely is about to change production now says so, out loud,
+ * before it does anything. The two are deliberately symmetric — one refuses
+ * loudly, the other proceeds loudly — so neither can pass unnoticed in a log
+ * or in an agent transcript where the exit code is the only thing anyone reads.
+ *
+ * The banner is skipped entirely when no known mode was given. `node
+ * set-alert-channel.cjs` with no arguments changes nothing, and a banner that
+ * fired on the bare usage path would teach the operator to scroll past it.
+ *
+ * Declared as a const above the call site on purpose: this file has already
+ * been bitten once by a TDZ ReferenceError from a declaration that sat below
+ * its own use.
+ *
+ * stderr, not stdout, and deliberately so. This banner is a warning about the
+ * operator's action, while stdout here is a receipt of what the script did —
+ * `node … > deploy.log` is a natural way to keep that receipt, and a warning
+ * on stdout disappears into the log exactly when nobody is watching the
+ * terminal. Diagnostics belong on stderr; that is what stderr is for. It also
+ * matches refuseIfDryRun above, so the two halves of this guard read alike.
+ */
+function announceRealRun() {
+  const mode = process.argv[2];
+  // hasOwnProperty, not a truthiness check on the lookup: a mode name that
+  // happens to collide with an Object.prototype key must not inherit a
+  // consequence description it was never given.
+  const effect = Object.prototype.hasOwnProperty.call(REAL_RUN_EFFECT, mode)
+    ? REAL_RUN_EFFECT[mode]
+    : undefined;
+  if (effect === undefined) return;
+  console.error('============================================================');
+  console.error('REAL RUN — DRY_RUN is not set, so this WILL act on production');
+  console.error(`  mode: ${mode} ${effect}`);
+  console.error('============================================================');
 }
 
 /** Renders a Render error body as a message without ever dumping env values. */

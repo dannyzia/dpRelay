@@ -7,18 +7,16 @@
  */
 const { readFileSync } = require("node:fs");
 const { randomBytes } = require("node:crypto");
+const path = require("node:path");
 const https = require("node:https");
+const { resolveRenderApiKey } = require("./render-key.cjs");
 
-const repoRoot = "/home/zia/Documents/My Projects/Authenticator";
+const repoRoot = path.resolve(__dirname, "..", "..");
 
-// --- Render API key from kilo.jsonc (full-line // comments stripped only) ---
-const kiloRaw = readFileSync(`${repoRoot}/.kilo/kilo.jsonc`, "utf8");
-const kiloClean = kiloRaw
-  .split("\n")
-  .filter((l) => !l.trim().startsWith("//"))
-  .join("\n");
-const kilo = JSON.parse(kiloClean);
-const apiKey = kilo.mcp.render.environment.RENDER_API_KEY;
+// Resolved eagerly on purpose: this script exists only to write to Render, so
+// every path through it needs the key — a lazy read would only move the same
+// failure later, after the operator thought the run had started.
+const apiKey = resolveRenderApiKey({ repoRoot });
 const serviceId = "srv-dal3bae7bikc73e7k7pg";
 const base = `https://api.render.com/v1/services/${serviceId}/env-vars`;
 
