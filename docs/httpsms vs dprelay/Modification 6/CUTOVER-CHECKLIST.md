@@ -342,12 +342,16 @@ Rollback notes:
    DB row (`001_init.sql` seed). Production DB access = Litestream download,
    so the *practical* emergency stop is Suspend Service. A
    `requireOperator`-gated `POST /v5/admin/kill-switch` would close this.
-2. **`ALERT_WEBHOOK_URL` unset** — §1.4 gate will fail until set.
+2. **§1.4 alert delivery** (opened as “**`ALERT_WEBHOOK_URL` unset** — §1.4
+   gate will fail until set”) — ✅ **webhook vars now set**: an env read on
+   2026-10-07 shows `ALERT_WEBHOOK_URL` and `ALERT_WEBHOOK_SECRET` present by
+   name (17 keys), so the webhook fallback is configured; the Telegram half
+   is still missing, so §1.4 stays open on gate B below.
    → **SUPERSEDED 2026-09-25 (PR #24):** alerts are Telegram-first
-   (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) with webhook fallback; both
-   still unset in production, so §1.4 remains open until the owner sets the
-   Telegram vars and one real alert is delivered. Owner steps + proof:
-   **§1.5(a)**.
+   (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) with webhook fallback; at that
+   time neither `TELEGRAM_*` var was set in production and the webhook var
+   was unset too, so §1.4 remained open until the owner sets the Telegram
+   vars and one real alert is delivered. Owner steps + proof: **§1.5(a)**.
    → **§1.4 SPLIT INTO TWO GATES 2026-10-03**, because a single box could only
    ever report the weaker half. **Gate A (credential + membership) is
    owner-verified**: valid token, bot in the ops group, chat id resolves, probe
@@ -360,8 +364,13 @@ Rollback notes:
    all `threshold=900`, zero `threshold=60` — so production never dispatched to
    Telegram and remains log-only. **Gate B does not depend on gate A**: valid
    creds that were never deployed is an ordinary state.
-   Settle it with one env read: 18 keys with both `TELEGRAM_*` corroborates the
-   attestation and closes gate B; 16 keys means reopen §1.4. Service id is
+   Settle it with one env read that tests the `TELEGRAM_*` **names**, not a
+   key count — a count is not a test, because unrelated keys come and go (the
+   service went 16 → 17 keys between 2026-10-03 and 2026-10-07 with no
+   Telegram var appearing): `TELEGRAM_BOT_TOKEN` **and** `TELEGRAM_CHAT_ID`
+   both present by name corroborates the attestation and closes gate B;
+   either name absent means gate B stays open. **Last read 2026-10-07: 17
+   keys, neither `TELEGRAM_*` name present → gate B still OPEN.** Service id is
    `srv-dal3bae7bikc73e7k7pg` (an earlier ISSUE-37 attestation comment
    mistyped it as `...k7kg`; corrected there in comment `01M40N1P7CPKJRZMAJK28TQW9F`).
 3. **No staging environment** — prod is the only v5 environment; the canary
