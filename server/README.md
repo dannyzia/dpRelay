@@ -41,7 +41,7 @@ The gateway phone authenticates with its device API key (EncryptedSharedPreferen
 
 ## App provisioning (operator)
 
-- `POST /v5/apps/register` — `Authorization: Bearer <APP_PROVISIONING_SECRET>`, `{ "appId", "appSecret", "name"?, "webhookUrl"?, "rateMaxPerPhone"?, "rateWindowSec"? }` → `201 { appId, name, webhookUrl, webhookSecret }`
+- `POST /v5/apps/register` — `Authorization: Bearer <APP_PROVISIONING_SECRET>`, `{ "appId", "appSecret", "name"?, "webhookUrl"?, "rateMaxPerPhone"?, "rateWindowSec"? }` → `201 { appId, name, webhookUrl, webhookSecret, trial: { otpSms, bulkSms, expiresAt } | null }` — the one-time trial grant (`TRIAL_SMS_COUNT`, default 20 per bucket; `TRIAL_SMS_TTL_DAYS`, default 30; `0` → `null` and no grant) is inserted atomically with the app row, so a duplicate appId (409) can never re-fire it
 - Admin app plane — `Authorization: Bearer <OPERATOR_SECRET>`: `POST /v5/admin/apps` (register; appSecret optional → server-generated, return-once), `GET /v5/admin/apps` (list, no secrets), `POST /v5/admin/apps/:id/revoke` / `.../unrevoke` (revoke cuts off every app-plane route instantly — 401 `app_revoked`), `POST /v5/admin/apps/:id/rotate-webhook-secret` (new secret return-once), `PATCH /v5/admin/apps/:id/webhook` (HTTPS-only; empty string clears), `POST /v5/admin/kill-switch` (`{ "enabled": boolean }` — the global SMS pause lever behind `POST /v5/otp/send` without DB access; on = sends reject 503 `sms_paused` while verification keeps working; response reports the previous state and whether it changed).
 
 ## Admin device plane (operator)

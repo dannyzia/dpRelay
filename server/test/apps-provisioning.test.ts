@@ -202,14 +202,16 @@ describe("POST /v5/apps/register", () => {
     app = makeApp();
     const res = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
     expect(res.statusCode).toBe(201);
-    // Stage E: sends spend 1 OTP credit (402 at zero) — a fresh app needs a
-    // balance before the end-to-end auth path can be exercised.
-    app.db
+    // Stage E: sends spend 1 OTP credit (402 at zero) — registration now
+    // seeds the balance itself via the ISSUE-77 trial, so the old manual
+    // INSERT would collide with the trial row's primary key.
+    const seeded = app.db
       .prepare(
-        "INSERT INTO app_credits (app_id, otp_sms_remaining, updated_at) " +
-          "SELECT id, 10, unixepoch() FROM apps WHERE app_id = ?",
+        "SELECT otp_sms_remaining FROM app_credits ac JOIN apps a ON a.id = ac.app_id " +
+          "WHERE a.app_id = ?",
       )
-      .run(TEST_APP_ID);
+      .get(TEST_APP_ID) as { otp_sms_remaining: number };
+    expect(seeded.otp_sms_remaining).toBe(20);
 
     const send = await app.inject({
       method: "POST",
@@ -228,5 +230,142 @@ describe("POST /v5/apps/register", () => {
       payload: { phone: PHONE },
     });
     expect(badSecret.statusCode).toBe(401);
+  });
+});
+
+describe("one-time trial credits (ISSUE-77)", () => {
+  const CREDITS_BY_APP =
+    "SELECT otp_sms_remaining, bulk_sms_remaining, otp_expires_at, bulk_expires_at, last_transaction_id " +
+    "FROM app_credits ac JOIN apps a ON a.id = ac.app_id WHERE a.app_id = ?";
+
+  it("grants the default 20 OTP + 20 bulk atomically with registration, expiring after 30 days", async () => {
+    app = makeApp();
+    const res = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
+    expect(res.statusCode).toBe(201);
+    const trial = res.body.trial as { otpSms: number; bulkSms: number; expiresAt: number };
+    expect(trial.otpSms).toBe(20);
+    expect(trial.bulkSms).toBe(20);
+
+    const row = app.db.prepare(CREDITS_BY_APP).get(TEST_APP_ID) as {
+      otp_sms_remaining: number;
+      bulk_sms_remaining: number;
+      otp_expires_at: number;
+      bulk_expires_at: number;
+      last_transaction_id: string | null;
+    };
+    expect(row.otp_sms_remaining).toBe(20);
+    expect(row.bulk_sms_remaining).toBe(20);
+    const expectedExpiry = Math.floor(Date.now() / 1000) + 30 * 86400;
+    expect(Math.abs(row.otp_expires_at - expectedExpiry)).toBeLessThan(60);
+    expect(row.bulk_expires_at).toBe(row.otp_expires_at);
+    expect(Math.abs(trial.expiresAt - row.otp_expires_at)).toBeLessThan(5);
+    // The trial is a grant, not a purchase: no ledger row, no transaction id.
+    expect(row.last_transaction_id).toBeNull();
+    expect((app.db.prepare("SELECT COUNT(*) AS n FROM credit_transactions").get() as { n: number }).n).toBe(0);
+  });
+
+  it("is one-time at the DB level: duplicate register 409s, balance never re-fires", async () => {
+    app = makeApp();
+    const first = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
+    expect(first.statusCode).toBe(201);
+
+    const dup = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
+    expect(dup.statusCode).toBe(409);
+    expect(dup.body.code).toBe("app_id_exists");
+    expect(dup.body.trial).toBeUndefined();
+
+    const balance = () =>
+      app.db
+        .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits ac JOIN apps a ON a.id = ac.app_id WHERE a.app_id = ?")
+        .get(TEST_APP_ID) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined;
+    expect(balance()).toEqual({ otp_sms_remaining: 20, bulk_sms_remaining: 20 });
+    expect((app.db.prepare("SELECT COUNT(*) AS n FROM app_credits").get() as { n: number }).n).toBe(1);
+    expect((app.db.prepare("SELECT COUNT(*) AS n FROM apps").get() as { n: number }).n).toBe(1);
+
+    // The one-time property is the schema's, not application code's: a second
+    // grant row for the same app is refused by the primary key itself.
+    expect(() =>
+      app.db
+        .prepare(
+          "INSERT INTO app_credits (app_id, otp_sms_remaining, bulk_sms_remaining, updated_at) " +
+            "SELECT id, 20, 20, unixepoch() FROM apps WHERE app_id = ?",
+        )
+        .run(TEST_APP_ID),
+    ).toThrow(/UNIQUE constraint failed: app_credits.app_id/);
+    expect(balance()).toEqual({ otp_sms_remaining: 20, bulk_sms_remaining: 20 });
+  });
+
+  it("tunes the grant with TRIAL_SMS_COUNT", async () => {
+    app = makeApp({ TRIAL_SMS_COUNT: "5" });
+    const res = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
+    expect(res.statusCode).toBe(201);
+    expect(res.body.trial).toMatchObject({ otpSms: 5, bulkSms: 5 });
+    const row = app.db
+      .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits ac JOIN apps a ON a.id = ac.app_id WHERE a.app_id = ?")
+      .get(TEST_APP_ID) as { otp_sms_remaining: number; bulk_sms_remaining: number };
+    expect(row).toEqual({ otp_sms_remaining: 5, bulk_sms_remaining: 5 });
+  });
+
+  it("TRIAL_SMS_COUNT=0 disables the grant: no row, trial null, send fails closed 402", async () => {
+    app = makeApp({ TRIAL_SMS_COUNT: "0" });
+    const res = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
+    expect(res.statusCode).toBe(201);
+    expect(res.body.trial).toBeNull();
+    expect((app.db.prepare("SELECT COUNT(*) AS n FROM app_credits").get() as { n: number }).n).toBe(0);
+
+    const send = await app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: { "x-app-id": TEST_APP_ID, "x-app-secret": TEST_APP_SECRET },
+      payload: { phone: PHONE },
+    });
+    expect(send.statusCode).toBe(402);
+    expect((send.json() as { code: string }).code).toBe("insufficient_credits");
+  });
+
+  it("tunes the expiry with TRIAL_SMS_TTL_DAYS (both buckets)", async () => {
+    app = makeApp({ TRIAL_SMS_TTL_DAYS: "7" });
+    const res = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
+    expect(res.statusCode).toBe(201);
+    const row = app.db
+      .prepare("SELECT otp_expires_at, bulk_expires_at FROM app_credits ac JOIN apps a ON a.id = ac.app_id WHERE a.app_id = ?")
+      .get(TEST_APP_ID) as { otp_expires_at: number; bulk_expires_at: number };
+    const expectedExpiry = Math.floor(Date.now() / 1000) + 7 * 86400;
+    expect(Math.abs(row.otp_expires_at - expectedExpiry)).toBeLessThan(60);
+    expect(row.bulk_expires_at).toBe(row.otp_expires_at);
+  });
+
+  it("trial credits are spendable and fail closed at zero", async () => {
+    app = makeApp({ TRIAL_SMS_COUNT: "3" });
+    const res = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
+    expect(res.statusCode).toBe(201);
+
+    // Distinct numbers so the per-phone rate limit (3/hour) and resend
+    // cooldown cannot mask the credit path being tested.
+    const send = (phone: string) =>
+      app.inject({
+        method: "POST",
+        url: "/v5/otp/send",
+        headers: { "x-app-id": TEST_APP_ID, "x-app-secret": TEST_APP_SECRET },
+        payload: { phone },
+      });
+    for (const phone of ["+8801711111111", "+8801711111112", "+8801711111113"]) {
+      expect((await send(phone)).statusCode).toBe(201);
+    }
+    const spent = app.db
+      .prepare("SELECT otp_sms_remaining FROM app_credits ac JOIN apps a ON a.id = ac.app_id WHERE a.app_id = ?")
+      .get(TEST_APP_ID) as { otp_sms_remaining: number };
+    expect(spent.otp_sms_remaining).toBe(0);
+
+    const fourth = await send("+8801711111114");
+    expect(fourth.statusCode).toBe(402);
+    expect((fourth.json() as { code: string }).code).toBe("insufficient_credits");
+  });
+
+  it("fails fast at boot on malformed trial env (no silent fallback)", async () => {
+    app = makeApp(); // a live instance so afterEach closes something real
+    expect(() => makeApp({ TRIAL_SMS_COUNT: "abc" })).toThrow(/TRIAL_SMS_COUNT/);
+    expect(() => makeApp({ TRIAL_SMS_COUNT: "-5" })).toThrow(/TRIAL_SMS_COUNT/);
+    expect(() => makeApp({ TRIAL_SMS_TTL_DAYS: "0" })).toThrow(/TRIAL_SMS_TTL_DAYS/);
   });
 });

@@ -68,6 +68,8 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | APP_PROVISIONING_SECRET | for M4 | — (empty = provisioning disabled) | Operator secret for `POST /v5/apps/register` — registers appId/appSecret and mints `webhook_secret` once (returned only in that response). Compared in constant time. Operator-only: never expose to clients. | `openssl rand -base64 32` |
 | APP_PROVISIONING_RATE_MAX_PER_HOUR | no | 10 | Max `/v5/apps/register` attempts per client IP inside the sliding window (brute-force guard; counts failures too). | server |
 | APP_PROVISIONING_RATE_WINDOW_SEC | no | 3600 | Sliding window for the provisioning rate limiter, in seconds. | server |
+| TRIAL_SMS_COUNT | no | 20 | One-time trial grant on `POST /v5/apps/register` — OTP **and** bulk credits inserted in the same transaction as the app row (DB-enforced one-time: a duplicate appId is a 409 before the grant can fire). `0` disables (no grant, no `app_credits` row → send fails closed 402). | server |
+| TRIAL_SMS_TTL_DAYS | no | 30 | Days until granted trial credits expire — sets both `otp_expires_at` and `bulk_expires_at` from registration time. | server |
 | OTP_TTL_SEC | no | 300 | OTP session lifetime, in seconds. | server |
 | OTP_MAX_ATTEMPTS | no | 5 | Failed verify attempts before an OTP session locks. | server |
 | OTP_LOCKOUT_SEC | no | 900 | Lockout duration after hitting OTP_MAX_ATTEMPTS, in seconds. | server |
