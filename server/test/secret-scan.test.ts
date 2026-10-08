@@ -11,6 +11,10 @@
  *   1. every secret shape must actually trip the gate;
  *   2. ordinary code, docs prose and allowlisted paths must NOT trip it, so the
  *      gate cannot be "fixed" by disabling it.
+ *   3. the rig must be hermetic: its marker commits belong in its own temp
+ *      repository and NEVER on a live branch — see rigEnv below for how an
+ *      inherited GIT_DIR (git exports it into hook environments) silently
+ *      defeats `git init` and what that cost once already.
  *
  * A mangled pattern can still compile (an unclosed "[" swallows the rest of the
  * alternation into a literal bracket expression), so the only real defence
@@ -18,7 +22,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,8 +34,34 @@ const GATE_FILES = ["secret-scan.sh", "filter-allowlist.cjs", "secret-scan-allow
 
 let rig: string;
 
+/**
+ * Environment for every git and gate invocation the rig makes.
+ *
+ * git EXPORTS GIT_DIR into hook environments: the pre-push hook runs this
+ * very suite via scripts/run-all-checks.sh, so GIT_DIR points at the LIVE
+ * worktree gitdir by the time these tests start. An inherited GIT_DIR defeats
+ * `git init` outright — the fresh temp repo is never created, `git add -A`
+ * treats the rig directory as the work tree, and `git commit` commits to the
+ * checked-out branch of the REAL repository. That is not hypothetical: every
+ * pre-push run left a chain of "rig state" commits on fold-5160/stage-e-m4p3
+ * whose trees contained only the fixture files, gutting the branch and
+ * invalidating PR heads. Scrub every git override so the rig is its own
+ * repository wherever the suite is launched from, and assert it in beforeAll.
+ */
+const rigEnv: NodeJS.ProcessEnv = { ...process.env };
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]) {
+  delete rigEnv[key];
+}
+
 const git = (args: string[]): string =>
-  execFileSync("git", args, { cwd: rig, encoding: "utf8" });
+  execFileSync("git", args, { cwd: rig, encoding: "utf8", env: rigEnv });
 
 /** Commit whatever is in the rig, then run the gate against that committed state. */
 function scan(): { code: number; out: string } {
@@ -39,7 +69,7 @@ function scan(): { code: number; out: string } {
   // --allow-empty: several tests re-scan an unchanged tree, and a bare commit
   // with nothing staged exits 1, which would fail the test for the wrong reason.
   git(["commit", "-q", "--allow-empty", "-m", "rig state"]);
-  const res = spawnSync("bash", ["scripts/secret-scan.sh"], { cwd: rig, encoding: "utf8" });
+  const res = spawnSync("bash", ["scripts/secret-scan.sh"], { cwd: rig, encoding: "utf8", env: rigEnv });
   return { code: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
@@ -52,6 +82,16 @@ beforeAll(() => {
     cpSync(join(REPO_ROOT, "scripts", f), join(rig, "scripts", f));
   }
   git(["init", "-q", "."]);
+  // Fail closed on broken isolation: rigEnv is the defence, this is the proof
+  // it held. If git ever resolves anywhere but the rig's own .git, every later
+  // commit in this file would land on a live branch — exactly the incident this pins.
+  const actualGitDir = realpathSync(
+    execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: rig, encoding: "utf8", env: rigEnv }).trim(),
+  );
+  const expectedGitDir = realpathSync(join(rig, ".git"));
+  if (actualGitDir !== expectedGitDir) {
+    throw new Error(`rig isolation broken: git-dir ${actualGitDir} !== ${expectedGitDir}`);
+  }
   git(["config", "user.email", "rig@example.com"]);
   git(["config", "user.name", "rig"]);
   writeFileSync(join(rig, "README.md"), "# rig\n");
@@ -167,7 +207,7 @@ describe("secret gate: refuses to report a broken scan as clean", () => {
     // still compile and match nothing, whereas a bad flag is a real error the
     // gate must surface rather than absorb.
     writeFileSync(gatePath, original.replace("git grep -I -n -E -e", "git grep --not-a-flag -e"));
-    const res = spawnSync("bash", ["scripts/secret-scan.sh"], { cwd: rig, encoding: "utf8" });
+    const res = spawnSync("bash", ["scripts/secret-scan.sh"], { cwd: rig, encoding: "utf8", env: rigEnv });
     writeFileSync(gatePath, original);
     expect(`${res.stdout}${res.stderr}`).toContain("NOT a pass");
     expect(res.status).toBe(2);
