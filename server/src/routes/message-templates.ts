@@ -18,7 +18,9 @@ import { newId } from "../services/crypto.js";
 
 const TEMPLATE_NAME_MAX = 100;
 /** Storage cap for a template body (enforcement lives in campaign create). */
-const TEMPLATE_BODY_MAX = 1024;
+const TEMPLATE_BODY_MAX = 1600;
+/** Per-app template count cap (Stage E order: ≤100/app). */
+const TEMPLATE_APP_MAX = 100;
 /** List pagination cap (campaigns parity). */
 const LIST_MAX = 100;
 const LIST_DEFAULT = 20;
@@ -102,12 +104,21 @@ const messageTemplateRoutes: FastifyPluginAsync = async (app) => {
         .prepare("SELECT 1 FROM message_templates WHERE app_id = ? AND name = ?")
         .get(request.appRow!.id, fields.name);
       if (dup) return "template_name_exists";
+      // Count cap inside the create transaction: concurrent creates must not
+      // race past the per-app limit.
+      const count = db
+        .prepare("SELECT COUNT(*) AS n FROM message_templates WHERE app_id = ?")
+        .get(request.appRow!.id) as { n: number };
+      if (count.n >= TEMPLATE_APP_MAX) return "template_limit";
       db.prepare(
         "INSERT INTO message_templates (id, app_id, name, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
       ).run(templateId, request.appRow!.id, fields.name, fields.body, nowSec, nowSec);
       return null;
     });
     const conflict = create();
+    if (conflict === "template_limit") {
+      return fail(reply, 409, conflict, `An app can hold at most ${TEMPLATE_APP_MAX} message templates`);
+    }
     if (conflict !== null) {
       return fail(reply, 409, conflict, `A template named "${fields.name}" already exists for this app`);
     }

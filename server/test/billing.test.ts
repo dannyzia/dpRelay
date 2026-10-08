@@ -322,3 +322,83 @@ describe("transaction history + invoice", () => {
     expect(bad.json().code).toBe("invalid_date_range");
   });
 });
+
+// ── Stage E: packages pricing-conformance report (operator) ───────────────
+
+describe("pricing-conformance report", () => {
+  /** Direct insert: the report reads the table, not the upsert route. */
+  function seedPackage(code: string, quota: number, price: number): void {
+    app.db
+      .prepare(
+        "INSERT INTO packages (id, package_code, name, sms_quota, price_bdt, validity_days, type, is_active, created_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, ?, 30, 'both', 1, unixepoch(), unixepoch())",
+      )
+      .run(crypto.randomUUID(), code, `Pkg ${code}`, quota, price);
+  }
+
+  function opGet(url: string, secret: string = TEST_OPERATOR_SECRET) {
+    return app.inject({ method: "GET", url, headers: { authorization: `Bearer ${secret}` } });
+  }
+
+  it("flags every package where price_bdt ≠ sms_quota × 0.20 and never reprices", async () => {
+    app = makeApp();
+    seedPackage("conform-500", 500, 100); // 500 × 0.20 = 100 ✓
+    seedPackage("legacy-import", 100, 150); // expected 20 — flagged, delta +130
+
+    const res = await opGet("/v5/admin/billing/pricing-conformance");
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      unitPriceBdt: number;
+      packageCount: number;
+      conformantCount: number;
+      violationCount: number;
+      violations: {
+        packageCode: string;
+        smsQuota: number;
+        priceBdt: number;
+        expectedPriceBdt: number;
+        deltaBdt: number;
+        isActive: boolean;
+      }[];
+    };
+    expect(body.unitPriceBdt).toBe(0.2);
+    expect(body.packageCount).toBe(2);
+    expect(body.conformantCount).toBe(1);
+    expect(body.violationCount).toBe(1);
+    expect(body.violations).toHaveLength(1);
+    expect(body.violations[0]).toMatchObject({
+      packageCode: "legacy-import",
+      smsQuota: 100,
+      priceBdt: 150,
+      expectedPriceBdt: 20,
+      deltaBdt: 130,
+      isActive: true,
+    });
+
+    // Report-only: the violating row is untouched (never silently repriced).
+    const row = app.db
+      .prepare("SELECT price_bdt FROM packages WHERE package_code = 'legacy-import'")
+      .get() as { price_bdt: number };
+    expect(row.price_bdt).toBe(150);
+  });
+
+  it("an empty catalog is conformant, not an error", async () => {
+    app = makeApp();
+    const res = await opGet("/v5/admin/billing/pricing-conformance");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ packageCount: 0, conformantCount: 0, violationCount: 0, violations: [] });
+  });
+
+  it("requires the operator secret: 401 wrong/missing, 503 when unset", async () => {
+    app = makeApp();
+    const wrong = await opGet("/v5/admin/billing/pricing-conformance", "wrong-secret");
+    expect(wrong.statusCode).toBe(401);
+    const none = await app.inject({ method: "GET", url: "/v5/admin/billing/pricing-conformance" });
+    expect(none.statusCode).toBe(401);
+    await app.close();
+    app = makeApp({ OPERATOR_SECRET: "" });
+    const disabled = await opGet("/v5/admin/billing/pricing-conformance");
+    expect(disabled.statusCode).toBe(503);
+    expect(disabled.json().code).toBe("admin_disabled");
+  });
+});

@@ -144,6 +144,22 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
           .send({ ok: false, error: "Too many OTP requests for this number", code: "rate_limited" });
       }
 
+      // Fail-closed pre-check (Stage E order: 402 at zero). The authoritative
+      // check+deduct runs inside createSession below, atomic with the session
+      // insert — this early read only exists so a zero-balance send 402s
+      // BEFORE the resend cooldown is armed (otherwise topping up would still
+      // hit resend_cooldown on the immediate retry).
+      const preCredit = app.db
+        .prepare("SELECT otp_sms_remaining FROM app_credits WHERE app_id = ?")
+        .get(appRow.id) as { otp_sms_remaining: number } | undefined;
+      if (!preCredit || preCredit.otp_sms_remaining < 1) {
+        return reply.code(402).send({
+          ok: false,
+          error: "Insufficient OTP SMS credits — buy a package to keep sending",
+          code: "insufficient_credits",
+        });
+      }
+
       // Per-phone resend cooldown: runs AFTER the per-app session rate limit
       // (that one bounds session volume; this one bounds resend frequency for
       // a single number). Failure envelope mirrors rate_limited.
@@ -180,7 +196,21 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
 
       // A newer send supersedes any still-pending session for the same number.
       // Insert order matters: pending_sms first (otp_sessions.message_id FK).
-      const createSession = app.db.transaction(() => {
+      // BEGIN IMMEDIATE (same pattern as verify): balance check + 1-SMS deduct
+      // + session creation are ONE atomic step — two concurrent sends cannot
+      // both spend the last credit, and a mid-create failure rolls the
+      // deduction back with everything else. Fail-closed: no app_credits row
+      // or remaining < 1 → insufficient_credits (Stage E order).
+      const createSession = app.db.transaction((): "insufficient_credits" | null => {
+        const credit = app.db
+          .prepare("SELECT otp_sms_remaining FROM app_credits WHERE app_id = ?")
+          .get(appRow.id) as { otp_sms_remaining: number } | undefined;
+        if (!credit || credit.otp_sms_remaining < 1) return "insufficient_credits";
+        app.db
+          .prepare(
+            "UPDATE app_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE app_id = ?",
+          )
+          .run(ts, appRow.id);
         app.db
           .prepare(
             "UPDATE otp_sessions SET status = 'expired' " +
@@ -206,8 +236,16 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
               "VALUES (?, ?, ?, ?, ?, 0, NULL, ?, 'pending', ?, ?, NULL)",
           )
           .run(sessionId, appRow.id, phone, otpHash, salt, expiresAt, messageId, ts);
+        return null;
       });
-      createSession();
+      const outcome = createSession.immediate();
+      if (outcome === "insufficient_credits") {
+        return reply.code(402).send({
+          ok: false,
+          error: "Insufficient OTP SMS credits — buy a package to keep sending",
+          code: "insufficient_credits",
+        });
+      }
 
       await wakeGateway();
 

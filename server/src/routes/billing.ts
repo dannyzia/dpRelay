@@ -478,6 +478,55 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
+   * Pricing-conformance report (Stage E order): flags every package whose
+   * price_bdt does not equal sms_quota × 0.20 — the owner's unit price
+   * (decision Sep 27). REPORT ONLY: violations are surfaced, never silently
+   * repriced; fixing a row is an operator decision through the upsert route.
+   *
+   * The 1e-9 epsilon absorbs double rounding on `sms_quota * 0.20` (0.2 is not
+   * exactly representable); anything a human would call a pricing mismatch is
+   * orders of magnitude larger than that.
+   */
+  app.get(
+    "/v5/admin/billing/pricing-conformance",
+    { preHandler: [app.requireOperator] },
+    async () => {
+      const UNIT_PRICE_BDT = 0.2;
+      const rows = db
+        .prepare(
+          "SELECT package_code, name, sms_quota, price_bdt, is_active FROM packages ORDER BY package_code",
+        )
+        .all() as {
+        package_code: string;
+        name: string;
+        sms_quota: number;
+        price_bdt: number;
+        is_active: number;
+      }[];
+      const violations = rows
+        .map((r) => ({
+          packageCode: r.package_code,
+          name: r.name,
+          smsQuota: r.sms_quota,
+          priceBdt: r.price_bdt,
+          expectedPriceBdt: r.sms_quota * UNIT_PRICE_BDT,
+          deltaBdt: r.price_bdt - r.sms_quota * UNIT_PRICE_BDT,
+          isActive: r.is_active === 1,
+          conformant: Math.abs(r.price_bdt - r.sms_quota * UNIT_PRICE_BDT) < 1e-9,
+        }))
+        .filter((p) => !p.conformant);
+      return {
+        ok: true,
+        unitPriceBdt: UNIT_PRICE_BDT,
+        packageCount: rows.length,
+        conformantCount: rows.length - violations.length,
+        violationCount: violations.length,
+        violations,
+      };
+    },
+  );
+
+  /**
    * Approve or reject a pending credit transaction (v4 approveCredit). The
    * award runs in ONE SQLite transaction that re-checks pending state — a
    * concurrent double-approve gets 409, never a double award. Expiry uses
