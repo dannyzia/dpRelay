@@ -231,3 +231,166 @@ export function describeError(err: unknown): string {
   }
   return "Unexpected error — see the browser console";
 }
+
+// ── Operator plane (server requireOperator routes — Stage F2) ──────────────
+//
+// `Authorization: Bearer <OPERATOR_SECRET>` — a third credential plane,
+// entered per session (sessionStorage, never bundled) and VERIFIED against
+// GET /v5/admin/metrics before being stored. A 401 from any operator call
+// clears it so the unlock form re-prompts; customer credentials are untouched.
+
+const OPERATOR_KEY = "webv5.operatorSecret";
+
+export function getOperatorSecret(): string | null {
+  return sessionStorage.getItem(OPERATOR_KEY);
+}
+
+export function setOperatorSecret(secret: string): void {
+  sessionStorage.setItem(OPERATOR_KEY, secret);
+}
+
+export function clearOperatorSecret(): void {
+  sessionStorage.removeItem(OPERATOR_KEY);
+}
+
+/** Registered once by the operator shell; returns to the unlock form on 401. */
+let onOperatorRejected: (() => void) | null = null;
+
+export function setOperatorRejectedHandler(handler: (() => void) | null): void {
+  onOperatorRejected = handler;
+}
+
+export async function operatorFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const secret = getOperatorSecret();
+  if (secret === null) {
+    throw new ApiError(401, "operator_not_configured", "Enter the operator secret first");
+  }
+  try {
+    return await request<T>(path, {
+      ...init,
+      headers: { Authorization: `Bearer ${secret}`, ...(init.headers ?? {}) },
+    });
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      clearOperatorSecret();
+      onOperatorRejected?.();
+    }
+    throw err;
+  }
+}
+
+export interface AdminMetrics {
+  generatedAt: number;
+  apps: { total: number; revoked: number };
+  users: { total: number; devices: number };
+  otp: {
+    sessionsTotal: number;
+    sessionsPending: number;
+    sessionsVerified: number;
+    sessionsLast24h: number;
+  };
+  bulk: {
+    campaignsTotal: number;
+    campaignsActive: number;
+    recipientsSent: number;
+    recipientsFailed: number;
+    recipientsQueued: number;
+  };
+  billing: {
+    transactionsPending: number;
+    transactionsApproved: number;
+    transactionsRejected: number;
+    creditsRows: number;
+  };
+  webhooks: { deliveriesLast24h: number; deliveredLast24h: number; failedLast24h: number };
+}
+
+export interface PendingTransaction {
+  transactionId: string;
+  appId: string;
+  packageCode: string;
+  smsQuota: number;
+  amountBdt: number;
+  packageType: string;
+  trxId: string | null;
+  requestedAt: number;
+}
+
+export interface AdminApp {
+  id: string;
+  appId: string;
+  name: string;
+  webhookUrl: string | null;
+  rateMaxPerPhone: number;
+  rateWindowSec: number;
+  createdAt: number;
+  revokedAt: number | null;
+}
+
+export interface OversightCampaign {
+  campaignId: string;
+  appId: string;
+  name: string;
+  status: string;
+  totalRecipients: number;
+  sentCount: number;
+  failedCount: number;
+  queuedCount: number;
+  createdAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
+/** GET /v5/admin/metrics — also the pre-storage probe that verifies a pasted secret. */
+export async function getAdminMetrics(): Promise<AdminMetrics> {
+  return operatorFetch<AdminMetrics & { ok: true }>("/v5/admin/metrics");
+}
+
+/** GET /v5/admin/billing/queue — pending TrxID approvals. */
+export async function listPendingTransactions(): Promise<PendingTransaction[]> {
+  const body = await operatorFetch<{ ok: true; pending: PendingTransaction[] }>(
+    "/v5/admin/billing/queue",
+  );
+  return body.pending;
+}
+
+/** POST /v5/admin/billing/approve — approve:false is the reject path (rejectReason travels with it). */
+export async function resolveTransaction(
+  transactionId: string,
+  approve: boolean,
+  rejectReason?: string,
+): Promise<{ status: string; newOtpBalance?: number; newBulkBalance?: number }> {
+  return operatorFetch<{ ok: true; status: string; newOtpBalance?: number; newBulkBalance?: number }>(
+    "/v5/admin/billing/approve",
+    { method: "POST", body: JSON.stringify({ transactionId, approve, rejectReason }) },
+  );
+}
+
+/** GET /v5/admin/apps — cursor-paged registry. */
+export async function listAdminApps(): Promise<{ apps: AdminApp[]; nextCursor: string | null }> {
+  return operatorFetch<{ ok: true; apps: AdminApp[]; nextCursor: string | null }>("/v5/admin/apps");
+}
+
+/** POST /v5/admin/apps/:id/revoke — requireApp then answers 401 app_revoked. */
+export async function revokeAdminApp(id: string): Promise<void> {
+  await operatorFetch(`/v5/admin/apps/${encodeURIComponent(id)}/revoke`, { method: "POST" });
+}
+
+/** POST /v5/admin/apps/:id/unrevoke — restores app-plane access immediately. */
+export async function unrevokeAdminApp(id: string): Promise<void> {
+  await operatorFetch(`/v5/admin/apps/${encodeURIComponent(id)}/unrevoke`, { method: "POST" });
+}
+
+/** GET /v5/admin/campaigns — cross-app campaign oversight, optional status filter. */
+export async function listOversightCampaigns(status?: string): Promise<{
+  campaigns: OversightCampaign[];
+  nextCursor: string | null;
+}> {
+  const qs = status !== undefined && status !== "all" ? `?status=${encodeURIComponent(status)}` : "";
+  const body = await operatorFetch<{
+    ok: true;
+    campaigns: OversightCampaign[];
+    nextCursor: string | null;
+  }>(`/v5/admin/campaigns${qs}`);
+  return { campaigns: body.campaigns, nextCursor: body.nextCursor };
+}

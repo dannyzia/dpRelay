@@ -13,6 +13,7 @@ import { Credits } from "./screens/Credits";
 import { Docs } from "./screens/Docs";
 import { History } from "./screens/History";
 import { Login } from "./screens/Login";
+import { Operator } from "./screens/Operator";
 import "./styles.css";
 
 type CustomerTab = "credits" | "buy" | "history" | "credentials";
@@ -34,14 +35,22 @@ export function App(): JSX.Element {
   }, []);
 
   const section = route[0] ?? "";
+  const isOperator = section === "operator";
 
-  // Docs is public; every other customer screen requires credentials.
+  // Docs is public and the operator panel has its own unlock gate; every
+  // other customer screen requires app credentials.
   const isCustomerTab = (t: string): t is CustomerTab =>
     TABS.some((tab) => tab.id === t);
-  if (section === "" || (connected && !isCustomerTab(section) && section !== "docs")) {
+  const known =
+    section === "" ||
+    section === "login" ||
+    section === "docs" ||
+    isOperator ||
+    isCustomerTab(section);
+  if (!known || section === "") {
     window.location.hash = hrefFor([connected ? "credits" : "login"]);
   }
-  if (!connected && section !== "docs" && section !== "login") {
+  if (!connected && !isOperator && section !== "docs" && section !== "login") {
     window.location.hash = hrefFor(["login"]);
   }
   if (connected && section === "login") {
@@ -71,6 +80,12 @@ export function App(): JSX.Element {
           >
             Docs
           </a>
+          <a
+            href={hrefFor(["operator"])}
+            className={isOperator ? "nav-link active" : "nav-link"}
+          >
+            Operator
+          </a>
           {connected && (
             <button
               type="button"
@@ -88,7 +103,9 @@ export function App(): JSX.Element {
       </header>
 
       <main className="content">
-        {section === "docs" ? (
+        {isOperator ? (
+          <Operator route={route} />
+        ) : section === "docs" ? (
           <Docs />
         ) : !connected || section === "login" ? (
           <Login
