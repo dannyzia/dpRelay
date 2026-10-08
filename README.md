@@ -175,6 +175,16 @@ A Firebase-free dashboard slice mounted at `/v5/*` (API client, auth context, an
 - **App credentials** — campaigns ride the requireApp plane: `X-App-Id` / `X-App-Secret` are entered per session (sessionStorage only) on the Session credentials page and verified against `/v5/billing/credits` before use.
 - **Commands** — `cd web && npm run dev` (dev server), `npm run build` (Cloudflare Pages artifact in `dist/`), `npm test` (vitest unit tests for the API client).
 
+## dP Relay web-v5 (customer dashboard + operator panel)
+
+A fresh React + Vite + TypeScript SPA in `web-v5/` (QUEUE AMENDMENT #2) — independent of the Firebase `web/` app and the Cloudflare Pages `dashboard/` app, with zero Firebase dependencies.
+
+- **Login** — appId + appSecret entered once per tab (sessionStorage only, verified against `GET /v5/billing/credits` before being stored) and sent as `X-App-Id` / `X-App-Secret` headers. No server auth surface was added.
+- **Screens** — credit balance (both buckets + expiry), buy credits (packages → bKash destination → TrxID → status), transaction history, API credentials view, integration docs (send/verify/status contract); the operator panel lives at `#/operator` (billing queue, apps, metrics, campaigns) behind a per-session `OPERATOR_SECRET`.
+- **API base URL** — `VITE_API_BASE` in `web-v5/.env` (see `web-v5/.env.example`). Empty = same origin; otherwise the absolute `https://` URL of the v5 API. A cross-origin deployment must add the static site's origin to the API's `CORS_ALLOWED_ORIGINS`.
+- **Deep links** — hash-based routes (`#/operator`), so any static host serves the app without SPA rewrite configuration.
+- **Commands** — `cd web-v5 && npm install && npm run dev` (dev server), `npm run build` (typecheck + static artifact in `dist/`), `npm test` (vitest: API-client contract + screen render tests).
+
 ## Testing
 
 ### Android Tests
