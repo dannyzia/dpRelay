@@ -93,6 +93,14 @@ Human reviews this: NO — but every variable must be accounted for here before 
 - **Region**: `asia-southeast1`
 - **Cloud Functions URL**: `https://asia-southeast1-authenticator-15fb7.cloudfunctions.net`
 
+## web-v5 (customer dashboard + operator panel)
+
+Build-time variables for the `web-v5/` SPA (Vite inlines them into the bundle at build — rebuild to change; never put secrets here, credentials are typed per session and kept in sessionStorage).
+
+| Variable | Required | Default | Description | How to get it |
+| --- | --- | --- | --- | --- |
+| VITE_API_BASE | no | — (same origin) | Absolute base URL of the dP Relay v5 API used by the dashboard. Empty = requests go to the origin serving the static site. Cross-origin values require this site's origin in the API's `CORS_ALLOWED_ORIGINS`. | Deployed API URL (e.g. Render service) |
+
 ## Firebase Console Configuration
 | Setting | Where | Value |
 |---------|-------|-------|

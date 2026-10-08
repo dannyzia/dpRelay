@@ -111,6 +111,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       dashboard: ${{ steps.filter.outputs.dashboard }}
+      webv5: ${{ steps.filter.outputs.webv5 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -122,6 +123,13 @@ jobs:
             echo "dashboard=true" >> "$GITHUB_OUTPUT"
           else
             echo "dashboard=false" >> "$GITHUB_OUTPUT"
+          fi
+          # web-v5 gets its own predicate (hyphenated output names are not
+          # addressable in `needs.*` expressions, hence `webv5`).
+          if git diff --name-only "HEAD^" "HEAD" | grep -qE '^(web-v5/|\.github/workflows/pr-checks\.yml)'; then
+            echo "webv5=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "webv5=false" >> "$GITHUB_OUTPUT"
           fi
 
   # PR-time gate for the dashboard SPA: typecheck + build when dashboard/ is
@@ -147,3 +155,29 @@ jobs:
         run: npm run lint
       - name: Build
         run: npm run build
+
+  # PR-time gate for the web-v5 SPA (QUEUE AMENDMENT #2): typecheck + vitest +
+  # build when web-v5/ (or this workflow) is touched. `npm ci` pins the
+  # committed lockfile, same discipline as dashboard-build above.
+  web-v5-build:
+    needs: changes
+    if: needs.changes.outputs.webv5 == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-v5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web-v5/package-lock.json
+      - name: Install Dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npx vite build

@@ -1,0 +1,375 @@
+/* dP Relay web-v5 — hand-rolled theme. Dark, dense, operator-tool aesthetic;
+   no CSS framework in the dependency tree (see the F1 stage report flag). */
+
+:root {
+  --bg: #0e1116;
+  --bg-raised: #161b23;
+  --bg-inset: #0a0d11;
+  --line: #262d38;
+  --text: #d9e1ec;
+  --muted: #8b96a7;
+  --accent: #4cc2ff;
+  --accent-strong: #1f9ee8;
+  --error-bg: #2a1417;
+  --error-line: #7f2d33;
+  --error-text: #ff9ba3;
+  --ok: #57d38c;
+  --radius: 10px;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.brand-sub {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.nav-link {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.nav-link.active {
+  color: var(--bg);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.content {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: 28px 22px 64px;
+  flex: 1;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0 0 6px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+
+.card.narrow {
+  max-width: 420px;
+  margin: 8vh auto;
+}
+
+.grid.two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.span2 {
+  grid-column: span 2;
+}
+
+.stat {
+  font-size: 34px;
+  font-weight: 700;
+  margin: 4px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.error {
+  color: var(--error-text);
+  background: var(--error-bg);
+  border: 1px solid var(--error-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.error.banner {
+  margin: 0 0 16px;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 14px 0 4px;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
+button {
+  background: var(--accent-strong);
+  color: #04121c;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+button.danger {
+  background: #a3252f;
+  color: #fff;
+}
+
+form button {
+  margin-top: 18px;
+  width: 100%;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+th,
+td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.chip.approved {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+.chip.pending {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.chip.rejected {
+  color: var(--error-text);
+  border-color: var(--error-line);
+}
+
+.pkg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pkg-row:last-child {
+  border-bottom: none;
+}
+
+.pkg-meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.price {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.callout {
+  background: var(--bg-inset);
+  border: 1px dashed var(--accent-strong);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin: 14px 0;
+}
+
+.callout .big {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+pre {
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.reveal {
+  font-family: var(--mono);
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  word-break: break-all;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.inline-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filterbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.filterbar select {
+  width: auto;
+}
+
+.docs section {
+  margin-bottom: 26px;
+}
+
+.ok-note {
+  color: var(--ok);
+}
+
+@media (max-width: 720px) {
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+  .span2 {
+    grid-column: span 1;
+  }
+}
