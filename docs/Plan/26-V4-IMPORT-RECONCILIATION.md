@@ -126,3 +126,90 @@ report is clean AND a fresh cutover-date re-export reconciles the same way.
 This report establishes the local-run baseline: 56 source rows → 29 imports,
 zero unexplained deltas, DB integrity verified. The production import must
 reproduce §2/§3/§4 against a fresh export before any v4 teardown begins.
+
+## 9 · Fresh-run addendum (2026-10-08, M4 pass 4 — ISSUE-76)
+
+| | |
+|---|---|
+| **Date** | 2026-10-08 |
+| **Refs** | ISSUE-76 (M4 pass 4), ISSUE-74 (Stage E / pass 3), owner queue directive: pass 3 → pass 4 → Stage D |
+| **Code line** | Stage E head `93e0726` (server `5.3.8-alpha.0`, migrations 001–011) stacked off master `879fee5` |
+| **Command** | `npx tsx src/scripts/migrate-v4.ts --export staging/v4-import-work-2026-10-08/export --apply --db staging/v4-import-work-2026-10-08/v5-import.db` (from `server/`) |
+| **Scope** | LOCAL copy only, same rule as § header: the frozen export `staging/v4-export-final-2026-09-19/` was never written — whole-dir sha256 `6037492d…` identical before and after the run. Zero production interaction (no Render/R2/live-DB calls); the production import remains owner-gated at flip time (doc 28 row 3 / doc 32). |
+
+**Purpose:** re-validate §2–§5 under current code before Stage D — notably
+migrations **001→011** (§3's "001–009" is superseded: `010_device_quarantine`
+and `011_job_state` also apply on a fresh DB) and the Stage E pass-3 work
+(plane caps, OTP credit enforcement, pricing conformance).
+
+**Verdict: reproduction CLEAN — every pinned deterministic value reproduces
+byte-identically; §4's per-row delta rules all still hold.**
+
+### 9.1 Run totals (identical to §2)
+
+```
+TOTAL: rows=56 imported=29 skipped=8 orphans=4
+deterministic checks: packages=12 apps=11 transactions=3 creditRows=3
+trx_id uniqueness: 2 attached, 0 duplicates
+APPLIED. 11 new app secret(s) written to …/v4-import-work-2026-10-08/v4-import-app-secrets.json (0600)
+Post-apply table counts: packages=12 apps=11 transactions=3 app_credits=3
+```
+
+### 9.2 Independent verification (fresh DB)
+
+| Check | Result |
+|---|---|
+| `verify-apply-rehearsal.cjs` | **VERDICT: MATCHES** (exit 0) |
+| `PRAGMA integrity_check` | ok |
+| `PRAGMA foreign_key_check` | 0 violations |
+| `schema_migrations` applied | **001–011** (all eleven; delta vs §3 documented above) |
+| packages / apps / credit_transactions / app_credits | 12 / 11 / 3 / 3 |
+| `contact_groups` / `message_templates` | 0 / 0 (orphan rule, §9.4) |
+| trx_id attached / duplicates | 2 / 0 |
+| apps with 64-hex `app_secret_hash` | 11 / 11; revoked: 1 |
+| Idempotent re-run | inserts **0** new rows; secrets file byte-unchanged (sha256 before == after) |
+
+> ⚠️ **FLAG (pre-existing, gitignored tooling, out of scope):** the verifier's
+> "orphaned credits/transactions rows" lines print 3/3 because that query joins
+> on the public `sdk-…` id space; the authoritative `foreign_key_check` (0
+> violations, FKs bind the internal `apps.id` per §7 fix 2) shows the rows are
+> attached. Verdict and EXPECTED block are unaffected.
+
+### 9.3 Checksums (method per §5)
+
+| Table | Pinned (§5) | Reproduced 2026-10-08 | Match |
+|---|---|---|---|
+| packages (ordered by `package_code`) | `69ca080d97d3f45a` | `69ca080d97d3f45a` | ✅ |
+| credit_transactions (PK `id`) | `711e6a259d324f79` | `711e6a259d324f79` | ✅ |
+| app_credits (PK `app_id`) | `d6fcdadec906bc59` | `d6fcdadec906bc59` | ✅ |
+| apps (PK `id`, excl. raw `webhook_secret`) | `63994018d4f14179` | **`dc20304082a5b19f`** | re-pinned ⬇ |
+
+The apps value is re-pinned to this run exactly as §5 contract-provides: the
+column covers this run's freshly minted return-once secret hashes, so any new
+apply displaces it. The §5 value pinned the previous run; **for this work dir
+`dc20304082a5b19f` is the pin.** Counts, sum-check, and every §4 delta are
+unaffected.
+
+**Cross-code-line evidence:** an identical run on master `879fee5`
+(`5.3.7-alpha.0`, pre-Stage E) reproduced the same three deterministic
+checksums (`69ca080d…` / `711e6a25…` / `d6fcdade…`) — the transform is
+insensitive to the Stage E delta. That run's artifacts are kept beside this
+run's under `staging/v4-import-work-2026-10-08/master-run/` (gitignored).
+
+### 9.4 Orphan rule re-ruled against migration 008
+
+contactGroups (1) and messageTemplates (1) remain **orphans by design** even
+though `008_contact_groups_templates.sql` now creates the v5 `contact_groups` /
+`message_templates` tables: the blocker was never schema, it is identity — the
+v4 docs are uid-keyed (Firebase auth users) and no v5 owner mapping exists (v5
+apps are server-minted). The fresh import leaves both tables at 0 rows (verified
+in §9.2). Importing them would be an owner-mapping decision, not a script
+defect — candidate input for Stage D; until decided, §4's rule stands.
+
+### 9.5 Pricing-conformance cross-ref (Stage E pass 3)
+
+All 20 frozen v4 package docs violate owner pricing `price_bdt ==
+sms_quota × 0.20` (e.g. 50→50 BDT, 20000→5600, 500→450). Since Stage E added
+operator `GET /v5/admin/billing/pricing-conformance`, these now surface
+automatically in the flip-day operator readout. Import behaviour is unchanged:
+source values are written verbatim, **never repriced** — reconfirmed this run.
