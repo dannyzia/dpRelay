@@ -78,6 +78,14 @@ export interface Config {
   appProvisioningRateMaxPerHour: number;
   /** Sliding window for the provisioning rate limiter, in seconds. */
   appProvisioningRateWindowSec: number;
+  /**
+   * One-time trial credits granted atomically with each successful
+   * POST /v5/apps/register (ISSUE-77). 0 = trial disabled (no grant, no
+   * app_credits row — a fresh app fails closed on send exactly as before).
+   */
+  trialSmsCount: number;
+  /** Days until granted trial credits expire (both buckets), from registration. */
+  trialSmsTtlDays: number;
   /** Claimed pending_sms older than this are re-offered to the next fetch (at-least-once). */
   outstandingRequeueSec: number;
   /** Max enrollment attempts per client IP inside the sliding window (brute-force guard). */
@@ -278,6 +286,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "APP_PROVISIONING_RATE_WINDOW_SEC",
       3600,
     ),
+    trialSmsCount: parsePositiveInt(env.TRIAL_SMS_COUNT, "TRIAL_SMS_COUNT", 20, true),
+    trialSmsTtlDays: parsePositiveInt(env.TRIAL_SMS_TTL_DAYS, "TRIAL_SMS_TTL_DAYS", 30),
     outstandingRequeueSec: parsePositiveInt(
       env.OUTSTANDING_REQUEUE_SEC,
       "OUTSTANDING_REQUEUE_SEC",

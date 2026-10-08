@@ -168,24 +168,47 @@ const appProvisioningRoutes: FastifyPluginAsync = async (app) => {
 
     const rowId = newId();
     const webhookSecret = generateWebhookSecret();
+    const trialCount = app.config.trialSmsCount;
+    const trialTtlSec = app.config.trialSmsTtlDays * 24 * 60 * 60;
+    const trialExpiresAt = Math.floor(Date.now() / 1000) + trialTtlSec;
+
+    // App row + one-time trial grant commit or roll back TOGETHER (ISSUE-77):
+    // the grant INSERT only ever runs inside the transaction that creates the
+    // app, and a duplicate appId throws UNIQUE(app_id) BEFORE the grant, so a
+    // second register cannot re-fire it. The one-time property is therefore a
+    // database invariant (UNIQUE apps.app_id + PK app_credits.app_id + atomic
+    // transaction), not an application-level flag that could be skipped.
+    // TRIAL_SMS_COUNT=0 skips the grant entirely: no app_credits row, and the
+    // send path fails closed at 402 exactly as a trial-less app does today.
     try {
-      app.db
-        .prepare(
-          "INSERT INTO apps (id, app_id, app_secret_hash, name, webhook_url, webhook_secret, " +
-            "webhook_secret_hash, rate_max_per_phone, rate_window_sec, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())",
-        )
-        .run(
-          rowId,
-          appId,
-          app.sha256Hex(appSecret),
-          name,
-          webhookUrl,
-          webhookSecret,
-          app.sha256Hex(webhookSecret),
-          rateMaxPerPhone,
-          rateWindowSec,
-        );
+      app.db.transaction(() => {
+        app.db
+          .prepare(
+            "INSERT INTO apps (id, app_id, app_secret_hash, name, webhook_url, webhook_secret, " +
+              "webhook_secret_hash, rate_max_per_phone, rate_window_sec, created_at) " +
+              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())",
+          )
+          .run(
+            rowId,
+            appId,
+            app.sha256Hex(appSecret),
+            name,
+            webhookUrl,
+            webhookSecret,
+            app.sha256Hex(webhookSecret),
+            rateMaxPerPhone,
+            rateWindowSec,
+          );
+        if (trialCount > 0) {
+          app.db
+            .prepare(
+              "INSERT INTO app_credits (app_id, otp_sms_remaining, bulk_sms_remaining, " +
+                "otp_expires_at, bulk_expires_at, updated_at) " +
+                "VALUES (?, ?, ?, unixepoch() + ?, unixepoch() + ?, unixepoch())",
+            )
+            .run(rowId, trialCount, trialCount, trialTtlSec, trialTtlSec);
+        }
+      })();
     } catch (err) {
       // UNIQUE(app_id) is the only expected violation here; anything else is a
       // real failure and must surface (structured envelope via the error handler).
@@ -199,13 +222,19 @@ const appProvisioningRoutes: FastifyPluginAsync = async (app) => {
       throw err;
     }
 
-    app.log.info({ appId, name, webhookConfigured: webhookUrl !== null }, "app provisioned");
+    app.log.info(
+      { appId, name, webhookConfigured: webhookUrl !== null, trialSms: trialCount },
+      "app provisioned",
+    );
+    // `trial` is additive to the 201 contract: null when TRIAL_SMS_COUNT=0,
+    // otherwise the exact grant (both buckets) and its shared expiry.
     return reply.code(201).send({
       ok: true,
       appId,
       name,
       webhookUrl,
       webhookSecret,
+      trial: trialCount > 0 ? { otpSms: trialCount, bulkSms: trialCount, expiresAt: trialExpiresAt } : null,
     });
   });
 
