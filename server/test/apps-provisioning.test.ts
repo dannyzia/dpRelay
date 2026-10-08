@@ -202,6 +202,14 @@ describe("POST /v5/apps/register", () => {
     app = makeApp();
     const res = await provision(app, { appId: TEST_APP_ID, appSecret: TEST_APP_SECRET });
     expect(res.statusCode).toBe(201);
+    // Stage E: sends spend 1 OTP credit (402 at zero) — a fresh app needs a
+    // balance before the end-to-end auth path can be exercised.
+    app.db
+      .prepare(
+        "INSERT INTO app_credits (app_id, otp_sms_remaining, updated_at) " +
+          "SELECT id, 10, unixepoch() FROM apps WHERE app_id = ?",
+      )
+      .run(TEST_APP_ID);
 
     const send = await app.inject({
       method: "POST",

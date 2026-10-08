@@ -41,6 +41,13 @@ function seedApp(a: FastifyInstance): void {
         "VALUES ('app-row-1', ?, ?, 'Test App', 3, 3600, unixepoch())",
     )
     .run(TEST_APP_ID, sha256Hex(TEST_APP_SECRET));
+  // Stage E: sends spend 1 OTP credit each (402 at zero) — seed a balance.
+  a.db
+    .prepare(
+      "INSERT INTO app_credits (app_id, otp_sms_remaining, updated_at) " +
+        "VALUES ('app-row-1', 1000, unixepoch())",
+    )
+    .run();
 }
 
 function appHeaders(secret = TEST_APP_SECRET): Record<string, string> {
@@ -218,6 +225,12 @@ describe("per-phone OTP resend cooldown", () => {
           "VALUES ('app-row-2', 'm3tails_app_2', ?, 'Other App', 3, 3600, unixepoch())",
       )
       .run(sha256Hex(TEST_APP_SECRET));
+    app.db
+      .prepare(
+        "INSERT INTO app_credits (app_id, otp_sms_remaining, updated_at) " +
+          "VALUES ('app-row-2', 1000, unixepoch())",
+      )
+      .run();
     const first = await app.inject({ method: "POST", url: "/v5/otp/send", headers: appHeaders(), payload: { phone: PHONE } });
     expect(first.statusCode).toBe(201);
     const secondApp = await app.inject({

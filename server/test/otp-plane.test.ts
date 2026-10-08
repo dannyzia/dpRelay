@@ -33,6 +33,15 @@ function seedApp(app: FastifyInstance): void {
         "VALUES ('app-row-1', ?, ?, 'Test App', 3, 3600, unixepoch())",
     )
     .run(TEST_APP_ID, sha256Hex(TEST_APP_SECRET));
+  // Stage E: every successful send spends 1 OTP credit (402 at zero) — seed a
+  // balance so the behavioral tests below exercise the paying path. Tests that
+  // cover the 402 drain app_credits explicitly.
+  app.db
+    .prepare(
+      "INSERT INTO app_credits (app_id, otp_sms_remaining, updated_at) " +
+        "VALUES ('app-row-1', 1000, unixepoch())",
+    )
+    .run();
 }
 
 function appHeaders(secret = TEST_APP_SECRET): Record<string, string> {
@@ -279,5 +288,88 @@ describe("GET /v5/otp/status", () => {
     });
     expect(expired.statusCode).toBe(200);
     expect(expired.json().status).toBe("expired");
+  });
+});
+
+// ── Stage E: OTP credit enforcement (1 SMS quota per send, 402 at zero) ──
+
+describe("OTP credit enforcement (Stage E)", () => {
+  function otpCredits(): number {
+    return (
+      app.db.prepare("SELECT otp_sms_remaining AS n FROM app_credits WHERE app_id = 'app-row-1'").get() as {
+        n: number;
+      }
+    ).n;
+  }
+
+  it("deducts exactly 1 OTP credit per successful send", async () => {
+    expect(otpCredits()).toBe(1000);
+    const first = await app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: appHeaders(),
+      payload: { phone: PHONE },
+    });
+    expect(first.statusCode).toBe(201);
+    expect(otpCredits()).toBe(999);
+    const second = await app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: appHeaders(),
+      payload: { phone: "+8801999999999" },
+    });
+    expect(second.statusCode).toBe(201);
+    expect(otpCredits()).toBe(998);
+  });
+
+  it("402s fail-closed at zero: no session, no SMS row, no deduction", async () => {
+    app.db.prepare("UPDATE app_credits SET otp_sms_remaining = 0").run();
+    const res = await app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: appHeaders(),
+      payload: { phone: PHONE },
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("insufficient_credits");
+    expect(pendingCount(app)).toBe(0);
+    const sms = app.db.prepare("SELECT COUNT(*) AS n FROM pending_sms").get() as { n: number };
+    expect(sms.n).toBe(0);
+    expect(otpCredits()).toBe(0);
+  });
+
+  it("402s when the app has no app_credits row at all (fail-closed default)", async () => {
+    app.db.prepare("DELETE FROM app_credits").run();
+    const res = await app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: appHeaders(),
+      payload: { phone: PHONE },
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("insufficient_credits");
+    expect(pendingCount(app)).toBe(0);
+  });
+
+  it("a 402 does not arm the resend cooldown — an immediate post-top-up retry sends", async () => {
+    app.db.prepare("UPDATE app_credits SET otp_sms_remaining = 0").run();
+    const denied = await app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: appHeaders(),
+      payload: { phone: PHONE },
+    });
+    expect(denied.statusCode).toBe(402);
+    // Top up and retry immediately: without the pre-check ordering this would
+    // 429 resend_cooldown instead of sending.
+    app.db.prepare("UPDATE app_credits SET otp_sms_remaining = 1").run();
+    const retry = await app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: appHeaders(),
+      payload: { phone: PHONE },
+    });
+    expect(retry.statusCode).toBe(201);
+    expect(otpCredits()).toBe(0);
   });
 });
