@@ -26,6 +26,8 @@ const GROUP_NAME_MAX = 100;
 /** List pagination cap (campaigns parity). */
 const LIST_MAX = 100;
 const LIST_DEFAULT = 20;
+/** Hard per-group membership cap (Stage E order: 10k/group). */
+const PHONE_GROUP_MAX = 10_000;
 
 /** Rejects with the structured envelope. */
 function fail(reply: FastifyReply, code: number, codeName: string, message: string): FastifyReply {
@@ -82,6 +84,11 @@ const contactGroupRoutes: FastifyPluginAsync = async (app) => {
       return fail(reply, 400, "invalid_phones", "One or more phone numbers are not valid E.164 format");
     }
     const { unique, duplicateCount } = deduplicatePhones(phones as string[]);
+    // Defensive cap: BULK_SMS_PER_CAMPAIGN_LIMIT is env-tunable and could be
+    // raised above the group cap — the 10k invariant must not depend on it.
+    if (unique.length > PHONE_GROUP_MAX) {
+      return fail(reply, 400, "invalid_phones", `A contact group can hold at most ${PHONE_GROUP_MAX} phones`);
+    }
 
     const nowSec = Math.floor(Date.now() / 1000);
     const groupId = newId();
@@ -191,6 +198,63 @@ const contactGroupRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, group: { ...publicGroup(row), phones: phones.map((p) => p.phone) } };
   });
 
+  /**
+   * Paginated member listing (Stage E order). The detail route above returns
+   * the full membership in one shot — fine for typical groups, but an
+   * unbounded read is a liability at the 10k cap. Keyset cursor on
+   * (added_at, phone), same limit semantics as the group list.
+   */
+  app.get("/v5/contact-groups/:id/phones", { preHandler: [app.requireApp] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const groupId = asString(params.id, 64);
+    if (groupId === null) return fail(reply, 400, "invalid_group_id", "groupId is required");
+    const row = loadOwnedGroup(request.appRow!.id, groupId);
+    if (!row) return fail(reply, 404, "group_not_found", "Contact group not found");
+
+    const query = asRecord(request.query) ?? {};
+    const limitRaw = query.limit;
+    const limitNum =
+      typeof limitRaw === "number"
+        ? limitRaw
+        : typeof limitRaw === "string" && /^\d+$/.test(limitRaw)
+          ? Number.parseInt(limitRaw, 10)
+          : NaN;
+    const limit = Number.isInteger(limitNum) && limitNum >= 1 ? Math.min(limitNum, LIST_MAX) : LIST_DEFAULT;
+    const cursorRaw = query.cursor;
+    let cursorAt: number | null = null;
+    let cursorPhone: string | null = null;
+    if (typeof cursorRaw === "string") {
+      const sep = cursorRaw.indexOf(":");
+      const at = sep > 0 ? Number.parseInt(cursorRaw.slice(0, sep), 10) : NaN;
+      const phone = sep > 0 ? cursorRaw.slice(sep + 1) : "";
+      if (Number.isInteger(at) && at >= 0 && phone.length > 0) {
+        cursorAt = at;
+        cursorPhone = phone;
+      }
+    }
+
+    const rows = db
+      .prepare(
+        "SELECT phone, added_at FROM contact_group_phones WHERE group_id = ? " +
+          "AND (? IS NULL OR added_at > ? OR (added_at = ? AND phone > ?)) " +
+          "ORDER BY added_at ASC, phone ASC LIMIT ?",
+      )
+      .all(groupId, cursorAt, cursorAt, cursorAt, cursorPhone, limit + 1) as {
+      phone: string;
+      added_at: number;
+    }[];
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const last = page[page.length - 1];
+    return {
+      ok: true,
+      groupId,
+      phoneCount: row.phone_count,
+      phones: page.map((p) => p.phone),
+      nextCursor: hasMore && last ? `${last.added_at}:${last.phone}` : null,
+    };
+  });
+
   /** Rename (v4 web parity). Renaming onto an existing name conflicts (409). */
   app.patch("/v5/contact-groups/:id", { preHandler: [app.requireApp] }, async (request, reply) => {
     const params = asRecord(request.params) ?? {};
@@ -259,7 +323,7 @@ const contactGroupRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
-    const add = db.transaction((): number => {
+    const add = db.transaction((): number | "group_phone_limit" => {
       const existing = new Set(
         (
           db
@@ -268,22 +332,26 @@ const contactGroupRoutes: FastifyPluginAsync = async (app) => {
         ).map((r) => r.phone),
       );
       const { unique } = deduplicatePhones(phones as string[]);
+      const fresh = unique.filter((phone) => !existing.has(phone));
+      // Cap checked inside the transaction: two concurrent adds must not race
+      // past 10k (the whole request is rejected, never a partial add).
+      if (existing.size + fresh.length > PHONE_GROUP_MAX) return "group_phone_limit";
       const insert = db.prepare(
         "INSERT OR IGNORE INTO contact_group_phones (group_id, phone, added_at) VALUES (?, ?, ?)",
       );
-      let added = 0;
-      for (const phone of unique) {
-        if (existing.has(phone)) continue;
+      for (const phone of fresh) {
         insert.run(groupId, phone, nowSec);
-        added += 1;
       }
       db.prepare(
         "UPDATE contact_groups SET phone_count = (SELECT COUNT(*) FROM contact_group_phones WHERE group_id = ?), " +
           "updated_at = ? WHERE id = ?",
       ).run(groupId, nowSec, groupId);
-      return added;
+      return fresh.length;
     });
     const added = add();
+    if (added === "group_phone_limit") {
+      return fail(reply, 409, "group_phone_limit", `A contact group can hold at most ${PHONE_GROUP_MAX} phones`);
+    }
 
     const duplicateCount = phones.length - added;
     const response: Record<string, unknown> = { ok: true, groupId, addedCount: added };
