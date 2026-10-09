@@ -427,6 +427,34 @@ describe("PackagesView (F5)", () => {
     expect(html).not.toContain("Price (BDT)");
   });
 
+  it("emits a package-code pattern that compiles under the regex v flag (ISSUE-89)", () => {
+    const html = renderToString(
+      <PackagesView packages={[]} error={null} note={null} busy={false} {...noop} />,
+    );
+    const match = html.match(/pattern="([^"]*)"/);
+    expect(match).not.toBeNull();
+    const source = (match as RegExpMatchArray)[1];
+
+    // Chromium compiles the HTML pattern attribute with the `v` (unicodeSets)
+    // flag since v112: an unescaped `-` inside the class made the attribute a
+    // SyntaxError — the console logged an error and client-side validation
+    // silently never ran. The escaped hyphen keeps the class valid under v.
+    // HTML anchors the expression implicitly: ^(?:pattern)$ against the value.
+    const compile = (): RegExp => new RegExp(`^(?:${source})$`, "v");
+    expect(compile).not.toThrow();
+    const re = compile();
+
+    // Same acceptance set as the server's PACKAGE_CODE_PATTERN.
+    expect(re.test("otp100")).toBe(true);
+    expect(re.test("a_B-9")).toBe(true);
+    expect(re.test("UPPER-1")).toBe(true);
+    expect(re.test("ab cd")).toBe(false);
+    expect(re.test("bad!chars")).toBe(false);
+    expect(re.test("a")).toBe(false);
+    expect(re.test("x".repeat(65))).toBe(false);
+    expect(re.test("")).toBe(false);
+  });
+
   it("shows the empty state", () => {
     const html = renderToString(
       <PackagesView packages={[]} error={null} note={null} busy={false} {...noop} />,

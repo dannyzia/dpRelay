@@ -1109,7 +1109,7 @@ export function PackagesView(props: {
           }}
         >
           <label htmlFor="pkgCode">Package code</label>
-          <input id="pkgCode" name="packageCode" required spellCheck={false} pattern="[A-Za-z0-9_-]{2,64}" />
+          <input id="pkgCode" name="packageCode" required spellCheck={false} pattern="[A-Za-z0-9_\-]{2,64}" />
           <label htmlFor="pkgName">Name</label>
           <input id="pkgName" name="name" required maxLength={128} />
           <label htmlFor="pkgQuota">SMS quota</label>
