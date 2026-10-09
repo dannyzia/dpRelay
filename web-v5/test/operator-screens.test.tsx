@@ -251,6 +251,7 @@ describe("PaymentsView (F5b spec)", () => {
     id: "p1",
     sender: "+8801613000000",
     provider: "bkash",
+    source: "gateway",
     txnId: "TRXPAID0001",
     amountBdt: 200,
     receivedAt: 1791400000,
@@ -348,6 +349,25 @@ describe("PaymentsView (F5b spec)", () => {
     );
     expect(html).toContain("payment_rejected");
     expect(html).toContain("disabled");
+  });
+
+  it("renders the STAGE F8 source column for gateway and reader rows", () => {
+    const reader: PaymentSmsItem = {
+      ...approved,
+      id: "p5",
+      source: "reader",
+      txnId: "TRXREAD005",
+      status: "unmatched",
+      matched: null,
+      candidates: [],
+      ambiguous: false,
+    };
+    const html = renderToString(
+      <PaymentsView payments={[approved, reader]} {...base} {...noop} />,
+    );
+    expect(html).toContain("<th>Source</th>");
+    expect(html).toContain(">gateway<");
+    expect(html).toContain(">reader<");
   });
 });
 

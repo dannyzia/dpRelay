@@ -1,0 +1,15 @@
+// ktlint configuration for the Payment Reader app module (mirrors the
+// gateway's authenticator-app/ktlint.gradle). The plugin itself is declared
+// in app/build.gradle; this file only configures it.
+//
+// No baseline: every Kotlin file in this app is new, so ktlintCheck is
+// all-or-nothing — a violation in any file breaks the gate.
+
+ktlint {
+    version = "0.50.0"
+    android = true
+    outputToConsole = true
+    outputColorName = "RED"
+    ignoreFailures = false
+    verbose = true
+}

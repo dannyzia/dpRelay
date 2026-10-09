@@ -77,6 +77,12 @@ if [ -n "$JDK17" ] && (cd authenticator-app && ./gradlew ktlintCheck > /dev/null
 else
   fail "ktlint"
 fi
+echo -n "  ktlint (payment-reader)... "
+if [ -n "$JDK17" ] && (cd payment-reader && ./gradlew ktlintCheck > /dev/null 2>&1); then
+  pass "ktlint (payment-reader)"
+else
+  fail "ktlint (payment-reader)"
+fi
 if [ "$NODE_MAJOR_OK" = "1" ]; then
   if [ -f functions/package.json ]; then
     echo -n "  ESLint... "
@@ -153,6 +159,12 @@ if [ -n "$JDK17" ] && (cd authenticator-app && ./gradlew test > /dev/null 2>&1);
   pass "Android tests"
 else
   fail "Android tests"
+fi
+echo -n "  Payment Reader tests... "
+if [ -n "$JDK17" ] && (cd payment-reader && ./gradlew test > /dev/null 2>&1); then
+  pass "Payment Reader tests"
+else
+  fail "Payment Reader tests"
 fi
 if [ "$NODE_MAJOR_OK" = "1" ]; then
   echo -n "  E2E tests... "

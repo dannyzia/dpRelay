@@ -55,8 +55,8 @@ interface FcmTokenBody {
   token?: unknown;
 }
 
-/** bKash/Nagad transaction IDs: exactly 10 uppercase alphanumerics (v4 parity). */
-const TXN_ID_PATTERN = /^[A-Z0-9]{10}$/;
+/** bKash/Nagad transaction IDs: exactly 10 uppercase alphanumerics (v4 parity). Exported for the F8 Payment Reader ingest route — one definition, two ingest paths. */
+export const TXN_ID_PATTERN = /^[A-Z0-9]{10}$/;
 const PROVIDERS = new Set(["bkash", "nagad"]);
 /**
  * STAGE F7 (ISSUE-87): E.164 gate for gateway phone numbers — the F7 order's

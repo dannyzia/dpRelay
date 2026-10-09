@@ -1109,6 +1109,15 @@
         }
       }
     },
+    "/v5/payments/ingest": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/admin/config/{key}": {
       "get": {
         "parameters": [
@@ -1260,6 +1269,10 @@
     {
       "name": "admin",
       "description": "Operator-gated management plane (OPERATOR_SECRET)"
+    },
+    {
+      "name": "payments",
+      "description": "Payment Reader APK ingest (PAYMENT_READER_SECRET)"
     }
   ]
 }

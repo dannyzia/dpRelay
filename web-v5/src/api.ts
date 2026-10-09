@@ -813,6 +813,8 @@ export interface PaymentCandidate {
   id: string;
   sender: string;
   provider: string;
+  /** STAGE F8 (ISSUE-90): ingest path — 'gateway' (OTP phone) | 'reader' (Payment Reader APK). */
+  source: "gateway" | "reader";
   txnId: string;
   amountBdt: number;
   receivedAt: number;

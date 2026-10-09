@@ -48,6 +48,10 @@ All authorization flows through the `requireAuth` (JWT) / `requireDevice` (API k
 
 The gateway phone authenticates with its device API key (EncryptedSharedPreferences, ADR-016) on every route except `/enroll`, which takes the enrollment secret.
 
+## Payment Reader plane (STAGE F8, ISSUE-90)
+
+- `POST /v5/payments/ingest` — `Authorization: Bearer <PAYMENT_READER_SECRET>`, `{ "sender", "amountBdt", "trxId" (10 alnum), "receivedAt" (epoch ms), "rawBody"? }` → `201 { ok, created: true, txnId }` or `200 { ok, created: false, txnId }` for a duplicate TrxID (idempotent — the reader's offline retry queue can never double-count). `403 reader_disabled` when the secret is unset (fail closed); `401 invalid_reader_secret` for a bad/missing Bearer (constant-time compare). Feeds the **same** `payment_sms` pipeline as `/v5/device/payment-sms` — same validation, same unique-`txn_id` dedupe, same operator matching/approve machinery — with rows tagged `source: 'reader'` (`'gateway'` for the device route; the operator Payments panel shows the column). `rawBody` is accepted for payload parity and never stored or logged (SMS body text stays out of the database).
+
 ## App provisioning (operator)
 
 - `POST /v5/apps/register` — `Authorization: Bearer <APP_PROVISIONING_SECRET>`, `{ "appId", "appSecret", "name"?, "webhookUrl"?, "rateMaxPerPhone"?, "rateWindowSec"? }` → `201 { appId, name, webhookUrl, webhookSecret, trial: { otpSms, bulkSms, expiresAt } | null }` — the one-time trial grant (`TRIAL_SMS_COUNT`, default 20 per bucket; `TRIAL_SMS_TTL_DAYS`, default 30; `0` → `null` and no grant) is inserted atomically with the app row, so a duplicate appId (409) can never re-fire it

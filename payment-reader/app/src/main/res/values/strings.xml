@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">dP Payment Reader</string>
+    <string name="server_url_label">Server URL</string>
+    <string name="reader_secret_label">Payment reader secret</string>
+    <string name="save">Save</string>
+    <string name="hint_server_url">https://dprelay-api-hug8.onrender.com</string>
+    <string name="hint_secret">Paste the PAYMENT_READER_SECRET value</string>
+    <string name="status_unconfigured">Not configured — enter the server URL and reader secret.</string>
+    <string name="status_configured">Configured. The reader will upload payment SMS automatically.</string>
+    <string name="saved">Saved. The reader will upload payment SMS from now on.</string>
+    <string name="error_empty_fields">Both the server URL and the reader secret are required.</string>
+    <string name="sms_permission_rationale">The reader needs SMS permission to see bKash payment confirmations.</string>
+</resources>

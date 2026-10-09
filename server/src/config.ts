@@ -146,6 +146,8 @@ export interface Config {
   webhookExhaustionDampingSec: number;
   /** Shared secret for operator/admin routes (requireOperator). Empty = admin routes disabled. */
   operatorSecret: string;
+  /** STAGE F8: Bearer secret for the Payment Reader APK ingest (POST /v5/payments/ingest). Empty = ingest disabled. */
+  paymentReaderSecret: string;
   /** bKash destination shown to customers on credit request. Empty = requests fail fast. */
   bkashPersonalNumber: string;
 
@@ -347,6 +349,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       true, // 0 is a documented value: damping disabled
     ),
     operatorSecret: env.OPERATOR_SECRET ?? "",
+    paymentReaderSecret: env.PAYMENT_READER_SECRET ?? "",
     bkashPersonalNumber: env.BKASH_PERSONAL_NUMBER ?? "",
 
     // Bulk campaign plane: defaults mirror v4 (functions/src/bulk/*).

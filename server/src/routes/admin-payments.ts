@@ -44,6 +44,8 @@ interface PaymentRow {
   id: string;
   sender: string;
   provider: string;
+  /** STAGE F8 (ISSUE-90): ingest path — 'gateway' (OTP phone) | 'reader' (Payment Reader APK). */
+  source: string;
   txn_id: string;
   amount_paisa: number;
   received_at: number;
@@ -302,7 +304,7 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
 
     const rows = db
       .prepare(
-        "SELECT ps.id, ps.sender, ps.provider, ps.txn_id, ps.amount_paisa, ps.received_at, ps.created_at, " +
+        "SELECT ps.id, ps.sender, ps.provider, ps.source, ps.txn_id, ps.amount_paisa, ps.received_at, ps.created_at, " +
           "ps.review_state, ps.review_reason, " +
           "ct.id AS matched_id, ct.status AS matched_status, ct.app_id AS matched_app_id, " +
           "ct.admin_notes AS matched_notes " +
@@ -332,6 +334,7 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
           id: r.id,
           sender: r.sender,
           provider: r.provider,
+          source: r.source,
           txnId: r.txn_id,
           amountBdt: r.amount_paisa / 100,
           receivedAt: r.received_at,
