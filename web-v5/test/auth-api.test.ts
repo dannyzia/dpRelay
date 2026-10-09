@@ -7,13 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   createSelfServeApp,
+  forgotPassword,
   getCurrentUser,
+  getMailStatus,
   linkOwnedApp,
   listOwnedApps,
   loginAccount,
   logoutAccount,
   registerAccount,
   request,
+  resendVerification,
+  resetPassword,
+  verifyEmail,
 } from "../src/api";
 
 /** JSON Response helper for the fetch mock. */
@@ -118,6 +123,31 @@ describe("customer auth API (F3)", () => {
     await expect(linkOwnedApp("haven", "proof-secret")).rejects.toMatchObject({
       status: 409,
       code: "app_already_linked",
+    });
+  });
+
+  it("email features hit the ordered routes with the ordered payloads", async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true, configured: true }));
+    await expect(getMailStatus()).resolves.toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toContain("/v5/auth/mail-status");
+
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true }));
+    await verifyEmail("raw-token");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({ token: "raw-token" });
+
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true }));
+    await resendVerification();
+    expect(fetchMock.mock.calls[2][0]).toContain("/v5/auth/verify-email/resend");
+
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true }));
+    await forgotPassword("a@example.com");
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body as string)).toEqual({ email: "a@example.com" });
+
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true }));
+    await resetPassword("raw-token", "new-password-10");
+    expect(JSON.parse(fetchMock.mock.calls[4][1].body as string)).toEqual({
+      token: "raw-token",
+      password: "new-password-10",
     });
   });
 });

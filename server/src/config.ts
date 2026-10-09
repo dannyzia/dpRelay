@@ -93,6 +93,20 @@ export interface Config {
   /** Sliding window for the customer-auth rate limiter, in seconds. */
   authRateWindowSec: number;
   /**
+   * STAGE F3 amendment (ISSUE-82): TTL for email-verification tokens, in
+   * seconds (default 24h). SMTP itself is operator-configured in the DB —
+   * deliberately NOT an env var (owner decision, hub event 1210).
+   */
+  emailVerifyTtlSec: number;
+  /** TTL for password-reset tokens, in seconds (default 30min — short by design). */
+  emailResetTtlSec: number;
+  /**
+   * Base URL of the customer dashboard used to build emailed verification/
+   * reset links (e.g. https://dprelay-dashboard.onrender.com). Empty = emails
+   * degrade to no-link instructions (feature disables cleanly, ordered).
+   */
+  dashboardBaseUrl: string;
+  /**
    * One-time trial credits granted atomically with each successful
    * POST /v5/apps/register (ISSUE-77). 0 = trial disabled (no grant, no
    * app_credits row — a fresh app fails closed on send exactly as before).
@@ -303,6 +317,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sessionTtlSec: parsePositiveInt(env.SESSION_TTL_SEC, "SESSION_TTL_SEC", 7 * 24 * 60 * 60),
     authRateMaxPerHour: parsePositiveInt(env.AUTH_RATE_MAX_PER_HOUR, "AUTH_RATE_MAX_PER_HOUR", 30),
     authRateWindowSec: parsePositiveInt(env.AUTH_RATE_WINDOW_SEC, "AUTH_RATE_WINDOW_SEC", 3600),
+    emailVerifyTtlSec: parsePositiveInt(env.EMAIL_VERIFY_TTL_SEC, "EMAIL_VERIFY_TTL_SEC", 24 * 60 * 60),
+    emailResetTtlSec: parsePositiveInt(env.EMAIL_RESET_TTL_SEC, "EMAIL_RESET_TTL_SEC", 30 * 60),
+    dashboardBaseUrl: env.DASHBOARD_BASE_URL ?? "",
     trialSmsCount: parsePositiveInt(env.TRIAL_SMS_COUNT, "TRIAL_SMS_COUNT", 20, true),
     trialSmsTtlDays: parsePositiveInt(env.TRIAL_SMS_TTL_DAYS, "TRIAL_SMS_TTL_DAYS", 30),
     outstandingRequeueSec: parsePositiveInt(

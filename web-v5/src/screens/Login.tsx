@@ -52,6 +52,11 @@ export function LoginView(props: {
           {props.busy ? "Checking…" : signingUp ? "Create account" : "Sign in"}
         </button>
       </form>
+      {!signingUp && (
+        <p className="muted">
+          <a href="#/forgot">Forgot password?</a>
+        </p>
+      )}
       <p className="muted">
         {signingUp ? "Already have an account? " : "No account yet? "}
         <button type="button" className="button-link" onClick={props.onToggleMode}>

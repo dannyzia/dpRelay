@@ -16,6 +16,7 @@ import bulkRoutes from "./routes/bulk.js";
 import contactGroupRoutes from "./routes/contact-groups.js";
 import messageTemplateRoutes from "./routes/message-templates.js";
 import adminAppRoutes from "./routes/admin-apps.js";
+import adminMailRoutes from "./routes/admin-mail.js";
 import adminDeviceRoutes from "./routes/admin-devices.js";
 import { registerJobs, alertCanaryStatus, alertSinkStatus } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
@@ -180,6 +181,7 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   app.register(contactGroupRoutes);
   app.register(messageTemplateRoutes);
   app.register(adminAppRoutes);
+  app.register(adminMailRoutes);
   app.register(adminDeviceRoutes);
 
   // Jobs (R3) + wake guard (R5). Decorators must exist before hooks run.

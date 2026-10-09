@@ -12,6 +12,7 @@ import {
   clearOperatorSecret,
   describeError,
   getAdminMetrics,
+  getMailConfig,
   getOperatorSecret,
   listAdminApps,
   listOversightCampaigns,
@@ -21,9 +22,12 @@ import {
   resolveTransaction,
   setOperatorRejectedHandler,
   setOperatorSecret,
+  testMailConfig,
   unrevokeAdminApp,
+  updateMailConfig,
   type AdminApp,
   type AdminMetrics,
+  type MailConfigView,
   type OversightCampaign,
   type PendingTransaction,
 } from "../api";
@@ -31,13 +35,14 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { formatBdt, formatEpochUtc, formatStatus } from "../format";
 import { hrefFor } from "../router";
 
-type OperatorTab = "billing" | "apps" | "metrics" | "campaigns";
+type OperatorTab = "billing" | "apps" | "metrics" | "campaigns" | "mail";
 
 const TABS: { id: OperatorTab; label: string }[] = [
   { id: "billing", label: "Billing queue" },
   { id: "apps", label: "Apps" },
   { id: "metrics", label: "Metrics" },
   { id: "campaigns", label: "Campaigns" },
+  { id: "mail", label: "Mail Settings" },
 ];
 
 /** Pure unlock form — exported for render tests. */
@@ -465,6 +470,118 @@ function CampaignsPanel(): JSX.Element {
 }
 
 /**
+ * STAGE F3 amendment (ISSUE-82): Mail Settings — the ONLY place SMTP details
+ * exist (owner flag: never customer-facing). The password is write-only:
+ * the form shows a mask after saving and never receives the stored value.
+ * Pure view exported for render tests.
+ */
+export function MailSettingsView(props: {
+  config: MailConfigView | null;
+  error: string | null;
+  note: string | null;
+  busy: boolean;
+  onSave: (cfg: { host: string; port: number; username: string; password: string; fromAddress: string }) => void;
+  onTest: (to: string) => void;
+}): JSX.Element {
+  return (
+    <>
+      {props.error !== null && <ErrorBanner message={props.error} />}
+      {props.note !== null && <p className="ok-note">{props.note}</p>}
+      <section className="card">
+        <h2>Outgoing email (SMTP)</h2>
+        <p className="muted">
+          {props.config?.configured === true
+            ? `Configured${props.config.host !== null ? ` — ${props.config.host}:${String(props.config.port)}` : ""}. The password is stored encrypted and never shown again.`
+            : "Not configured yet — customer verification and password-reset emails stay disabled until this is saved."}
+        </p>
+        <form
+          onSubmit={(e): void => {
+            e.preventDefault();
+            const data = new FormData(e.currentTarget);
+            props.onSave({
+              host: String(data.get("host") ?? "").trim(),
+              port: Number(data.get("port") ?? 0),
+              username: String(data.get("username") ?? "").trim(),
+              password: String(data.get("password") ?? ""),
+              fromAddress: String(data.get("fromAddress") ?? "").trim(),
+            });
+          }}
+        >
+          <label htmlFor="mailHost">SMTP host</label>
+          <input id="mailHost" name="host" defaultValue={props.config?.host ?? ""} required spellCheck={false} />
+          <label htmlFor="mailPort">Port</label>
+          <input id="mailPort" name="port" type="number" min={1} max={65535} defaultValue={props.config?.port ?? 465} required />
+          <label htmlFor="mailUsername">Username</label>
+          <input id="mailUsername" name="username" required spellCheck={false} autoComplete="off" />
+          <label htmlFor="mailPassword">
+            Password {props.config?.passwordMasked !== null && props.config?.passwordMasked !== undefined ? `(${props.config.passwordMasked} — leave blank to keep)` : ""}
+          </label>
+          <input id="mailPassword" name="password" type="password" spellCheck={false} autoComplete="new-password" />
+          <label htmlFor="mailFrom">From address</label>
+          <input id="mailFrom" name="fromAddress" type="email" defaultValue={props.config?.fromAddress ?? ""} required spellCheck={false} />
+          <button type="submit" disabled={props.busy}>
+            {props.busy ? "Saving…" : "Save settings"}
+          </button>
+        </form>
+        <form
+          className="inline-actions"
+          onSubmit={(e): void => {
+            e.preventDefault();
+            props.onTest(String(new FormData(e.currentTarget).get("to") ?? "").trim());
+          }}
+        >
+          <label htmlFor="mailTestTo">Send a test email to</label>
+          <input id="mailTestTo" name="to" type="email" required spellCheck={false} />
+          <button type="submit" className="secondary" disabled={props.config?.configured !== true}>
+            Send test
+          </button>
+        </form>
+      </section>
+    </>
+  );
+}
+
+/** Container: load the masked config, save (password write-only), test-send. */
+export function MailSettings(): JSX.Element {
+  const [config, setConfig] = useState<MailConfigView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+
+  useEffect(() => {
+    getMailConfig()
+      .then(setConfig)
+      .catch((err: unknown) => setError(describeError(err)));
+  }, []);
+
+  const save = (cfg: { host: string; port: number; username: string; password: string; fromAddress: string }): void => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    updateMailConfig(cfg)
+      .then((next) => {
+        setConfig(next);
+        setBusy(false);
+        setNote("Mail settings saved.");
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  const test = (to: string): void => {
+    setError(null);
+    setNote(null);
+    testMailConfig(to)
+      .then(() => setNote(`Test email sent to ${to}.`))
+      .catch((err: unknown) => setError(describeError(err)));
+  };
+
+  return <MailSettingsView config={config} error={error} note={note} busy={busy} onSave={save} onTest={test} />;
+}
+
+/**
  * Operator shell: unlock gate → sub-tab content. `route` is the full hash
  * route so the active tab is URL-driven (`#/operator/billing`, deep-linkable).
  */
@@ -542,6 +659,8 @@ export function Operator({ route }: { route: string[] }): JSX.Element {
         <MetricsPanel />
       ) : tab === "campaigns" ? (
         <CampaignsPanel />
+      ) : tab === "mail" ? (
+        <MailSettings />
       ) : (
         <BillingQueue note={setNote} />
       )}

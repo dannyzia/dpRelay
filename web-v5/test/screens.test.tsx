@@ -6,9 +6,15 @@ import { CheckoutView, PackageListView } from "../src/screens/BuyCredits";
 import { CredentialsView } from "../src/screens/Credentials";
 import { CreditsView } from "../src/screens/Credits";
 import { Docs } from "../src/screens/Docs";
+import { FaqView } from "../src/screens/Faq";
+import { ForgotPasswordView } from "../src/screens/ForgotPassword";
 import { HistoryView } from "../src/screens/History";
 import { LinkAppView } from "../src/screens/LinkApp";
 import { LoginView } from "../src/screens/Login";
+import { MailSettingsView } from "../src/screens/Operator";
+import { PaymentView } from "../src/screens/Payment";
+import { ResetPasswordView } from "../src/screens/ResetPassword";
+import { VerifyEmailView } from "../src/screens/VerifyEmail";
 
 /**
  * renderToString + normalization: React inserts `<!-- -->` separators between
@@ -83,6 +89,8 @@ describe("AppsView (F3 owned apps)", () => {
         error={null}
         busy={false}
         freshSecret={null}
+        verifyBanner="hidden"
+        onResend={(): void => undefined}
         onOpen={(): void => undefined}
         onCreate={(): void => undefined}
         onAcknowledgeSecret={(): void => undefined}
@@ -103,6 +111,8 @@ describe("AppsView (F3 owned apps)", () => {
         error={null}
         busy={false}
         freshSecret={null}
+        verifyBanner="hidden"
+        onResend={(): void => undefined}
         onOpen={(): void => undefined}
         onCreate={(): void => undefined}
         onAcknowledgeSecret={(): void => undefined}
@@ -117,6 +127,8 @@ describe("AppsView (F3 owned apps)", () => {
         error={null}
         busy={false}
         freshSecret={{ appId: "app_new1", appSecret: "s3cret-value", trialSms: 20 }}
+        verifyBanner="hidden"
+        onResend={(): void => undefined}
         onOpen={(): void => undefined}
         onCreate={(): void => undefined}
         onAcknowledgeSecret={(): void => undefined}
@@ -127,6 +139,27 @@ describe("AppsView (F3 owned apps)", () => {
     expect(withSecret).toContain("app_new1");
     expect(withSecret).toContain("s3cret-value");
     expect(withSecret).toContain("20 OTP + 20 bulk SMS");
+  });
+
+  it("offers the verification banner only when unverified and mail is configured", () => {
+    const base = {
+      apps: OWNED,
+      error: null,
+      busy: false,
+      freshSecret: null,
+      onResend: (): void => undefined,
+      onOpen: (): void => undefined,
+      onCreate: (): void => undefined,
+      onAcknowledgeSecret: (): void => undefined,
+      onLinkExisting: (): void => undefined,
+    };
+    const offer = render(<AppsView {...base} verifyBanner="offer" />);
+    expect(offer).toContain("Confirm your email");
+    expect(offer).toContain("Send verification email");
+    const sent = render(<AppsView {...base} verifyBanner="sent" />);
+    expect(sent).toContain("Verification email sent");
+    const hidden = render(<AppsView {...base} verifyBanner="hidden" />);
+    expect(hidden).not.toContain("Confirm your email");
   });
 });
 
@@ -145,6 +178,95 @@ describe("LinkAppView (F3 link existing app)", () => {
     expect(html).toContain('type="password"');
     expect(html).toContain("invalid_app_credentials");
     expect(html).toContain("Checking…");
+  });
+});
+
+describe("F3 amendment screens (email + payment + FAQ)", () => {
+  it("PaymentView lists the five remittance methods and the bKash number", () => {
+    const html = render(<PaymentView />);
+    for (const name of ["TapTap Send", "Remitly", "Wise", "Western Union", "WorldRemit"]) {
+      expect(html).toContain(name);
+    }
+    expect(html).toContain("01613249520");
+    expect(html).toContain("+8801613249520");
+    expect(html).toContain("MTCN");
+  });
+
+  it("FaqView renders the owner-approved safe question set and no SMTP details", () => {
+    const html = render(<FaqView />);
+    expect(html).toContain("How do I pay?");
+    expect(html).toContain("How do I get API keys?");
+    expect(html).toContain("How do I reset my password?");
+    expect(html).toContain("What does an OTP cost?");
+    // React escapes the apostrophe in renderToString — assert without it.
+    expect(html).toContain("my SMS arrived");
+    // Owner flag: infrastructure details never appear on customer pages.
+    expect(html).not.toContain("smtp");
+    expect(html).not.toContain("stackmail");
+  });
+
+  it("ForgotPasswordView shows the clean-disable hint when mail is unconfigured", () => {
+    const unconfigured = render(
+      <ForgotPasswordView sent={false} error={null} busy={false} mailConfigured={false} onSubmit={(): void => undefined} />,
+    );
+    expect(unconfigured).toContain("Email is not enabled");
+    const sent = render(
+      <ForgotPasswordView sent error={null} busy={false} mailConfigured onSubmit={(): void => undefined} />,
+    );
+    expect(sent).toContain("reset link is on its way");
+  });
+
+  it("ResetPasswordView handles missing token, form, and success states", () => {
+    const noToken = render(
+      <ResetPasswordView hasToken={false} done={false} error={null} busy={false} onSubmit={(): void => undefined} />,
+    );
+    expect(noToken).toContain("link is incomplete");
+    const form = renderToString(
+      <ResetPasswordView hasToken done={false} error={null} busy onSubmit={(): void => undefined} />,
+    );
+    expect(form).toContain("minLength=\"10\"");
+    expect(form).toContain("Saving…");
+    const done = render(
+      <ResetPasswordView hasToken done error={null} busy={false} onSubmit={(): void => undefined} />,
+    );
+    expect(done).toContain("Password updated");
+  });
+
+  it("VerifyEmailView renders pending/verified/failed states", () => {
+    expect(render(<VerifyEmailView state="pending" error={null} />)).toContain("Verifying…");
+    expect(render(<VerifyEmailView state="verified" error={null} />)).toContain("Your email is verified");
+    const failed = render(<VerifyEmailView state="failed" error="Invalid or expired token (invalid_token)" />);
+    expect(failed).toContain("invalid_token");
+  });
+
+  it("MailSettingsView masks the password and disables test-send when unconfigured", () => {
+    const html = render(
+      <MailSettingsView
+        config={{ configured: true, host: "smtp.example.test", port: 465, fromAddress: "f@example.test", passwordMasked: "••••", updatedAt: 1 }}
+        error={null}
+        note={null}
+        busy={false}
+        onSave={(): void => undefined}
+        onTest={(): void => undefined}
+      />,
+    );
+    expect(html).toContain("smtp.example.test");
+    expect(html).toContain("••••");
+    expect(html).toContain("Send test");
+    expect(html).not.toContain('name="password" value');
+
+    const unconfigured = render(
+      <MailSettingsView
+        config={{ configured: false, host: null, port: null, fromAddress: null, passwordMasked: null, updatedAt: null }}
+        error={null}
+        note={null}
+        busy={false}
+        onSave={(): void => undefined}
+        onTest={(): void => undefined}
+      />,
+    );
+    expect(unconfigured).toContain("Not configured yet");
+    expect(unconfigured).toContain("disabled");
   });
 });
 

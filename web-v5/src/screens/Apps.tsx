@@ -4,7 +4,9 @@ import {
   createSelfServeApp,
   describeError,
   getConnectedApp,
+  getMailStatus,
   listOwnedApps,
+  resendVerification,
   type OwnedApp,
 } from "../api";
 
@@ -22,6 +24,9 @@ export function AppsView(props: {
   busy: boolean;
   /** Set while a freshly minted app's secret is on screen — shown exactly once. */
   freshSecret: { appId: string; appSecret: string; trialSms: number } | null;
+  /** Soft-verification banner (F3 amendment): shown when unverified AND mail is configured. */
+  verifyBanner: "hidden" | "offer" | "sent";
+  onResend: () => void;
   onOpen: (appId: string) => void;
   onCreate: (name: string) => void;
   onAcknowledgeSecret: () => void;
@@ -31,6 +36,21 @@ export function AppsView(props: {
   return (
     <div className="card">
       <h1>Your apps</h1>
+      {props.verifyBanner === "offer" && (
+        <div className="callout" data-testid="verify-banner">
+          <p>
+            Confirm your email so the operator can reach you about credits and incidents.
+          </p>
+          <button type="button" onClick={props.onResend}>
+            Send verification email
+          </button>
+        </div>
+      )}
+      {props.verifyBanner === "sent" && (
+        <p className="ok-note" data-testid="verify-sent">
+          Verification email sent — check your inbox (and spam folder).
+        </p>
+      )}
       {props.apps === null && props.error === null && <p className="muted">Loading…</p>}
       {props.error !== null && (
         <p className="error" role="alert">
@@ -119,9 +139,12 @@ export function AppsView(props: {
  * then handed to sessionStorage), and routes Open/Unlock to the selected app.
  */
 export function Apps({
+  emailVerifiedAt,
   onOpenApp,
   onLinkExisting,
 }: {
+  /** From /v5/auth/me (undefined = still probing the session). */
+  emailVerifiedAt: number | null | undefined;
   onOpenApp: () => void;
   onLinkExisting: () => void;
 }): JSX.Element {
@@ -133,6 +156,8 @@ export function Apps({
     appSecret: string;
     trialSms: number;
   } | null>(null);
+  const [mailConfigured, setMailConfigured] = useState<boolean | null>(null);
+  const [resent, setResent] = useState<boolean>(false);
 
   useEffect(() => {
     listOwnedApps()
@@ -140,6 +165,9 @@ export function Apps({
         setApps(owned);
       })
       .catch((err: unknown) => setError(describeError(err)));
+    getMailStatus()
+      .then(setMailConfigured)
+      .catch(() => setMailConfigured(null));
   }, []);
 
   const create = (name: string): void => {
@@ -179,12 +207,25 @@ export function Apps({
     window.location.hash = `#/link/${encodeURIComponent(appId)}`;
   };
 
+  const verifyBanner: "hidden" | "offer" | "sent" =
+    resent
+      ? "sent"
+      : mailConfigured === true && emailVerifiedAt !== undefined && emailVerifiedAt === null
+        ? "offer"
+        : "hidden";
+
   return (
     <AppsView
       apps={apps}
       error={error}
       busy={busy}
       freshSecret={freshSecret}
+      verifyBanner={verifyBanner}
+      onResend={(): void => {
+        resendVerification()
+          .then(() => setResent(true))
+          .catch((err: unknown) => setError(describeError(err)));
+      }}
       onOpen={open}
       onCreate={create}
       onAcknowledgeSecret={acknowledge}

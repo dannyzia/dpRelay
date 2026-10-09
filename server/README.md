@@ -28,6 +28,10 @@ npm start       # scripts/start-server.mjs → litestream restore → litestream
 - `POST /v5/auth/apps` — session-required self-serve app registration: mints `appId`+`appSecret` (returned **once**), sets `apps.owner_user_id`, applies the trial grant atomically → 201
 - `GET /v5/auth/apps` — session-required owned-apps list (secrets never re-served)
 - `POST /v5/auth/apps/link` — session-required `{ appId, appSecret }` → claims an operator-provisioned app (`owner_user_id IS NULL`); idempotent re-prove for an owned app
+- `GET /v5/auth/mail-status` — public `{ configured }` (SMTP set up in the operator panel)
+- `POST /v5/auth/verify-email` / `POST /v5/auth/verify-email/resend` — emailed token; SOFT verification (never gates login)
+- `POST /v5/auth/password/forgot` / `POST /v5/auth/password/reset` — self-service reset via emailed link; reset revokes every session
+- `GET/PUT /v5/admin/mail-config` + `POST /v5/admin/mail-config/test` — operator-configured SMTP (password write-only, encrypted at rest; `••••` on GET)
 - `POST /v5/device/heartbeat` — `Authorization: Bearer <device API key>` → updates `last_seen_at`
 
 Device API keys: 32 random bytes, **returned once** at registration, stored as SHA-256 hash only.

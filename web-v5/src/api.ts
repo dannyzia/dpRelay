@@ -248,6 +248,8 @@ export interface SessionUser {
   id: string;
   email: string;
   createdAt: number | null;
+  /** Soft verification (F3 amendment): null = unverified; login never gated on it. */
+  emailVerifiedAt?: number | null;
 }
 
 export interface OwnedApp {
@@ -324,6 +326,40 @@ export async function linkOwnedApp(
   return request<{ ok: true; appId: string; name: string; revoked: boolean }>("/v5/auth/apps/link", {
     method: "POST",
     body: JSON.stringify({ appId, appSecret }),
+  });
+}
+
+// ── Email features (F3 amendment: verification + self-service reset) ───────
+
+/** GET /v5/auth/mail-status — public: is SMTP configured on this deployment. */
+export async function getMailStatus(): Promise<boolean> {
+  const body = await request<{ ok: true; configured: boolean }>("/v5/auth/mail-status", { method: "GET" });
+  return body.configured;
+}
+
+/** POST /v5/auth/verify-email — consumes the emailed token (idempotent once verified). */
+export async function verifyEmail(token: string): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/verify-email", { method: "POST", body: JSON.stringify({ token }) });
+}
+
+/** POST /v5/auth/verify-email/resend — session-required; server answers ok regardless. */
+export async function resendVerification(): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/verify-email/resend", { method: "POST" });
+}
+
+/** POST /v5/auth/password/forgot — always generic-ok server-side (anti-enumeration). */
+export async function forgotPassword(email: string): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/password/forgot", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** POST /v5/auth/password/reset — token + new password; revokes every session. */
+export async function resetPassword(token: string, password: string): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/password/reset", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
   });
 }
 
@@ -439,6 +475,46 @@ export interface OversightCampaign {
 /** GET /v5/admin/metrics — also the pre-storage probe that verifies a pasted secret. */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
   return operatorFetch<AdminMetrics & { ok: true }>("/v5/admin/metrics");
+}
+
+// ── Mail settings (F3 amendment: operator-configured SMTP, write-only password) ──
+
+export interface MailConfigView {
+  configured: boolean;
+  host: string | null;
+  port: number | null;
+  fromAddress: string | null;
+  passwordMasked: string | null;
+  updatedAt: number | null;
+}
+
+/** GET /v5/admin/mail-config — masked; the password is never returned. */
+export async function getMailConfig(): Promise<MailConfigView> {
+  const body = await operatorFetch<MailConfigView & { ok: true }>("/v5/admin/mail-config");
+  return { configured: body.configured, host: body.host, port: body.port, fromAddress: body.fromAddress, passwordMasked: body.passwordMasked, updatedAt: body.updatedAt };
+}
+
+/** PUT /v5/admin/mail-config — password optional (empty = keep the stored one, write-only). */
+export async function updateMailConfig(cfg: {
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  fromAddress: string;
+}): Promise<MailConfigView> {
+  const body = await operatorFetch<MailConfigView & { ok: true }>("/v5/admin/mail-config", {
+    method: "PUT",
+    body: JSON.stringify(cfg),
+  });
+  return { configured: body.configured, host: body.host, port: body.port, fromAddress: body.fromAddress, passwordMasked: body.passwordMasked, updatedAt: body.updatedAt };
+}
+
+/** POST /v5/admin/mail-config/test — sends one real test email to `to`. */
+export async function testMailConfig(to: string): Promise<void> {
+  await operatorFetch<{ ok: true }>("/v5/admin/mail-config/test", {
+    method: "POST",
+    body: JSON.stringify({ to }),
+  });
 }
 
 /** GET /v5/admin/billing/queue — pending TrxID approvals. */

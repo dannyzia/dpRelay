@@ -27,10 +27,15 @@ import { BuyCredits } from "./screens/BuyCredits";
 import { Credentials } from "./screens/Credentials";
 import { Credits } from "./screens/Credits";
 import { Docs } from "./screens/Docs";
+import { Faq } from "./screens/Faq";
+import { ForgotPassword } from "./screens/ForgotPassword";
 import { History } from "./screens/History";
 import { LinkApp } from "./screens/LinkApp";
 import { Login } from "./screens/Login";
 import { Operator } from "./screens/Operator";
+import { Payment } from "./screens/Payment";
+import { ResetPassword } from "./screens/ResetPassword";
+import { VerifyEmail } from "./screens/VerifyEmail";
 import "./styles.css";
 
 type CustomerTab = "credits" | "buy" | "history" | "credentials";
@@ -63,10 +68,18 @@ export function App(): JSX.Element {
     TABS.some((tab) => tab.id === t);
   const isApps = section === "apps";
   const isLink = section === "link";
+  // Signed-out-reachable screens (email links + public info pages).
+  const isPublic =
+    section === "docs" ||
+    section === "faq" ||
+    section === "payment" ||
+    section === "forgot" ||
+    section === "reset" ||
+    section === "verify";
   const known =
     section === "" ||
     section === "login" ||
-    section === "docs" ||
+    isPublic ||
     isOperator ||
     isApps ||
     isLink ||
@@ -76,8 +89,9 @@ export function App(): JSX.Element {
       user ? (connected ? "credits" : "apps") : "login",
     ]);
   }
-  // Public-ish planes: operator has its own unlock, docs needs no account.
-  if (!isOperator && section !== "docs" && section !== "login") {
+  // Public-ish planes: operator has its own unlock, docs/faq/payment/email
+  // links need no account; everything else waits for the session probe.
+  if (!isOperator && !isPublic && section !== "login") {
     if (user === undefined) {
       return (
         <div className="shell">
@@ -141,6 +155,12 @@ export function App(): JSX.Element {
             Docs
           </a>
           <a
+            href={hrefFor(["faq"])}
+            className={section === "faq" ? "nav-link active" : "nav-link"}
+          >
+            FAQ
+          </a>
+          <a
             href={hrefFor(["operator"])}
             className={isOperator ? "nav-link active" : "nav-link"}
           >
@@ -166,6 +186,16 @@ export function App(): JSX.Element {
           <Operator route={route} />
         ) : section === "docs" ? (
           <Docs />
+        ) : section === "faq" ? (
+          <Faq />
+        ) : section === "payment" ? (
+          <Payment />
+        ) : section === "forgot" ? (
+          <ForgotPassword />
+        ) : section === "reset" ? (
+          <ResetPassword token={route[1] !== undefined ? decodeURIComponent(route[1]) : ""} />
+        ) : section === "verify" ? (
+          <VerifyEmail token={route[1] !== undefined ? decodeURIComponent(route[1]) : ""} />
         ) : section === "login" || user === null ? (
           <Login
             onSignedIn={(): void => {
@@ -177,6 +207,7 @@ export function App(): JSX.Element {
           />
         ) : isApps ? (
           <Apps
+            emailVerifiedAt={user?.emailVerifiedAt ?? null}
             onOpenApp={(): void => {
               setConnected(true);
               window.location.hash = hrefFor(["credits"]);

@@ -24,6 +24,14 @@ import {
   sha256Hex,
   verifyStoredPassword,
 } from "../services/crypto.js";
+import {
+  generateEmailToken,
+  hashEmailToken,
+  isMailConfigured,
+  resetEmailBody,
+  sendMail,
+  verificationEmailBody,
+} from "../services/mailer.js";
 
 /** RFC 5322-lite email shape: local@domain.tld, no spaces. Full validation is deliverability, not syntax. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -229,6 +237,24 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     // so the dashboard is signed in immediately after signup while legacy
     // register consumers (which ignore cookies) see no contract change.
     setSessionCookie(reply, createSession(userId));
+
+    // F3 amendment: best-effort verification email. Mail failures NEVER fail
+    // registration — the feature disables cleanly (ordered) and the user can
+    // resend from the dashboard once SMTP is configured.
+    try {
+      if (isMailConfigured(app.db) && app.config.dashboardBaseUrl !== "") {
+        const raw = createEmailToken(userId, "verify", app.config.emailVerifyTtlSec);
+        void sendMail(
+          app.db,
+          app.config.jwtSecret,
+          normalized,
+          "Confirm your dP Relay email",
+          verificationEmailBody(app.config.dashboardBaseUrl, raw),
+        ).catch((err: unknown) => app.log.warn({ err }, "verification email dispatch failed"));
+      }
+    } catch (err) {
+      app.log.warn({ err }, "verification email scheduling failed");
+    }
     return reply.code(201).send({ ok: true });
   });
 
@@ -338,9 +364,19 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     const row = app.db.prepare("SELECT created_at FROM users WHERE id = ?").get(session.user.id) as
       | { created_at: number }
       | undefined;
+    const verified = app.db.prepare("SELECT email_verified_at FROM users WHERE id = ?").get(session.user.id) as
+      | { email_verified_at: number | null }
+      | undefined;
+    // emailVerifiedAt is ADDITIVE to the F3 /me contract (soft verification):
+    // null = not verified; login is never gated on it.
     return reply.code(200).send({
       ok: true,
-      user: { id: session.user.id, email: session.user.email, createdAt: row?.created_at ?? null },
+      user: {
+        id: session.user.id,
+        email: session.user.email,
+        createdAt: row?.created_at ?? null,
+        emailVerifiedAt: verified?.email_verified_at ?? null,
+      },
     });
   });
 
@@ -516,6 +552,189 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     app.log.info({ appId: row.app_id, userId: session.user.id }, "operator-provisioned app linked by owner");
     return reply.code(200).send({ ok: true, appId: row.app_id, name: row.name, revoked: false });
+  });
+
+  /**
+   * Creates a single-use hashed email token (verify/reset). The raw value is
+   * returned exactly once — it exists only in the emailed link.
+   */
+  function createEmailToken(userId: string, purpose: "verify" | "reset", ttlSec: number): string {
+    const raw = generateEmailToken();
+    app.db
+      .prepare(
+        "INSERT INTO user_email_tokens (id, user_id, purpose, token_hash, expires_at, created_at) " +
+          "VALUES (?, ?, ?, ?, unixepoch() + ?, unixepoch())",
+      )
+      .run(newId(), userId, purpose, hashEmailToken(raw), ttlSec);
+    return raw;
+  }
+
+  /**
+   * F3 amendment (ISSUE-82): public mail-capability status so the customer
+   * screens can show the amendment's "clear status when SMTP isn't
+   * configured" (flagged invented surface — discloses only whether email is
+   * set up on this deployment, nothing account-specific).
+   */
+  app.get("/v5/auth/mail-status", async (_request, reply) => {
+    return reply.code(200).send({ ok: true, configured: isMailConfigured(app.db) });
+  });
+
+  /**
+   * F3 amendment: consumes an emailed verification token. Soft verification —
+   * it never gates login; it only records the timestamp for the dashboard.
+   */
+  app.post("/v5/auth/verify-email", async (request, reply) => {
+    const verdict = authRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many auth attempts", code: "rate_limited" });
+    }
+    const body = (request.body ?? {}) as { token?: unknown };
+    if (!isNonEmptyString(body.token)) {
+      return reply.code(400).send({ ok: false, error: "token is required", code: "invalid_request" });
+    }
+    const row = app.db
+      .prepare(
+        "SELECT t.id AS token_id, t.user_id, t.expires_at, t.used_at, u.email_verified_at " +
+          "FROM user_email_tokens t JOIN users u ON u.id = t.user_id " +
+          "WHERE t.token_hash = ? AND t.purpose = 'verify'",
+      )
+      .get(hashEmailToken(body.token)) as
+      | { token_id: string; user_id: string; expires_at: number; used_at: number | null; email_verified_at: number | null }
+      | undefined;
+    if (!row || (row.used_at === null && row.expires_at <= nowSec())) {
+      return reply.code(400).send({ ok: false, error: "Invalid or expired token", code: "invalid_token" });
+    }
+    if (row.email_verified_at === null) {
+      app.db.prepare("UPDATE users SET email_verified_at = unixepoch() WHERE id = ?").run(row.user_id);
+    }
+    if (row.used_at === null) {
+      app.db.prepare("UPDATE user_email_tokens SET used_at = unixepoch() WHERE id = ?").run(row.token_id);
+    }
+    return reply.code(200).send({ ok: true });
+  });
+
+  /** Session-required resend (idempotent: an already-verified account just gets ok. */
+  app.post("/v5/auth/verify-email/resend", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const verdict = authRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many auth attempts", code: "rate_limited" });
+    }
+    try {
+      const user = app.db
+        .prepare("SELECT email, email_verified_at FROM users WHERE id = ?")
+        .get(session.user.id) as { email: string; email_verified_at: number | null } | undefined;
+      if (user && user.email_verified_at === null && isMailConfigured(app.db) && app.config.dashboardBaseUrl !== "") {
+        const raw = createEmailToken(session.user.id, "verify", app.config.emailVerifyTtlSec);
+        void sendMail(
+          app.db,
+          app.config.jwtSecret,
+          user.email,
+          "Confirm your dP Relay email",
+          verificationEmailBody(app.config.dashboardBaseUrl, raw),
+        ).catch((err: unknown) => app.log.warn({ err }, "verification email dispatch failed"));
+      }
+    } catch (err) {
+      app.log.warn({ err }, "verification email scheduling failed");
+    }
+    return reply.code(200).send({ ok: true });
+  });
+
+  /**
+   * F3 amendment: self-service password reset, step 1. ALWAYS the generic
+   * ok — an unknown email must be indistinguishable from an unsendable one
+   * (anti-enumeration). The email only goes out when SMTP is configured.
+   */
+  app.post("/v5/auth/password/forgot", async (request, reply) => {
+    const verdict = authRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many auth attempts", code: "rate_limited" });
+    }
+    const body = (request.body ?? {}) as { email?: unknown };
+    if (isNonEmptyString(body.email)) {
+      const normalized = body.email.trim().toLowerCase();
+      const user = app.db
+        .prepare("SELECT id FROM users WHERE email = ?")
+        .get(normalized) as { id: string } | undefined;
+      if (user && isMailConfigured(app.db) && app.config.dashboardBaseUrl !== "") {
+        try {
+          // Supersede any outstanding reset token (only the newest link works).
+          app.db
+            .prepare(
+              "UPDATE user_email_tokens SET used_at = unixepoch() " +
+                "WHERE user_id = ? AND purpose = 'reset' AND used_at IS NULL",
+            )
+            .run(user.id);
+          const raw = createEmailToken(user.id, "reset", app.config.emailResetTtlSec);
+          void sendMail(
+            app.db,
+            app.config.jwtSecret,
+            normalized,
+            "Reset your dP Relay password",
+            resetEmailBody(app.config.dashboardBaseUrl, raw),
+          ).catch((err: unknown) => app.log.warn({ err }, "reset email dispatch failed"));
+        } catch (err) {
+          app.log.warn({ err }, "reset email scheduling failed");
+        }
+      }
+    }
+    return reply.code(200).send({ ok: true });
+  });
+
+  /**
+   * F3 amendment: self-service password reset, step 2. On success the new
+   * hash is scrypt, the token is single-use, and EVERY session row for the
+   * account is revoked (a stolen cookie dies with the old password).
+   */
+  app.post("/v5/auth/password/reset", async (request, reply) => {
+    const verdict = authRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many auth attempts", code: "rate_limited" });
+    }
+    const body = (request.body ?? {}) as { token?: unknown; password?: unknown };
+    if (!isNonEmptyString(body.token)) {
+      return reply.code(400).send({ ok: false, error: "token is required", code: "invalid_request" });
+    }
+    if (!isNonEmptyString(body.password) || body.password.length < PASSWORD_MIN || body.password.length > PASSWORD_MAX) {
+      return reply.code(400).send({
+        ok: false,
+        error: `Password must be ${PASSWORD_MIN}-${PASSWORD_MAX} characters`,
+        code: "invalid_password",
+      });
+    }
+    const row = app.db
+      .prepare(
+        "SELECT id AS token_id, user_id, expires_at, used_at FROM user_email_tokens " +
+          "WHERE token_hash = ? AND purpose = 'reset'",
+      )
+      .get(hashEmailToken(body.token)) as
+      | { token_id: string; user_id: string; expires_at: number; used_at: number | null }
+      | undefined;
+    if (!row || row.used_at !== null || row.expires_at <= nowSec()) {
+      return reply.code(400).send({ ok: false, error: "Invalid or expired token", code: "invalid_token" });
+    }
+    const newHash = await hashPasswordScrypt(body.password);
+    app.db.transaction(() => {
+      app.db.prepare("UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, unixepoch()) WHERE id = ?").run(newHash, row.user_id);
+      app.db.prepare("UPDATE user_email_tokens SET used_at = unixepoch() WHERE id = ?").run(row.token_id);
+      // Reset implies mailbox control — treat it as proof and clear ALL sessions.
+      app.db.prepare("DELETE FROM user_sessions WHERE user_id = ?").run(row.user_id);
+    })();
+    app.log.info({ userId: row.user_id }, "password reset completed");
+    return reply.code(200).send({ ok: true });
   });
 };
 

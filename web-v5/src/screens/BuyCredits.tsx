@@ -17,6 +17,13 @@ export function PackageListView(props: {
 }): JSX.Element {
   return (
     <div className="card">
+      <h1>
+        Buy credits <span className="muted">— pay with bKash</span>
+      </h1>
+      <p className="muted">
+        Sending money from abroad? See the <a href="#/payment">payment guide</a> (TapTap Send,
+        Remitly, Wise, Western Union, WorldRemit).
+      </p>
       {props.packages.length === 0 ? (
         <p className="muted">No active packages — ask the operator to publish one.</p>
       ) : (
