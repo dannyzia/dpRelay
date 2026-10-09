@@ -97,10 +97,11 @@ class UploadQueueTest {
         now += 60_000L
         queue.markFailed(id)
 
-        // attempt 2 ⇒ next attempt at now + 60s (backoff(2)), stored durably.
-        val stored = UploadQueue(store) { now }.dueItems().first()
-        assertEquals(2, stored.attempts)
-        assertEquals(now + 60_000L, stored.nextAttemptAtMs)
+        // First failure ⇒ attempts=1, next attempt at now + backoff(1) = now + 30s.
+        // Read via the codec: the item is backing off, so dueItems() is empty.
+        val stored = QueueCodec.decode(store.read()).first()
+        assertEquals(1, stored.attempts)
+        assertEquals(now + 30_000L, stored.nextAttemptAtMs)
     }
 
     @Test
