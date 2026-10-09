@@ -1,31 +1,132 @@
 package com.digitalpapyrus.dprelay.reader
 
-import com.sun.net.httpserver.HttpServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.net.InetSocketAddress
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Wire contract for POST /v5/payments/ingest (F8 AC): exact payload shape,
  * Bearer header, and outcome classification (the retry queue's input).
- * The send() tests run a loopback HTTP server — real bytes, no framework.
+ *
+ * The send() tests run a loopback HTTP server on an ephemeral port — real
+ * bytes, no framework. Deliberately plain java.net rather than
+ * com.sun.net.httpserver: the Android unit-test compile classpath is
+ * android.jar, which has no com.sun.* types (CI caught this — see PR #69).
  */
 class PaymentApiClientTest {
 
     /** Captures what the loopback server actually received. */
-    private class Captured {
+    private class LoopbackServer(private val status: Int) {
+
+        private val serverSocket = ServerSocket(0)
+        private val thread = Thread { serve() }
+
         val auth = AtomicReference<String>("")
         val body = AtomicReference<String>("")
+
+        val baseUrl: String
+            get() = "http://127.0.0.1:${serverSocket.localPort}"
+
+        init {
+            thread.isDaemon = true
+            thread.start()
+        }
+
+        /** Waits for the single request/response exchange to finish. */
+        fun await() {
+            thread.join(5_000)
+        }
+
+        fun shutdown() {
+            try {
+                serverSocket.close()
+            } catch (_: Exception) {
+                // already closed
+            }
+        }
+
+        private fun serve() {
+            try {
+                serverSocket.accept().use { socket ->
+                    val input = socket.getInputStream().buffered()
+                    val header = readHeaders(input)
+                    val lines = header.split("\r\n")
+                    for (line in lines) {
+                        if (line.startsWith("Authorization:", ignoreCase = true)) {
+                            auth.set(line.substringAfter(':').trim())
+                        }
+                    }
+                    val length = lines
+                        .firstOrNull { it.startsWith("Content-Length:", ignoreCase = true) }
+                        ?.substringAfter(':')
+                        ?.trim()
+                        ?.toIntOrNull() ?: 0
+                    body.set(readExactly(input, length))
+
+                    val reason = REASON_PHRASES[status] ?: "Status"
+                    val response =
+                        "HTTP/1.1 $status $reason\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    socket.getOutputStream().write(response.toByteArray(Charsets.ISO_8859_1))
+                    socket.getOutputStream().flush()
+                }
+            } catch (_: Exception) {
+                // Client gave up first — the test's assertion will show it.
+            }
+        }
+
+        /** Reads bytes until CRLF CRLF (start of the HTTP message body). */
+        private fun readHeaders(input: InputStream): String {
+            val out = ByteArrayOutputStream()
+            var state = 0
+            while (state < 4) {
+                val b = input.read()
+                if (b < 0) break
+                out.write(b)
+                state = when (state) {
+                    0 -> if (b == CR) 1 else 0
+                    1 -> if (b == LF) 2 else if (b == CR) 1 else 0
+                    2 -> if (b == CR) 3 else 0
+                    else -> if (b == LF) 4 else if (b == CR) 3 else 0
+                }
+            }
+            return out.toString("ISO-8859-1")
+        }
+
+        /** Reads exactly [length] body bytes (Content-Length framing). */
+        private fun readExactly(input: InputStream, length: Int): String {
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(4096)
+            while (out.size() < length) {
+                val read = input.read(buffer, 0, minOf(buffer.size, length - out.size()))
+                if (read < 0) break
+                out.write(buffer, 0, read)
+            }
+            return out.toString("ISO-8859-1")
+        }
+
+        companion object {
+            private const val CR = '\r'.code
+            private const val LF = '\n'.code
+
+            private val REASON_PHRASES = mapOf(
+                200 to "OK",
+                201 to "Created",
+                400 to "Bad Request",
+                401 to "Unauthorized",
+            )
+        }
     }
 
-    private var server: HttpServer? = null
+    private var server: LoopbackServer? = null
 
     @After
     fun tearDown() {
-        server?.stop(0)
+        server?.shutdown()
         server = null
     }
 
@@ -43,23 +144,8 @@ class PaymentApiClientTest {
             rawBody = rawBody,
         )
 
-    /**
-     * Starts a loopback server answering [status] on the ingest endpoint and
-     * recording the Authorization header + body. Returns the base URL; read
-     * `captured` AFTER the client call.
-     */
-    private fun startServer(status: Int, captured: Captured): String {
-        val httpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        httpServer.createContext(PaymentApiClient.ENDPOINT) { exchange ->
-            captured.auth.set(exchange.requestHeaders.getFirst("Authorization") ?: "")
-            captured.body.set(exchange.requestBody().readBytes().toString(Charsets.UTF_8))
-            exchange.sendResponseHeaders(status, -1)
-            exchange.close()
-        }
-        httpServer.start()
-        server = httpServer
-        return "http://127.0.0.1:${httpServer.address.port}"
-    }
+    private fun start(status: Int): LoopbackServer =
+        LoopbackServer(status).also { server = it }
 
     @Test
     fun `classify maps statuses onto accepted, rejected and failed outcomes`() {
@@ -90,31 +176,28 @@ class PaymentApiClientTest {
 
     @Test
     fun `send posts the payload with the Bearer secret and classifies 201 as accepted`() {
-        val captured = Captured()
-        val baseUrl = startServer(201, captured)
+        val srv = start(201)
 
-        val outcome = PaymentApiClient.send(baseUrl, "reader-secret", item())
+        val outcome = PaymentApiClient.send(srv.baseUrl, "reader-secret", item())
+        srv.await()
 
         assertTrue(outcome is PaymentApiClient.Outcome.Accepted)
-        assertEquals("Bearer reader-secret", captured.auth.get())
-        assertEquals(PaymentApiClient.buildPayload(item()), captured.body.get())
-        assertTrue(captured.body.get().contains("\"trxId\":\"8AC3K2L9P1\""))
-        assertTrue(captured.body.get().contains("\"amountBdt\":500.0"))
+        assertEquals("Bearer reader-secret", srv.auth.get())
+        assertEquals(PaymentApiClient.buildPayload(item()), srv.body.get())
+        assertTrue(srv.body.get().contains("\"trxId\":\"8AC3K2L9P1\""))
+        assertTrue(srv.body.get().contains("\"amountBdt\":500.0"))
     }
 
     @Test
     fun `send classifies 400 as rejected and 401 as failed (payment stays queued)`() {
-        val rejected = Captured()
-        val rejectedUrl = startServer(400, rejected)
-        val rejectedOutcome = PaymentApiClient.send(rejectedUrl, "s", item())
+        val rejected = start(400)
+        val rejectedOutcome = PaymentApiClient.send(rejected.baseUrl, "s", item())
+        rejected.await()
         assertTrue(rejectedOutcome is PaymentApiClient.Outcome.Rejected)
-        // Stop the first server before binding the second (teardown stops the last).
-        server?.stop(0)
-        server = null
 
-        val refused = Captured()
-        val refusedUrl = startServer(401, refused)
-        val refusedOutcome = PaymentApiClient.send(refusedUrl, "s", item())
+        val refused = start(401)
+        val refusedOutcome = PaymentApiClient.send(refused.baseUrl, "s", item())
+        refused.await()
         assertTrue(refusedOutcome is PaymentApiClient.Outcome.Failed)
     }
 }
