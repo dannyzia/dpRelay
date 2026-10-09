@@ -18,7 +18,8 @@ import {
   type Wallet,
   type WalletTransaction,
 } from "../api";
-import { formatPrice } from "../format";
+import { formatPrice } from "../lib/format";
+import { hrefFor } from "../lib/router";
 
 /** Epoch-seconds → a short UTC date for the wallet panels. */
 function shortDate(epochSec: number | null): string {
@@ -436,7 +437,7 @@ export function Apps({
     // The secret for this app is not in this tab (never re-served by the
     // server) — the link screen re-proves it once and stores it here.
     onLinkExisting();
-    window.location.hash = `#/link/${encodeURIComponent(appId)}`;
+    window.location.hash = hrefFor(["link", encodeURIComponent(appId)]);
   };
 
   const verifyBanner: "hidden" | "offer" | "sent" =

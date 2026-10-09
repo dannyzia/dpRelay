@@ -20,7 +20,7 @@ export function CredentialsView(props: {
       <div className="reveal">
         <code data-testid="app-id">{props.appId}</code>
       </div>
-      <h2 style={{ marginTop: 18 }}>App secret</h2>
+      <h2 className="mt-18">App secret</h2>
       <div className="reveal">
         <code data-testid="app-secret">
           {props.revealed ? props.appSecret : mask}
@@ -29,11 +29,11 @@ export function CredentialsView(props: {
           {props.revealed ? "Hide" : "Reveal"}
         </button>
       </div>
-      <p className="muted" style={{ marginTop: 6 }}>
+      <p className="muted mt-6">
         Session-only — these values live in this tab&apos;s storage and are never part of the
         page bundle. Reveal shares your screen; nothing is copied anywhere.
       </p>
-      <h2 style={{ marginTop: 18 }}>Request headers</h2>
+      <h2 className="mt-18">Request headers</h2>
       <pre>{`X-App-Id: ${props.appId}
 X-App-Secret: ${props.revealed ? props.appSecret : mask}`}</pre>
       <p className="muted">

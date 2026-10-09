@@ -8,7 +8,7 @@ import {
   type CreditRequestAccepted,
 } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
-import { formatPrice } from "../format";
+import { formatPrice } from "../lib/format";
 
 /** Pure package list — exported for render tests. */
 export function PackageListView(props: {
@@ -89,7 +89,7 @@ export function CheckoutView(props: {
       >
         <label htmlFor="trxId">bKash TrxID</label>
         <input id="trxId" name="trxId" required spellCheck={false} placeholder="e.g. 9F2K7QX1M" />
-        <div className="inline-actions" style={{ marginTop: 14 }}>
+        <div className="inline-actions mt-14">
           <button type="submit">Submit TrxID</button>
           <button type="button" className="secondary" onClick={props.onBack}>
             Back to packages

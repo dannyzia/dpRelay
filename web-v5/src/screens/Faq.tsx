@@ -79,6 +79,7 @@ export function FaqView(): JSX.Element {
   );
 }
 
+/** Container for the FAQ — static content, so it just renders the view. */
 export function Faq(): JSX.Element {
   return <FaqView />;
 }

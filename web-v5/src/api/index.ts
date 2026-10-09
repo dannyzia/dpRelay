@@ -40,6 +40,7 @@ export interface AppCredentials {
   appSecret: string;
 }
 
+/** Reads this tab's connected app credentials from sessionStorage (null when none). */
 export function getConnectedApp(): AppCredentials | null {
   const appId = sessionStorage.getItem(APP_ID_KEY);
   const appSecret = sessionStorage.getItem(APP_SECRET_KEY);
@@ -47,11 +48,13 @@ export function getConnectedApp(): AppCredentials | null {
   return { appId, appSecret };
 }
 
+/** Stores the app credentials for this tab (sessionStorage — never persisted). */
 export function connectApp(appId: string, appSecret: string): void {
   sessionStorage.setItem(APP_ID_KEY, appId);
   sessionStorage.setItem(APP_SECRET_KEY, appSecret);
 }
 
+/** Drops this tab's app credentials (sign-out / company switch). */
 export function disconnectApp(): void {
   sessionStorage.removeItem(APP_ID_KEY);
   sessionStorage.removeItem(APP_SECRET_KEY);
@@ -60,6 +63,7 @@ export function disconnectApp(): void {
 /** Registered once by App; drops back to the sign-in screen on a 401. */
 let onAppUnauthorized: (() => void) | null = null;
 
+/** Registers the app-plane 401 callback (null unregisters). */
 export function setAppUnauthorizedHandler(handler: (() => void) | null): void {
   onAppUnauthorized = handler;
 }
@@ -501,14 +505,17 @@ export async function resetPassword(token: string, password: string): Promise<vo
 
 const OPERATOR_KEY = "webv5.operatorSecret";
 
+/** Reads the operator secret from sessionStorage (null = not unlocked). */
 export function getOperatorSecret(): string | null {
   return sessionStorage.getItem(OPERATOR_KEY);
 }
 
+/** Stores the operator secret for this tab after a successful unlock. */
 export function setOperatorSecret(secret: string): void {
   sessionStorage.setItem(OPERATOR_KEY, secret);
 }
 
+/** Clears the stored operator secret (401 or explicit lock). */
 export function clearOperatorSecret(): void {
   sessionStorage.removeItem(OPERATOR_KEY);
 }
@@ -516,10 +523,18 @@ export function clearOperatorSecret(): void {
 /** Registered once by the operator shell; returns to the unlock form on 401. */
 let onOperatorRejected: (() => void) | null = null;
 
+/** Registers the operator-plane 401 callback (null unregisters). */
 export function setOperatorRejectedHandler(handler: (() => void) | null): void {
   onOperatorRejected = handler;
 }
 
+/**
+ * Fetches an operator route with `Authorization: Bearer <secret>`; on a 401 it
+ * clears the stored secret and notifies the registered rejection handler.
+ *
+ * @param path route path (starts with `/v5/`).
+ * @param init fetch init — headers are merged with the Authorization header.
+ */
 export async function operatorFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const secret = getOperatorSecret();
   if (secret === null) {

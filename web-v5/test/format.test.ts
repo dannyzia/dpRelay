@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBdt, formatEpochUtc, formatPrice, formatSms, formatStatus } from "../src/format";
+import { formatBdt, formatEpochUtc, formatPrice, formatSms, formatStatus } from "../src/lib/format";
 
 describe("formatEpochUtc", () => {
   it("renders epoch seconds as a fixed UTC stamp", () => {

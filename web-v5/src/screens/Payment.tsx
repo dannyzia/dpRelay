@@ -132,6 +132,7 @@ export function PaymentView(): JSX.Element {
   );
 }
 
+/** Container for the remittance guide — static content, renders the view. */
 export function Payment(): JSX.Element {
   return <PaymentView />;
 }

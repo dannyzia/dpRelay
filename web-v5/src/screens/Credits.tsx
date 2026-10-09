@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { describeError, getCredits, type Credits } from "../api";
-import { formatEpochUtc, formatSms } from "../format";
+import { formatEpochUtc, formatSms } from "../lib/format";
 import { ErrorBanner } from "../components/ErrorBanner";
 
 /** Pure balance view — exported for render tests with fixture data. */

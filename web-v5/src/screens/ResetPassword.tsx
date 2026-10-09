@@ -67,6 +67,7 @@ export function ResetPasswordView(props: {
   );
 }
 
+/** Container: submits the emailed-token password reset and tracks done/error/busy. */
 export function ResetPassword({ token }: { token: string }): JSX.Element {
   const [done, setDone] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
