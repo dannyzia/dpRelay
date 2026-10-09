@@ -338,6 +338,25 @@
         }
       }
     },
+    "/v5/admin/billing/packages/{code}/retire": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "code",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/admin/billing/pricing-conformance": {
       "get": {
         "responses": {
@@ -896,15 +915,8 @@
         }
       }
     },
-    "/v5/admin/payments/config": {
+    "/v5/admin/payments": {
       "get": {
-        "responses": {
-          "200": {
-            "description": "Default Response"
-          }
-        }
-      },
-      "put": {
         "responses": {
           "200": {
             "description": "Default Response"
@@ -912,8 +924,37 @@
         }
       }
     },
-    "/v5/admin/payments": {
-      "get": {
+    "/v5/admin/payments/{id}/approve": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/admin/payments/{id}/reject": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
         "responses": {
           "200": {
             "description": "Default Response"
@@ -930,6 +971,42 @@
             },
             "in": "path",
             "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/admin/config/{key}": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
+      "put": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "key",
             "required": true
           }
         ],
@@ -996,7 +1073,7 @@
         }
       }
     },
-    "/v5/admin/reports/send-log": {
+    "/v5/admin/reports/sends": {
       "get": {
         "responses": {
           "200": {

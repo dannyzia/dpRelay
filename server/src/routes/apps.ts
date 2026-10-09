@@ -202,11 +202,13 @@ const appProvisioningRoutes: FastifyPluginAsync = async (app) => {
         if (trialCount > 0) {
           app.db
             .prepare(
+              // trial_* snapshot (ISSUE-84): the ledger's kind=trial rows read
+              // these — the balance itself is spent away and proves nothing.
               "INSERT INTO app_credits (app_id, otp_sms_remaining, bulk_sms_remaining, " +
-                "otp_expires_at, bulk_expires_at, updated_at) " +
-                "VALUES (?, ?, ?, unixepoch() + ?, unixepoch() + ?, unixepoch())",
+                "otp_expires_at, bulk_expires_at, trial_sms_granted, trial_granted_at, updated_at) " +
+                "VALUES (?, ?, ?, unixepoch() + ?, unixepoch() + ?, ?, unixepoch(), unixepoch())",
             )
-            .run(rowId, trialCount, trialCount, trialTtlSec, trialTtlSec);
+            .run(rowId, trialCount, trialCount, trialTtlSec, trialTtlSec, trialCount);
         }
       })();
     } catch (err) {

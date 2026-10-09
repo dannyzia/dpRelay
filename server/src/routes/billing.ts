@@ -23,7 +23,7 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { asRecord, asString } from "../services/parse.js";
 import { newId } from "../services/crypto.js";
-import { awardPendingTransaction } from "../services/credits.js";
+import { awardPendingTransaction, UNIT_PRICE_BDT } from "../services/credits.js";
 
 /** Parses an ISO-8601 date/datetime query value into epoch SECONDS (null if absent/invalid). */
 function parseDateBound(value: unknown): number | null {
@@ -550,14 +550,19 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * STAGE F5 (ISSUE-83): retire a package. Hard-delete is FORBIDDEN — every
-   * credit_transactions row references its package forever (audit history),
-   * so DELETE always soft-retires (is_active = 0) regardless of references,
-   * per the strictest reading of the acceptance criterion. A second retire is
-   * an idempotent no-op; reactivation goes through PATCH/upsert (isActive).
+   * STAGE F5 (ISSUE-83) → F5b (ISSUE-84 spec): retire a package. Hard-delete
+   * is FORBIDDEN — every credit_transactions row references its package
+   * forever (audit history), so retire always soft-retires (is_active = 0)
+   * regardless of references. A second retire is an idempotent no-op;
+   * reactivation goes through PATCH/upsert (isActive). The spec names the
+   * POST …/retire endpoint; DELETE remains as the ISSUE-83 alias (same
+   * behaviour, one implementation below).
    */
-  app.delete("/v5/admin/billing/packages/:code", { preHandler: [app.requireOperator] }, async (request, reply) => {
-    const params = asRecord(request.params) ?? {};
+  async function retireByCode(
+    request: { params: unknown },
+    reply: FastifyReply,
+  ): Promise<FastifyReply> {
+    const params = (request.params ?? {}) as { code?: unknown };
     const packageCode = asString(params.code, 64);
     if (packageCode === null || !PACKAGE_CODE_PATTERN.test(packageCode)) {
       return reply.code(400).send({
@@ -576,8 +581,18 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       "UPDATE packages SET is_active = 0, updated_at = unixepoch() WHERE package_code = ? AND is_active != 0",
     ).run(packageCode);
     app.log.info({ packageCode }, "package retired");
-    return { ok: true, packageCode, isActive: false };
-  });
+    return reply.send({ ok: true, packageCode, isActive: false });
+  }
+
+  app.post(
+    "/v5/admin/billing/packages/:code/retire",
+    { preHandler: [app.requireOperator] },
+    async (request, reply) => retireByCode(request, reply),
+  );
+
+  app.delete("/v5/admin/billing/packages/:code", { preHandler: [app.requireOperator] }, async (request, reply) =>
+    retireByCode(request, reply),
+  );
 
   /**
    * STAGE F5 (ISSUE-83): full package directory for the panel — unlike the
@@ -629,7 +644,6 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     "/v5/admin/billing/pricing-conformance",
     { preHandler: [app.requireOperator] },
     async () => {
-      const UNIT_PRICE_BDT = 0.2;
       const rows = db
         .prepare(
           "SELECT package_code, name, sms_quota, price_bdt, is_active FROM packages ORDER BY package_code",

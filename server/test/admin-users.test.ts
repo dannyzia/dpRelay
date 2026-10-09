@@ -1,10 +1,13 @@
 /**
- * STAGE F5 (ISSUE-83): user withhold.
- * Ordered invariants: POST /v5/admin/users/:id/disable + /enable (operator
- * gated); withheld = login blocked (generic 401, anti-enumeration), session
+ * STAGE F5 (ISSUE-83) → F5b (ISSUE-84 spec): user withhold.
+ * Ordered invariants: disable REQUIRES {reason} (400 otherwise), stores it on
+ * the row (directory badge/tooltip), REVOKES all user_sessions rows eagerly,
+ * and writes an admin_audit row per action (operator + timestamp + reason);
+ * withheld = login blocked (generic 401, anti-enumeration), session
  * resolution rejected, app-plane sends rejected with the DISTINCT
  * account_withheld code; balances are NEVER touched by withhold; an
- * operator-provisioned app (owner NULL) is unaffected; enable restores.
+ * operator-provisioned app (owner NULL) is unaffected; enable restores and
+ * clears the reason.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
@@ -56,6 +59,14 @@ function otpRemaining(appRowId: string): number {
     .prepare("SELECT otp_sms_remaining FROM app_credits WHERE app_id = ?")
     .get(appRowId) as { otp_sms_remaining: number } | undefined;
   return row?.otp_sms_remaining ?? -1;
+}
+
+/** Live dashboard session rows for the seeded user (eager-revocation proof). */
+function sessionCount(): number {
+  const row = app.db
+    .prepare("SELECT COUNT(*) AS n FROM user_sessions WHERE user_id = ?")
+    .get(userId) as { n: number };
+  return row.n;
 }
 
 function op(method: "GET" | "POST", url: string, payload?: unknown) {
@@ -124,10 +135,23 @@ describe("user withhold lifecycle", () => {
     expect(me).toMatchObject({ email: EMAIL, disabled: false, appCount: 1 });
     expect(me?.apps.map((a) => a.id)).toEqual([ownedAppId]);
 
+    // A session row exists before the withhold (register opened one).
+    expect(sessionCount()).toBeGreaterThan(0);
+
+    // Reason is REQUIRED (spec): no silent withhold.
+    const noReason = await op("POST", `/v5/admin/users/${userId}/disable`, {});
+    expect(noReason.statusCode).toBe(400);
+    expect(noReason.json()).toMatchObject({ code: "reason_required" });
+
     // Withhold.
-    const disable = await op("POST", `/v5/admin/users/${userId}/disable`);
+    const disable = await op("POST", `/v5/admin/users/${userId}/disable`, {
+      reason: "chargeback investigation",
+    });
     expect(disable.statusCode).toBe(200);
-    expect(disable.json()).toMatchObject({ ok: true, disabled: true });
+    expect(disable.json()).toMatchObject({ ok: true, disabled: true, reason: "chargeback investigation" });
+
+    // EAGER session revocation: the rows are GONE, not merely rejected later.
+    expect(sessionCount()).toBe(0);
 
     // Login blocked — generic envelope (anti-enumeration: no disabled flag leaks).
     const login = await app.inject({
@@ -161,16 +185,39 @@ describe("user withhold lifecycle", () => {
     const unaffected = await sendOtp(other.cred, "+8801555000003");
     expect(unaffected.statusCode).toBe(201);
 
-    // Directory now reports withheld.
+    // Directory now reports withheld, with the stored reason for the tooltip.
     const afterList = (await op("GET", "/v5/admin/users")).json() as {
-      users: { id: string; disabled: boolean }[];
+      users: { id: string; disabled: boolean; disabledReason: string | null; disabledAt: number | null }[];
     };
-    expect(afterList.users.find((u) => u.id === userId)?.disabled).toBe(true);
+    const withheld = afterList.users.find((u) => u.id === userId);
+    expect(withheld?.disabled).toBe(true);
+    expect(withheld?.disabledReason).toBe("chargeback investigation");
+    expect(withheld?.disabledAt).toBeGreaterThan(0);
 
-    // Enable restores login and sends.
+    // Enable restores login and sends, and clears the reason.
     const enable = await op("POST", `/v5/admin/users/${userId}/enable`);
     expect(enable.statusCode).toBe(200);
     expect(enable.json()).toMatchObject({ ok: true, disabled: false });
+
+    const cleared = (await op("GET", "/v5/admin/users")).json() as {
+      users: { id: string; disabledReason: string | null; disabledAt: number | null }[];
+    };
+    expect(cleared.users.find((u) => u.id === userId)).toMatchObject({
+      disabledReason: null,
+      disabledAt: null,
+    });
+
+    // Audit trail: both actions recorded with operator + reason (set
+    // semantics — audit ids are UUIDs, so same-second order is not asserted).
+    const audits = app.db
+      .prepare("SELECT action, reason, actor, created_at FROM admin_audit WHERE subject_id = ? AND subject_type = 'user'")
+      .all(userId) as { action: string; reason: string | null; actor: string; created_at: number }[];
+    expect(audits).toHaveLength(2);
+    const withholdAudit = audits.find((a) => a.action === "user.withhold");
+    const liftAudit = audits.find((a) => a.action === "user.lift");
+    expect(withholdAudit).toMatchObject({ actor: "operator", reason: "chargeback investigation" });
+    expect(withholdAudit?.created_at).toBeGreaterThan(0);
+    expect(liftAudit).toMatchObject({ actor: "operator", reason: null });
 
     const loginAgain = await app.inject({
       method: "POST",
@@ -184,20 +231,31 @@ describe("user withhold lifecycle", () => {
 });
 
 describe("admin user routes: validation and gate", () => {
-  it("404s unknown users, 400s missing ids, and requires the operator secret", async () => {
-    const unknown = await op("POST", "/v5/admin/users/no-such-user/disable");
+  it("400s missing reasons, 404s unknown users, 400s missing ids, and requires the operator secret", async () => {
+    const noReason = await op("POST", `/v5/admin/users/${userId}/disable`);
+    expect(noReason.statusCode).toBe(400);
+    expect(noReason.json()).toMatchObject({ code: "reason_required" });
+    const blankReason = await op("POST", `/v5/admin/users/${userId}/disable`, { reason: "  " });
+    expect(blankReason.statusCode).toBe(400);
+    expect(blankReason.json()).toMatchObject({ code: "reason_required" });
+
+    const unknown = await op("POST", "/v5/admin/users/no-such-user/disable", { reason: "n/a" });
     expect(unknown.statusCode).toBe(404);
     expect(unknown.json()).toMatchObject({ code: "user_not_found" });
 
-    const noAuth = await app.inject({ method: "POST", url: `/v5/admin/users/${userId}/disable` });
+    const noAuth = await app.inject({
+      method: "POST",
+      url: `/v5/admin/users/${userId}/disable`,
+      payload: { reason: "n/a" },
+    });
     expect(noAuth.statusCode).toBe(401);
 
     const listNoAuth = await app.inject({ method: "GET", url: "/v5/admin/users" });
     expect(listNoAuth.statusCode).toBe(401);
 
-    // Idempotent re-disable is fine.
-    expect((await op("POST", `/v5/admin/users/${userId}/disable`)).statusCode).toBe(200);
-    expect((await op("POST", `/v5/admin/users/${userId}/disable`)).statusCode).toBe(200);
+    // Idempotent re-disable is fine (reason travels every time).
+    expect((await op("POST", `/v5/admin/users/${userId}/disable`, { reason: "still withheld" })).statusCode).toBe(200);
+    expect((await op("POST", `/v5/admin/users/${userId}/disable`, { reason: "still withheld" })).statusCode).toBe(200);
     expect((await op("POST", `/v5/admin/users/${userId}/enable`)).statusCode).toBe(200);
   });
 });

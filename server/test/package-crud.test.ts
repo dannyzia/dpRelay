@@ -206,3 +206,37 @@ describe("DELETE /v5/admin/billing/packages/:code (retire only)", () => {
     expect(trx).toEqual({ status: "approved", sms_quota: 100 });
   });
 });
+
+describe("POST /v5/admin/billing/packages/:code/retire (ISSUE-84 spec endpoint)", () => {
+  it("soft-retires exactly like the DELETE alias: row survives, catalog hides it, idempotent, gated", async () => {
+    const up = await op("POST", "/v5/admin/billing/packages", PKG);
+    expect(up.statusCode).toBe(201);
+
+    const retire = await op("POST", "/v5/admin/billing/packages/otp100/retire");
+    expect(retire.statusCode).toBe(200);
+    expect(retire.json()).toMatchObject({ ok: true, packageCode: "otp100", isActive: false });
+    expect(packageRow("otp100")?.is_active).toBe(0);
+
+    // Row survives (hard-delete forbidden) and the public catalog hides it.
+    expect(packageRow("otp100")).toBeDefined();
+    const catalog = (await app.inject({ method: "GET", url: "/v5/billing/packages" })).json() as {
+      packages: unknown[];
+    };
+    expect(catalog.packages).toEqual([]);
+
+    // Idempotent second retire; the admin directory still lists it as retired.
+    const again = await op("POST", "/v5/admin/billing/packages/otp100/retire");
+    expect(again.statusCode).toBe(200);
+    const dir = (await op("GET", "/v5/admin/billing/packages")).json() as {
+      packages: { packageCode: string; isActive: boolean }[];
+    };
+    expect(dir.packages.find((p) => p.packageCode === "otp100")?.isActive).toBe(false);
+
+    // Unknown code 404s; operator gate holds; DELETE stays a working alias.
+    expect((await op("POST", "/v5/admin/billing/packages/nope/retire")).statusCode).toBe(404);
+    const noAuth = await app.inject({ method: "POST", url: "/v5/admin/billing/packages/otp100/retire" });
+    expect(noAuth.statusCode).toBe(401);
+    expect((await op("POST", "/v5/admin/billing/packages/otp100/retire")).statusCode).toBe(200);
+    expect((await op("DELETE", "/v5/admin/billing/packages/otp100")).statusCode).toBe(200);
+  });
+});

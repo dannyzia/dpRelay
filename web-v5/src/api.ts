@@ -566,13 +566,36 @@ export async function listOversightCampaigns(status?: string): Promise<{
   return { campaigns: body.campaigns, nextCursor: body.nextCursor };
 }
 
-// ── STAGE F5 (ISSUE-83): admin operations — payments, packages, users, reports ──
+// ── STAGE F5 (ISSUE-83) → F5b (ISSUE-84 spec): admin operations ───────────
 
-/** Tunable payment-match parameters (server: payment_match_config, migration 014). */
+/** Tunable payment-match parameters (server: admin_config rows, migration 014). */
 export interface MatchConfig {
-  toleranceBdt: number;
+  windowMin: number;
   windowSec: number;
+  toleranceBdt: number;
   updatedAt?: number;
+}
+
+/** The two whitelisted config keys (server: routes/admin-config.ts). */
+export type AdminConfigKey = "payment_match_window_min" | "payment_match_tolerance_bdt";
+
+export interface AdminConfigValue {
+  key: string;
+  value: number;
+  updatedAt: number | null;
+}
+
+/** GET /v5/admin/config/:key — whitelist enforced server-side (404 otherwise). */
+export async function getAdminConfig(key: AdminConfigKey): Promise<AdminConfigValue> {
+  return operatorFetch<AdminConfigValue & { ok: true }>(`/v5/admin/config/${key}`);
+}
+
+/** PUT /v5/admin/config/:key — body { value } (per-key integer bounds server-side). */
+export async function putAdminConfig(key: AdminConfigKey, value: number): Promise<AdminConfigValue> {
+  return operatorFetch<AdminConfigValue & { ok: true }>(`/v5/admin/config/${key}`, {
+    method: "PUT",
+    body: JSON.stringify({ value }),
+  });
 }
 
 export interface PaymentCandidate {
@@ -583,9 +606,7 @@ export interface PaymentCandidate {
   requestedAt: number;
   deltaBdt: number;
   timeDeltaSec: number;
-}
-
-export interface PaymentSmsItem {
+}export interface PaymentSmsItem {
   id: string;
   sender: string;
   provider: string;
@@ -593,43 +614,65 @@ export interface PaymentSmsItem {
   amountBdt: number;
   receivedAt: number;
   createdAt: number;
+  /** Spec match state: unmatched | matched (proposed) | approved | rejected. */
+  status: "unmatched" | "matched" | "approved" | "rejected";
+  /** Stored reject reason (shown on the row), null unless rejected. */
+  reason: string | null;
   matched: { transactionId: string; status: string; appId: string } | null;
   candidates: PaymentCandidate[];
   ambiguous: boolean;
 }
 
-/** GET /v5/admin/payments — ingested payment SMS + candidates under the current config. */
-export async function listPayments(): Promise<{ config: MatchConfig; payments: PaymentSmsItem[] }> {
+/** GET /v5/admin/payments — spec filters: status + received-at window (from/to, epoch s). */
+export async function listPayments(opts: {
+  status?: "unmatched" | "matched" | "approved" | "rejected";
+  from?: number;
+  to?: number;
+} = {}): Promise<{ config: MatchConfig; payments: PaymentSmsItem[] }> {
+  const params = new URLSearchParams();
+  if (opts.status !== undefined) params.set("status", opts.status);
+  if (opts.from !== undefined) params.set("from", String(opts.from));
+  if (opts.to !== undefined) params.set("to", String(opts.to));
+  const qs = params.toString();
   const body = await operatorFetch<{ ok: true; config: MatchConfig; payments: PaymentSmsItem[] }>(
-    "/v5/admin/payments",
+    `/v5/admin/payments${qs ? `?${qs}` : ""}`,
   );
   return { config: body.config, payments: body.payments };
 }
 
-/** PUT /v5/admin/payments/config — operator-tunable tolerance/window (at least one field). */
-export async function updateMatchConfig(cfg: {
-  toleranceBdt?: number;
-  windowSec?: number;
-}): Promise<MatchConfig> {
-  const body = await operatorFetch<MatchConfig & { ok: true }>("/v5/admin/payments/config", {
-    method: "PUT",
-    body: JSON.stringify(cfg),
-  });
-  return { toleranceBdt: body.toleranceBdt, windowSec: body.windowSec, updatedAt: body.updatedAt };
+/** Award outcome shared by approve/attach. */
+export interface PaymentAward {
+  transactionId: string;
+  status: string;
+  newOtpBalance: number;
+  newBulkBalance: number;
 }
 
-/** POST /v5/admin/payments/:id/attach — one-click confirm; transactionId is the operator's explicit choice. */
+/** POST /v5/admin/payments/:id/approve — one click awards the proposed/attached transaction. */
+export async function approvePayment(paymentId: string): Promise<PaymentAward> {
+  return operatorFetch<PaymentAward & { ok: true }>(
+    `/v5/admin/payments/${encodeURIComponent(paymentId)}/approve`,
+    { method: "POST" },
+  );
+}
+
+/** POST /v5/admin/payments/:id/reject — reason required; stores it on the row. */
+export async function rejectPayment(
+  paymentId: string,
+  reason: string,
+): Promise<{ status: string; reason: string }> {
+  return operatorFetch<{ ok: true; status: string; reason: string }>(
+    `/v5/admin/payments/${encodeURIComponent(paymentId)}/reject`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
+
+/** POST /v5/admin/payments/:id/attach — explicit transactionId = the operator's ambiguity resolution. */
 export async function attachPayment(
   paymentId: string,
   transactionId: string,
-): Promise<{ transactionId: string; status: string; newOtpBalance: number; newBulkBalance: number }> {
-  return operatorFetch<{
-    ok: true;
-    transactionId: string;
-    status: string;
-    newOtpBalance: number;
-    newBulkBalance: number;
-  }>(`/v5/admin/payments/${encodeURIComponent(paymentId)}/attach`, {
+): Promise<PaymentAward> {
+  return operatorFetch<PaymentAward & { ok: true }>(`/v5/admin/payments/${encodeURIComponent(paymentId)}/attach`, {
     method: "POST",
     body: JSON.stringify({ transactionId }),
   });
@@ -678,10 +721,10 @@ export async function patchAdminPackage(
   });
 }
 
-/** DELETE /v5/admin/billing/packages/:code — retires (soft, idempotent; hard-delete is forbidden). */
+/** POST /v5/admin/billing/packages/:code/retire — spec endpoint (soft, idempotent; hard-delete is forbidden). */
 export async function retireAdminPackage(packageCode: string): Promise<void> {
-  await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}`, {
-    method: "DELETE",
+  await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}/retire`, {
+    method: "POST",
   });
 }
 
@@ -689,6 +732,9 @@ export interface AdminUserItem {
   id: string;
   email: string;
   disabled: boolean;
+  /** Stored withhold reason (spec: badge + tooltip on the withheld row). */
+  disabledReason: string | null;
+  disabledAt: number | null;
   createdAt: number;
   appCount: number;
   apps: { id: string; appId: string; name: string; revoked: boolean }[];
@@ -700,73 +746,97 @@ export async function listAdminUsers(): Promise<AdminUserItem[]> {
   return body.users;
 }
 
-/** POST /v5/admin/users/:id/disable | /enable — the withhold toggle (credits untouched). */
-export async function setAdminUserDisabled(userId: string, disabled: boolean): Promise<void> {
+/**
+ * POST /v5/admin/users/:id/disable | /enable — the withhold toggle (credits
+ * untouched). The reason is REQUIRED when disabling (spec): the server 400s
+ * without it, sessions are revoked eagerly, and the action is audited.
+ */
+export async function setAdminUserDisabled(
+  userId: string,
+  disabled: boolean,
+  reason?: string,
+): Promise<void> {
   await operatorFetch(
     `/v5/admin/users/${encodeURIComponent(userId)}/${disabled ? "disable" : "enable"}`,
-    { method: "POST" },
+    {
+      method: "POST",
+      ...(disabled ? { body: JSON.stringify({ reason: reason ?? "" }) } : {}),
+    },
   );
 }
 
+/** One ledger row (spec columns + additive identity fields for the screen). */
 export interface LedgerRow {
-  transactionId: string;
+  /** Stable row identity (purchase id | trial:<app> | <app>:<kind>:<day>) — the React key. */
+  id: string;
+  timestamp: number;
   appId: string;
-  appName: string;
+  appName: string | null;
   ownerEmail: string | null;
+  kind: string; // purchase | trial | spend-otp | spend-bulk
   packageCode: string;
-  packageType: string;
-  smsQuota: number;
+  qty: number;
   amountBdt: number;
-  status: string;
   trxId: string | null;
-  requestedAt: number;
-  resolvedAt: number | null;
-  resolvedBy: string | null;
 }
 
 export interface LedgerReport {
   from: number;
   to: number;
   rows: LedgerRow[];
+  nextCursor: string | null;
   totals: { packageType: string; status: string; count: number; amountBdt: number; grantedSms: number }[];
 }
 
+/** One send-log row (spec: timestamp | app | kind | recipient | ref | status | campaign-name). */
 export interface SendLogRow {
+  timestamp: number;
   messageId: string;
   appId: string | null;
   appName: string | null;
+  kind: string; // otp | bulk | other (other = legacy unlinked)
   recipient: string;
-  status: string;
+  ref: string | null; // sessionId | campaignId
+  status: string; // sent | verified | expired | failed | pending (in-flight)
+  campaignName: string | null;
   error: string | null;
-  createdAt: number;
   resultAt: number | null;
-  source: string;
-  sourceId: string | null;
 }
 
-/** GET /v5/admin/reports/ledger — on-screen JSON (CSV is the only EXPORT, see downloadOperatorCsv). */
-export async function getLedgerReport(params: { from?: number; to?: number } = {}): Promise<LedgerReport> {
-  const qs = new URLSearchParams();
-  if (params.from !== undefined) qs.set("from", String(params.from));
-  if (params.to !== undefined) qs.set("to", String(params.to));
-  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
-  const body = await operatorFetch<LedgerReport & { ok: true }>(`/v5/admin/reports/ledger${suffix}`);
-  return { from: body.from, to: body.to, rows: body.rows, totals: body.totals };
-}
-
-/** GET /v5/admin/reports/send-log — recipient numbers are PII: operator-only, no customer route. */
-export async function getSendLog(params: {
+/** GET /v5/admin/reports/ledger — cursor-paginated (max 100/page); CSV via downloadOperatorCsv. */
+export async function getLedgerReport(params: {
+  appId?: string;
   from?: number;
   to?: number;
-  appId?: string;
-} = {}): Promise<SendLogRow[]> {
+  cursor?: string;
+} = {}): Promise<LedgerReport> {
   const qs = new URLSearchParams();
+  if (params.appId !== undefined && params.appId !== "") qs.set("appId", params.appId);
   if (params.from !== undefined) qs.set("from", String(params.from));
   if (params.to !== undefined) qs.set("to", String(params.to));
-  if (params.appId !== undefined && params.appId !== "") qs.set("appId", params.appId);
+  if (params.cursor !== undefined && params.cursor !== "") qs.set("cursor", params.cursor);
   const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
-  const body = await operatorFetch<{ ok: true; rows: SendLogRow[] }>(`/v5/admin/reports/send-log${suffix}`);
-  return body.rows;
+  const body = await operatorFetch<LedgerReport & { ok: true }>(`/v5/admin/reports/ledger${suffix}`);
+  return { from: body.from, to: body.to, rows: body.rows, nextCursor: body.nextCursor, totals: body.totals };
+}
+
+/** GET /v5/admin/reports/sends (spec path) — cursor-paginated; recipient numbers are PII: operator-only. */
+export async function getSendLog(params: {
+  appId?: string;
+  from?: number;
+  to?: number;
+  cursor?: string;
+} = {}): Promise<{ rows: SendLogRow[]; nextCursor: string | null }> {
+  const qs = new URLSearchParams();
+  if (params.appId !== undefined && params.appId !== "") qs.set("appId", params.appId);
+  if (params.from !== undefined) qs.set("from", String(params.from));
+  if (params.to !== undefined) qs.set("to", String(params.to));
+  if (params.cursor !== undefined && params.cursor !== "") qs.set("cursor", params.cursor);
+  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
+  const body = await operatorFetch<{ ok: true; rows: SendLogRow[]; nextCursor: string | null }>(
+    `/v5/admin/reports/sends${suffix}`,
+  );
+  return { rows: body.rows, nextCursor: body.nextCursor };
 }
 
 /**

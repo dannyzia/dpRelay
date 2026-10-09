@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  approvePayment,
   attachPayment,
   clearOperatorSecret,
   downloadOperatorCsv,
+  getAdminConfig,
+  getLedgerReport,
   getOperatorSecret,
   getSendLog,
   listAdminPackages,
@@ -11,12 +14,13 @@ import {
   listPendingTransactions,
   operatorFetch,
   patchAdminPackage,
+  putAdminConfig,
+  rejectPayment,
   resolveTransaction,
   retireAdminPackage,
   setAdminUserDisabled,
   setOperatorRejectedHandler,
   setOperatorSecret,
-  updateMatchConfig,
 } from "../src/api";
 
 function jsonRes(body: unknown, status = 200): Response {
@@ -166,12 +170,12 @@ describe("F5 admin endpoints", () => {
     setOperatorRejectedHandler(null);
   });
 
-  it("listPayments parses config + payment items", async () => {
+  it("listPayments parses the new config shape + payment status/reason, forwarding filters", async () => {
     setOperatorSecret("op-secret");
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
       jsonRes({
         ok: true,
-        config: { toleranceBdt: 100, windowSec: 604800 },
+        config: { windowMin: 30, windowSec: 1800, toleranceBdt: 0 },
         payments: [
           {
             id: "p1",
@@ -181,6 +185,8 @@ describe("F5 admin endpoints", () => {
             amountBdt: 200,
             receivedAt: 1791400000,
             createdAt: 1791400000,
+            status: "rejected",
+            reason: "wrong sender",
             matched: null,
             candidates: [],
             ambiguous: false,
@@ -190,24 +196,57 @@ describe("F5 admin endpoints", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const res = await listPayments();
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/payments");
-    expect(res.config).toMatchObject({ toleranceBdt: 100, windowSec: 604800 });
-    expect(res.payments[0]).toMatchObject({ txnId: "TRXAAA1111", matched: null });
+    const res = await listPayments({ status: "rejected", from: 100, to: 200 });
+    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/payments?status=rejected&from=100&to=200");
+    expect(res.config).toMatchObject({ windowMin: 30, windowSec: 1800, toleranceBdt: 0 });
+    expect(res.payments[0]).toMatchObject({ txnId: "TRXAAA1111", status: "rejected", reason: "wrong sender" });
+
+    // No filters → bare path (no dangling query string).
+    await listPayments();
+    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/payments");
   });
 
-  it("updateMatchConfig PUTs only the provided tunable fields", async () => {
+  it("getAdminConfig GETs and putAdminConfig PUTs { value } on the whitelisted key path", async () => {
     setOperatorSecret("op-secret");
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
-      jsonRes({ ok: true, toleranceBdt: 250, windowSec: 86400, updatedAt: 5 }),
+      jsonRes({ ok: true, key: "payment_match_window_min", value: 45, updatedAt: 7 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const cfg = await updateMatchConfig({ toleranceBdt: 250, windowSec: 86400 });
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const cfg = await getAdminConfig("payment_match_window_min");
+    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/config/payment_match_window_min");
+    expect(cfg).toMatchObject({ key: "payment_match_window_min", value: 45, updatedAt: 7 });
+
+    const saved = await putAdminConfig("payment_match_window_min", 45);
+    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/config/payment_match_window_min");
+    const init = fetchMock.mock.calls[1][1] as RequestInit;
     expect(init.method).toBe("PUT");
-    expect(JSON.parse(init.body as string)).toEqual({ toleranceBdt: 250, windowSec: 86400 });
-    expect(cfg).toMatchObject({ toleranceBdt: 250, windowSec: 86400 });
+    expect(JSON.parse(init.body as string)).toEqual({ value: 45 });
+    expect(saved.value).toBe(45);
+  });
+
+  it("approvePayment posts bodylessly; rejectPayment carries the required reason", async () => {
+    setOperatorSecret("op-secret");
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({ ok: true, transactionId: "txn-1", status: "approved", newOtpBalance: 200, newBulkBalance: 0 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const approved = await approvePayment("payment-1");
+    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/payments/payment-1/approve");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+    expect(approved.newOtpBalance).toBe(200);
+
+    const fetchMock2 = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({ ok: true, status: "rejected", reason: "duplicate" }),
+    );
+    vi.stubGlobal("fetch", fetchMock2);
+    const rejected = await rejectPayment("payment-1", "duplicate");
+    expect(fetchMock2.mock.calls[0][0]).toBe("/v5/admin/payments/payment-1/reject");
+    const init = fetchMock2.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ reason: "duplicate" });
+    expect(rejected).toMatchObject({ status: "rejected", reason: "duplicate" });
   });
 
   it("attachPayment posts the explicit transactionId (the operator's ambiguity resolution)", async () => {
@@ -240,11 +279,11 @@ describe("F5 admin endpoints", () => {
     expect(JSON.parse(patchInit.body as string)).toEqual({ priceBdt: 250 });
 
     await retireAdminPackage("otp100");
-    expect(fetchMock.mock.calls[2][0]).toBe("/v5/admin/billing/packages/otp100");
-    expect((fetchMock.mock.calls[2][1] as RequestInit).method).toBe("DELETE");
+    expect(fetchMock.mock.calls[2][0]).toBe("/v5/admin/billing/packages/otp100/retire");
+    expect((fetchMock.mock.calls[2][1] as RequestInit).method).toBe("POST");
   });
 
-  it("user withhold toggles hit disable/enable with POST", async () => {
+  it("user withhold toggles hit disable (with reason body) / enable with POST", async () => {
     setOperatorSecret("op-secret");
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => jsonRes({ ok: true, users: [] }));
     vi.stubGlobal("fetch", fetchMock);
@@ -252,22 +291,66 @@ describe("F5 admin endpoints", () => {
     const users = await listAdminUsers();
     expect(users).toEqual([]);
 
-    await setAdminUserDisabled("user-1", true);
+    await setAdminUserDisabled("user-1", true, "chargeback investigation");
     expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/users/user-1/disable");
-    expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe("POST");
+    const disableInit = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(disableInit.method).toBe("POST");
+    expect(JSON.parse(disableInit.body as string)).toEqual({ reason: "chargeback investigation" });
 
     await setAdminUserDisabled("user-1", false);
     expect(fetchMock.mock.calls[2][0]).toBe("/v5/admin/users/user-1/enable");
+    expect((fetchMock.mock.calls[2][1] as RequestInit).body).toBeUndefined();
   });
 
-  it("getSendLog forwards the appId filter and window", async () => {
+  it("getSendLog hits the spec /sends path with filters and parses rows + cursor", async () => {
     setOperatorSecret("op-secret");
-    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => jsonRes({ ok: true, rows: [] }));
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({ ok: true, rows: [], nextCursor: "1791400000:m1" }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
-    const rows = await getSendLog({ from: 100, to: 200, appId: "app_x" });
-    expect(rows).toEqual([]);
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/reports/send-log?from=100&to=200&appId=app_x");
+    const res = await getSendLog({ from: 100, to: 200, appId: "app_x" });
+    expect(res.rows).toEqual([]);
+    expect(res.nextCursor).toBe("1791400000:m1");
+    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/reports/sends?appId=app_x&from=100&to=200");
+
+    await getSendLog({ cursor: "1791400000:m1" });
+    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/reports/sends?cursor=1791400000%3Am1");
+  });
+
+  it("getLedgerReport forwards appId/window/cursor and parses the new report shape", async () => {
+    setOperatorSecret("op-secret");
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({
+        ok: true,
+        from: 1,
+        to: 2,
+        rows: [
+          {
+            id: "row-1",
+            timestamp: 1791400000,
+            appId: "app_owned",
+            appName: "Owned",
+            ownerEmail: "c@example.test",
+            kind: "purchase",
+            packageCode: "otp100",
+            qty: 100,
+            amountBdt: 200,
+            trxId: null,
+          },
+        ],
+        nextCursor: "1791400000:row-1",
+        totals: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await getLedgerReport({ appId: "app_owned", from: 1, to: 2, cursor: "c:1" });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/v5/admin/reports/ledger?appId=app_owned&from=1&to=2&cursor=c%3A1",
+    );
+    expect(res.rows[0]).toMatchObject({ kind: "purchase", qty: 100, amountBdt: 200 });
+    expect(res.nextCursor).toBe("1791400000:row-1");
   });
 
   it("downloadOperatorCsv fetches the CSV export with the operator secret and hands it to a blob URL", async () => {

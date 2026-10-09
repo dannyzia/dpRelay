@@ -18,6 +18,14 @@ import type { FastifyInstance } from "fastify";
 /** better-sqlite3 handle as exposed on the fastify instance. */
 type Db = FastifyInstance["db"];
 
+/**
+ * Owner's unit price per SMS in BDT (pricing decision Sep 27). Single
+ * definition shared by the pricing-conformance report (routes/billing.ts)
+ * and the spend rows of the operator ledger (routes/admin-reports.ts) — two
+ * copies of a money constant is how they drift.
+ */
+export const UNIT_PRICE_BDT = 0.2;
+
 /** Snapshot row the award reads (fetched while the transaction was pending). */
 export interface AwardableTransaction {
   id: string;

@@ -9,10 +9,12 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import {
+  approvePayment,
   attachPayment,
   clearOperatorSecret,
   describeError,
   downloadOperatorCsv,
+  getAdminConfig,
   getAdminMetrics,
   getLedgerReport,
   getMailConfig,
@@ -25,6 +27,8 @@ import {
   listPayments,
   listPendingTransactions,
   patchAdminPackage,
+  putAdminConfig,
+  rejectPayment,
   request,
   retireAdminPackage,
   revokeAdminApp,
@@ -35,15 +39,14 @@ import {
   testMailConfig,
   unrevokeAdminApp,
   updateMailConfig,
-  updateMatchConfig,
   upsertAdminPackage,
   type AdminApp,
+  type AdminConfigKey,
   type AdminMetrics,
   type AdminPackage,
   type AdminUserItem,
   type LedgerReport,
   type MailConfigView,
-  type MatchConfig,
   type OversightCampaign,
   type PaymentSmsItem,
   type PendingTransaction,
@@ -53,7 +56,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { formatBdt, formatEpochUtc, formatStatus } from "../format";
 import { hrefFor } from "../router";
 
-type OperatorTab = "billing" | "apps" | "metrics" | "campaigns" | "mail" | "payments" | "packages" | "users" | "reports";
+type OperatorTab = "billing" | "apps" | "metrics" | "campaigns" | "mail" | "payments" | "packages" | "users" | "reports" | "settings";
 
 const TABS: { id: OperatorTab; label: string }[] = [
   { id: "billing", label: "Billing queue" },
@@ -61,6 +64,7 @@ const TABS: { id: OperatorTab; label: string }[] = [
   { id: "packages", label: "Packages" },
   { id: "users", label: "Users" },
   { id: "reports", label: "Reports" },
+  { id: "settings", label: "Settings" },
   { id: "apps", label: "Apps" },
   { id: "metrics", label: "Metrics" },
   { id: "campaigns", label: "Campaigns" },
@@ -612,12 +616,15 @@ export function MailSettings(): JSX.Element {
  * cannot submit a transaction the operator did not pick. Exported for tests.
  */
 export function PaymentsView(props: {
-  config: MatchConfig | null;
   payments: PaymentSmsItem[];
+  pending: PendingTransaction[];
+  filters: { status: string; from: string; to: string };
   error: string | null;
   note: string | null;
   busy: boolean;
-  onConfigSave: (cfg: { toleranceBdt: number; windowSec: number }) => void;
+  onFilter: (status: string, from: string, to: string) => void;
+  onApprove: (paymentId: string) => void;
+  onReject: (paymentId: string) => void;
   onAttach: (paymentId: string, transactionId: string) => void;
 }): JSX.Element {
   return (
@@ -625,60 +632,50 @@ export function PaymentsView(props: {
       {props.error !== null && <ErrorBanner message={props.error} />}
       {props.note !== null && <p className="ok-note">{props.note}</p>}
       <section className="card">
-        <h2>Match parameters</h2>
+        <h2>Ingested payment SMS</h2>
         <p className="muted">
-          Operator-tunable — candidate matching reads these live; nothing about matching is
-          hardcoded on the server.
+          Auto-match proposes TrxID-equal or exact-amount±window rows; Approve always awards,
+          Reject needs a stored reason. Match parameters live in Settings.
         </p>
         <form
+          id="paymentsFilterForm"
           className="inline-actions"
           onSubmit={(e): void => {
             e.preventDefault();
             const data = new FormData(e.currentTarget);
-            props.onConfigSave({
-              toleranceBdt: Number(data.get("toleranceBdt") ?? 0),
-              windowSec: Number(data.get("windowSec") ?? 0),
-            });
+            props.onFilter(
+              String(data.get("status") ?? "all"),
+              String(data.get("from") ?? ""),
+              String(data.get("to") ?? ""),
+            );
           }}
         >
-          <label htmlFor="payTolerance">Amount tolerance (BDT)</label>
-          <input
-            id="payTolerance"
-            name="toleranceBdt"
-            type="number"
-            min={0}
-            required
-            defaultValue={props.config?.toleranceBdt ?? 0}
-          />
-          <label htmlFor="payWindow">Time window (seconds)</label>
-          <input
-            id="payWindow"
-            name="windowSec"
-            type="number"
-            min={0}
-            required
-            defaultValue={props.config?.windowSec ?? 0}
-          />
-          <button type="submit" disabled={props.config === null}>
-            Save parameters
-          </button>
+          <label htmlFor="payStatus">Status</label>
+          <select id="payStatus" name="status" defaultValue={props.filters.status}>
+            <option value="all">All</option>
+            <option value="unmatched">Unmatched</option>
+            <option value="matched">Matched (proposed)</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select>
+          <label htmlFor="payFrom">Received from</label>
+          <input id="payFrom" name="from" type="date" defaultValue={props.filters.from} />
+          <label htmlFor="payTo">to</label>
+          <input id="payTo" name="to" type="date" defaultValue={props.filters.to} />
+          <button type="submit">Apply</button>
         </form>
-      </section>
-      <section className="card">
-        <h2>Ingested payment SMS</h2>
         {props.payments.length === 0 ? (
           <p className="muted">No payment SMS ingested yet.</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Received</th>
+                <th>Received at</th>
                 <th>Sender</th>
-                <th>Provider</th>
-                <th>TrxID</th>
                 <th>Amount</th>
-                <th>State</th>
-                <th>Confirm</th>
+                <th>TrxID</th>
+                <th>Match status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -686,51 +683,53 @@ export function PaymentsView(props: {
                 <tr key={p.id}>
                   <td>{formatEpochUtc(p.receivedAt)}</td>
                   <td className="mono">{p.sender}</td>
-                  <td>{p.provider}</td>
-                  <td className="mono">{p.txnId}</td>
                   <td className="num">{formatBdt(p.amountBdt)}</td>
+                  <td className="mono">{p.txnId}</td>
                   <td>
-                    {p.matched !== null ? (
-                      <span className="chip approved">Matched → {p.matched.status}</span>
-                    ) : p.ambiguous ? (
-                      <span className="chip">Ambiguous — {p.candidates.length} candidates</span>
-                    ) : p.candidates.length === 1 ? (
-                      <span className="chip">1 candidate</span>
-                    ) : (
-                      <span className="chip rejected">No match</span>
+                    <span
+                      className={`chip ${p.status === "approved" ? "approved" : p.status === "rejected" ? "rejected" : ""}`}
+                      title={p.reason ?? undefined}
+                    >
+                      {p.status === "matched" ? "Matched (proposed)" : p.status}
+                    </span>
+                    {p.reason !== null && <span className="muted"> — {p.reason}</span>}
+                    {p.ambiguous && (
+                      <span className="muted"> — {p.candidates.length} candidates, choose explicitly</span>
                     )}
                   </td>
                   <td>
-                    {p.matched !== null ? (
+                    {p.status === "approved" || p.status === "rejected" ? (
                       <span className="muted">—</span>
-                    ) : p.candidates.length > 0 ? (
-                      <form
-                        className="inline-actions"
-                        onSubmit={(e): void => {
-                          e.preventDefault();
-                          props.onAttach(p.id, String(new FormData(e.currentTarget).get("tx") ?? ""));
-                        }}
-                      >
-                        <select
-                          name="tx"
-                          aria-label={`candidate-${p.txnId}`}
-                          defaultValue={p.candidates.length === 1 ? p.candidates[0].transactionId : ""}
-                        >
-                          <option value="" disabled>
-                            Choose…
-                          </option>
-                          {p.candidates.map((c) => (
-                            <option key={c.transactionId} value={c.transactionId}>
-                              {c.packageCode} · {formatBdt(c.amountBdt)} · {c.appId}
-                            </option>
-                          ))}
-                        </select>
-                        <button type="submit" disabled={props.busy}>
-                          Confirm
-                        </button>
-                      </form>
                     ) : (
-                      <span className="muted">—</span>
+                      <div className="inline-actions">
+                        {p.status === "matched" && (
+                          <button
+                            type="button"
+                            onClick={(): void => props.onApprove(p.id)}
+                            disabled={props.busy}
+                            data-testid={`pay-approve-${p.id}`}
+                          >
+                            Approve
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={(): void => props.onReject(p.id)}
+                          disabled={props.busy}
+                          data-testid={`pay-reject-${p.id}`}
+                        >
+                          Reject
+                        </button>
+                        {p.status === "unmatched" && (
+                          <AttachPicker
+                            payment={p}
+                            pending={props.pending}
+                            busy={props.busy}
+                            onAttach={props.onAttach}
+                          />
+                        )}
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -743,37 +742,147 @@ export function PaymentsView(props: {
   );
 }
 
-/** Container: load payments + config, save tunable parameters, confirm attaches. */
+/**
+ * STAGE F5b (ISSUE-84 spec): "Attach to transaction…" picker for unmatched
+ * rows — searches the pending queue by TrxID (typed) and, before any search,
+ * offers the rows the auto-match rule already proposed. Confirm never fires
+ * without an explicit selection (ambiguity never resolves itself).
+ */
+function AttachPicker(props: {
+  payment: PaymentSmsItem;
+  pending: PendingTransaction[];
+  busy: boolean;
+  onAttach: (paymentId: string, transactionId: string) => void;
+}): JSX.Element {
+  const [query, setQuery] = useState<string>("");
+  const q = query.trim().toLowerCase();
+  const matches: { transactionId: string; label: string }[] =
+    q === ""
+      ? props.payment.candidates.map((c) => ({
+          transactionId: c.transactionId,
+          label: `${c.packageCode} · ${formatBdt(c.amountBdt)} · ${c.appId}`,
+        }))
+      : props.pending
+          .filter((t) => (t.trxId ?? "").toLowerCase().includes(q))
+          .map((t) => ({
+            transactionId: t.transactionId,
+            label: `${t.packageCode} · ${formatBdt(t.amountBdt)} · ${t.appId} · ${t.trxId ?? "no TrxID yet"}`,
+          }));
+  return (
+    <form
+      className="inline-actions"
+      onSubmit={(e): void => {
+        e.preventDefault();
+        const tx = String(new FormData(e.currentTarget).get("tx") ?? "");
+        if (tx !== "") props.onAttach(props.payment.id, tx);
+      }}
+    >
+      <input
+        aria-label={`search-trx-${props.payment.txnId}`}
+        placeholder="Attach: search TrxID"
+        value={query}
+        onChange={(e): void => setQuery(e.target.value)}
+        spellCheck={false}
+      />
+      <select name="tx" aria-label={`candidate-${props.payment.txnId}`} defaultValue="">
+        <option value="" disabled>
+          {matches.length === 0 ? "No match — type a TrxID to search" : "Choose…"}
+        </option>
+        {matches.map((c) => (
+          <option key={c.transactionId} value={c.transactionId}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+      <button type="submit" disabled={props.busy || matches.length === 0}>
+        Confirm
+      </button>
+    </form>
+  );
+}
+
+/**
+ * Container: filtered payments + pending queue for the attach search;
+ * one-click approve, reasoned reject (prompt), explicit attach.
+ */
 export function PaymentsPanel(): JSX.Element {
-  const [config, setConfig] = useState<MatchConfig | null>(null);
   const [payments, setPayments] = useState<PaymentSmsItem[]>([]);
+  const [pending, setPending] = useState<PendingTransaction[]>([]);
+  const [filters, setFilters] = useState<{ status: string; from: string; to: string }>({
+    status: "all",
+    from: "",
+    to: "",
+  });
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
 
-  const reload = useCallback((): void => {
-    listPayments()
-      .then((res) => {
-        setConfig(res.config);
-        setPayments(res.payments);
-      })
+  /** Date input value (YYYY-MM-DD) → epoch seconds; empty → undefined. */
+  const dayToEpoch = (value: string): number | undefined =>
+    value === "" ? undefined : Math.floor(Date.parse(`${value}T00:00:00Z`) / 1000);
+
+  const reload = useCallback((f: { status: string; from: string; to: string }): void => {
+    listPayments({
+      status:
+        f.status === "all"
+          ? undefined
+          : (f.status as "unmatched" | "matched" | "approved" | "rejected"),
+      from: dayToEpoch(f.from),
+      to: dayToEpoch(f.to),
+    })
+      .then((res) => setPayments(res.payments))
+      .catch((err: unknown) => setError(describeError(err)));
+    // The attach search reads the pending queue (never status-filtered).
+    listPendingTransactions()
+      .then(setPending)
       .catch((err: unknown) => setError(describeError(err)));
   }, []);
 
   useEffect(() => {
-    reload();
-  }, [reload]);
+    reload(filters);
+  }, [reload, filters]);
 
-  const saveConfig = (cfg: { toleranceBdt: number; windowSec: number }): void => {
+  const applyFilter = (status: string, from: string, to: string): void => {
+    setError(null);
+    setFilters({ status, from, to });
+  };
+
+  const approve = (paymentId: string): void => {
+    setBusy(true);
     setError(null);
     setNote(null);
-    updateMatchConfig(cfg)
-      .then((next) => {
-        setConfig(next);
-        setNote("Match parameters saved — new candidate calculations use them immediately.");
-        reload();
+    approvePayment(paymentId)
+      .then((res) => {
+        setBusy(false);
+        setNote(`Approved — credits awarded (OTP balance now ${res.newOtpBalance}).`);
+        reload(filters);
       })
-      .catch((err: unknown) => setError(describeError(err)));
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  const reject = (paymentId: string): void => {
+    const input = window.prompt("Reject reason (required):");
+    if (input === null) return;
+    if (input.trim() === "") {
+      setError("A reject reason is required — rejected rows must say why.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    rejectPayment(paymentId, input.trim())
+      .then(() => {
+        setBusy(false);
+        setNote(`Rejected: ${input.trim()}`);
+        reload(filters);
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
   };
 
   const attach = (paymentId: string, transactionId: string): void => {
@@ -788,7 +897,7 @@ export function PaymentsPanel(): JSX.Element {
       .then((res) => {
         setBusy(false);
         setNote(`Attached — credits awarded (OTP balance now ${res.newOtpBalance}).`);
-        reload();
+        reload(filters);
       })
       .catch((err: unknown) => {
         setBusy(false);
@@ -798,15 +907,123 @@ export function PaymentsPanel(): JSX.Element {
 
   return (
     <PaymentsView
-      config={config}
       payments={payments}
+      pending={pending}
+      filters={filters}
       error={error}
       note={note}
       busy={busy}
-      onConfigSave={saveConfig}
+      onFilter={applyFilter}
+      onApprove={approve}
+      onReject={reject}
       onAttach={attach}
     />
   );
+}
+
+// ── STAGE F5b (ISSUE-84 spec): Settings — whitelisted admin_config keys ─────
+
+const MATCH_WINDOW_KEY: AdminConfigKey = "payment_match_window_min";
+const MATCH_TOLERANCE_KEY: AdminConfigKey = "payment_match_tolerance_bdt";
+
+/**
+ * Pure settings view: the ONLY editor for the whitelisted config keys
+ * (the server 404s anything else). Exported for render tests.
+ */
+export function SettingsView(props: {
+  values: { windowMin: number | null; toleranceBdt: number | null };
+  error: string | null;
+  note: string | null;
+  busy: boolean;
+  onSave: (windowMin: number, toleranceBdt: number) => void;
+}): JSX.Element {
+  return (
+    <>
+      {props.error !== null && <ErrorBanner message={props.error} />}
+      {props.note !== null && <p className="ok-note">{props.note}</p>}
+      <section className="card">
+        <h2>Payment matching</h2>
+        <p className="muted">
+          Whitelisted keys ({MATCH_WINDOW_KEY}, {MATCH_TOLERANCE_KEY}) — the Payments proposal
+          engine reads them live. Defaults: 30 minutes / 0 BDT (exact package price).
+        </p>
+        <form
+          onSubmit={(e): void => {
+            e.preventDefault();
+            const data = new FormData(e.currentTarget);
+            props.onSave(Number(data.get("windowMin") ?? 0), Number(data.get("toleranceBdt") ?? 0));
+          }}
+        >
+          <label htmlFor="setWindow">Match window (minutes, ±)</label>
+          <input
+            id="setWindow"
+            name="windowMin"
+            type="number"
+            min={0}
+            required
+            defaultValue={props.values.windowMin ?? ""}
+          />
+          <label htmlFor="setTolerance">Amount tolerance (BDT)</label>
+          <input
+            id="setTolerance"
+            name="toleranceBdt"
+            type="number"
+            min={0}
+            required
+            defaultValue={props.values.toleranceBdt ?? ""}
+          />
+          <button type="submit" disabled={props.busy || props.values.windowMin === null}>
+            {props.busy ? "Saving…" : "Save settings"}
+          </button>
+        </form>
+      </section>
+    </>
+  );
+}
+
+/** Container: load both whitelisted keys, save both. */
+export function SettingsPanel(): JSX.Element {
+  const [values, setValues] = useState<{ windowMin: number | null; toleranceBdt: number | null }>({
+    windowMin: null,
+    toleranceBdt: null,
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+
+  const load = useCallback((): void => {
+    Promise.all([getAdminConfig(MATCH_WINDOW_KEY), getAdminConfig(MATCH_TOLERANCE_KEY)])
+      .then(([win, tol]) => {
+        setValues({ windowMin: win.value, toleranceBdt: tol.value });
+        setError(null);
+      })
+      .catch((err: unknown) => setError(describeError(err)));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const save = (windowMin: number, toleranceBdt: number): void => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    Promise.all([
+      putAdminConfig(MATCH_WINDOW_KEY, windowMin),
+      putAdminConfig(MATCH_TOLERANCE_KEY, toleranceBdt),
+    ])
+      .then(([win, tol]) => {
+        setValues({ windowMin: win.value, toleranceBdt: tol.value });
+        setBusy(false);
+        setNote("Settings saved — new candidate calculations use them immediately.");
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  return <SettingsView values={values} error={error} note={note} busy={busy} onSave={save} />;
 }
 
 /**
@@ -1073,9 +1290,15 @@ export function UsersView(props: {
                 <tr key={u.id}>
                   <td>{u.email}</td>
                   <td>
-                    <span className={`chip ${u.disabled ? "rejected" : "approved"}`}>
+                    <span
+                      className={`chip ${u.disabled ? "rejected" : "approved"}`}
+                      title={u.disabledReason ?? undefined}
+                    >
                       {u.disabled ? "Withheld" : "Active"}
                     </span>
+                    {u.disabled && u.disabledReason !== null && (
+                      <span className="muted"> — {u.disabledReason}</span>
+                    )}
                   </td>
                   <td>
                     {u.apps.length === 0 ? (
@@ -1127,10 +1350,24 @@ export function UsersPanel(): JSX.Element {
   }, [reload]);
 
   const toggle = (user: AdminUserItem): void => {
-    setBusy(true);
     setError(null);
     setNote(null);
-    setAdminUserDisabled(user.id, !user.disabled)
+    let reason: string | undefined;
+    if (!user.disabled) {
+      // Spec: withhold needs a stored reason AND an explicit confirm dialog.
+      const input = window.prompt(`Withhold reason for ${user.email} (required):`);
+      if (input === null) return;
+      if (input.trim() === "") {
+        setError("A withhold reason is required.");
+        return;
+      }
+      if (!window.confirm(`Withhold ${user.email}?\nReason: ${input.trim()}`)) return;
+      reason = input.trim();
+    } else if (!window.confirm(`Enable ${user.email}?`)) {
+      return;
+    }
+    setBusy(true);
+    setAdminUserDisabled(user.id, !user.disabled, reason)
       .then(() => {
         setBusy(false);
         setNote(user.disabled ? `${user.email} enabled.` : `${user.email} withheld.`);
@@ -1145,14 +1382,17 @@ export function UsersPanel(): JSX.Element {
   return <UsersView users={users} error={error} note={note} busy={busy} onToggle={toggle} />;
 }
 
-/** Pure reports view: ledger + send log with CSV download actions — exported for tests. */
+/** Pure reports view: spec columns, app+date filters, cursor Load-more, CSV-only export. */
 export function ReportsView(props: {
   ledger: LedgerReport | null;
   sendRows: SendLogRow[] | null;
+  sendNextCursor: string | null;
   error: string | null;
-  onLedgerLoad: (from: string, to: string) => void;
+  onLedgerLoad: (from: string, to: string, appId: string) => void;
+  onLedgerMore: () => void;
   onSendLoad: (from: string, to: string, appId: string) => void;
-  onLedgerCsv: (from: string, to: string) => void;
+  onSendMore: () => void;
+  onLedgerCsv: (from: string, to: string, appId: string) => void;
   onSendCsv: (from: string, to: string, appId: string) => void;
 }): JSX.Element {
   return (
@@ -1166,13 +1406,19 @@ export function ReportsView(props: {
           onSubmit={(e): void => {
             e.preventDefault();
             const data = new FormData(e.currentTarget);
-            props.onLedgerLoad(String(data.get("from") ?? ""), String(data.get("to") ?? ""));
+            props.onLedgerLoad(
+              String(data.get("from") ?? ""),
+              String(data.get("to") ?? ""),
+              String(data.get("appId") ?? "").trim(),
+            );
           }}
         >
           <label htmlFor="ledgerFrom">From</label>
           <input id="ledgerFrom" name="from" type="date" />
           <label htmlFor="ledgerTo">To</label>
           <input id="ledgerTo" name="to" type="date" />
+          <label htmlFor="ledgerApp">App ID</label>
+          <input id="ledgerApp" name="appId" spellCheck={false} />
           <button type="submit">Load ledger</button>
           <button
             type="button"
@@ -1180,7 +1426,11 @@ export function ReportsView(props: {
             onClick={(): void => {
               const form = document.getElementById("ledgerForm") as HTMLFormElement | null;
               const data = form !== null ? new FormData(form) : null;
-              props.onLedgerCsv(String(data?.get("from") ?? ""), String(data?.get("to") ?? ""));
+              props.onLedgerCsv(
+                String(data?.get("from") ?? ""),
+                String(data?.get("to") ?? ""),
+                String(data?.get("appId") ?? "").trim(),
+              );
             }}
           >
             Download CSV
@@ -1189,40 +1439,48 @@ export function ReportsView(props: {
         {props.ledger !== null && (
           <>
             <p className="muted">
-              {props.ledger.rows.length} transaction(s) — {props.ledger.totals
+              {props.ledger.rows.length} row(s) — {props.ledger.totals
                 .map((t) => `${t.packageType}/${t.status}: ${t.count} (৳${String(t.amountBdt)}, ${String(t.grantedSms)} SMS granted)`)
                 .join(" · ")}
             </p>
             <table>
               <thead>
                 <tr>
-                  <th>Requested</th>
+                  <th>Timestamp</th>
                   <th>App</th>
-                  <th>Customer</th>
+                  <th>Kind</th>
                   <th>Package</th>
+                  <th>Qty</th>
                   <th>Amount</th>
-                  <th>Status</th>
                   <th>TrxID</th>
                 </tr>
               </thead>
               <tbody>
                 {props.ledger.rows.map((r) => (
-                  <tr key={r.transactionId}>
-                    <td>{formatEpochUtc(r.requestedAt)}</td>
-                    <td className="mono">{r.appId}</td>
-                    <td>{r.ownerEmail ?? "—"}</td>
-                    <td>{r.packageCode}</td>
-                    <td className="num">{formatBdt(r.amountBdt)}</td>
-                    <td>
-                      <span className={`chip ${r.status === "approved" ? "approved" : r.status === "rejected" ? "rejected" : ""}`}>
-                        {formatStatus(r.status)}
-                      </span>
+                  <tr key={r.id}>
+                    <td>{formatEpochUtc(r.timestamp)}</td>
+                    <td
+                      className="mono"
+                      title={`${r.appId}${r.ownerEmail !== null ? ` · ${r.ownerEmail}` : ""}`}
+                    >
+                      {r.appName ?? r.appId}
                     </td>
+                    <td>
+                      <span className="chip">{r.kind}</span>
+                    </td>
+                    <td>{r.packageCode === "" ? "—" : r.packageCode}</td>
+                    <td className="num">{r.qty}</td>
+                    <td className="num">{formatBdt(r.amountBdt)}</td>
                     <td className="mono">{r.trxId ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {props.ledger.nextCursor !== null && (
+              <button type="button" className="secondary" onClick={props.onLedgerMore}>
+                Load more
+              </button>
+            )}
           </>
         )}
       </section>
@@ -1269,68 +1527,115 @@ export function ReportsView(props: {
           <table>
             <thead>
               <tr>
-                <th>Sent</th>
+                <th>Timestamp</th>
                 <th>App</th>
+                <th>Kind</th>
                 <th>Recipient</th>
-                <th>Source</th>
+                <th>Ref</th>
                 <th>Status</th>
-                <th>Error</th>
+                <th>Campaign</th>
               </tr>
             </thead>
             <tbody>
               {props.sendRows.map((r) => (
                 <tr key={r.messageId}>
-                  <td>{formatEpochUtc(r.createdAt)}</td>
-                  <td className="mono">{r.appId ?? "—"}</td>
-                  <td className="mono">{r.recipient}</td>
-                  <td>{r.source}{r.sourceId !== null ? ` (${r.sourceId})` : ""}</td>
+                  <td>{formatEpochUtc(r.timestamp)}</td>
+                  <td className="mono">{r.appName ?? r.appId ?? "—"}</td>
                   <td>
-                    <span className={`chip ${r.status === "sent" ? "approved" : r.status === "failed" ? "rejected" : ""}`}>
+                    <span className="chip">{r.kind}</span>
+                  </td>
+                  <td className="mono">{r.recipient}</td>
+                  <td className="mono">{r.ref ?? "—"}</td>
+                  <td>
+                    <span
+                      className={`chip ${r.status === "sent" || r.status === "verified" ? "approved" : r.status === "failed" ? "rejected" : ""}`}
+                      title={r.error ?? undefined}
+                    >
                       {formatStatus(r.status)}
                     </span>
                   </td>
-                  <td>{r.error ?? "—"}</td>
+                  <td>{r.campaignName ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+        )}
+        {props.sendRows !== null && props.sendNextCursor !== null && (
+          <button type="button" className="secondary" onClick={props.onSendMore}>
+            Load more
+          </button>
         )}
       </section>
     </>
   );
 }
 
-/** Container: ledger + send-log loads and CSV-only downloads. */
+/** Container: filtered + cursor-paged ledger/send log and CSV-only downloads. */
 export function ReportsPanel(): JSX.Element {
   const [ledger, setLedger] = useState<LedgerReport | null>(null);
   const [sendRows, setSendRows] = useState<SendLogRow[] | null>(null);
+  const [sendNextCursor, setSendNextCursor] = useState<string | null>(null);
+  const [ledgerFilters, setLedgerFilters] = useState<{ appId: string; from?: number; to?: number }>({
+    appId: "",
+  });
+  const [sendFilters, setSendFilters] = useState<{ appId: string; from?: number; to?: number }>({
+    appId: "",
+  });
   const [error, setError] = useState<string | null>(null);
 
   /** Date input value (YYYY-MM-DD) → epoch seconds; empty/invalid → undefined. */
   const dayToEpoch = (value: string): number | undefined =>
     value === "" ? undefined : Math.floor(Date.parse(`${value}T00:00:00Z`) / 1000);
 
-  const loadLedger = (from: string, to: string): void => {
+  const loadLedger = (from: string, to: string, appId: string): void => {
+    const f = { appId, from: dayToEpoch(from), to: dayToEpoch(to) };
+    setLedgerFilters(f);
     setError(null);
-    getLedgerReport({ from: dayToEpoch(from), to: dayToEpoch(to) })
+    getLedgerReport(f)
       .then(setLedger)
       .catch((err: unknown) => setError(describeError(err)));
   };
 
-  const loadSend = (from: string, to: string, appId: string): void => {
+  /** Cursor page: append to what is already on screen (same filters). */
+  const moreLedger = (): void => {
+    if (ledger === null || ledger.nextCursor === null) return;
     setError(null);
-    getSendLog({ from: dayToEpoch(from), to: dayToEpoch(to), appId })
-      .then(setSendRows)
+    getLedgerReport({ ...ledgerFilters, cursor: ledger.nextCursor })
+      .then((next) => setLedger({ ...next, rows: [...ledger.rows, ...next.rows] }))
       .catch((err: unknown) => setError(describeError(err)));
   };
 
-  const ledgerCsv = (from: string, to: string): void => {
+  const loadSend = (from: string, to: string, appId: string): void => {
+    const f = { appId, from: dayToEpoch(from), to: dayToEpoch(to) };
+    setSendFilters(f);
+    setError(null);
+    getSendLog(f)
+      .then((res) => {
+        setSendRows(res.rows);
+        setSendNextCursor(res.nextCursor);
+      })
+      .catch((err: unknown) => setError(describeError(err)));
+  };
+
+  const moreSend = (): void => {
+    if (sendNextCursor === null) return;
+    setError(null);
+    getSendLog({ ...sendFilters, cursor: sendNextCursor })
+      .then((res) => {
+        setSendRows([...(sendRows ?? []), ...res.rows]);
+        setSendNextCursor(res.nextCursor);
+      })
+      .catch((err: unknown) => setError(describeError(err)));
+  };
+
+  const ledgerCsv = (from: string, to: string, appId: string): void => {
     setError(null);
     const fromE = dayToEpoch(from);
     const toE = dayToEpoch(to);
     const qs = new URLSearchParams({ format: "csv" });
     if (fromE !== undefined) qs.set("from", String(fromE));
     if (toE !== undefined) qs.set("to", String(toE));
+    if (appId !== "") qs.set("appId", appId);
     downloadOperatorCsv(`/v5/admin/reports/ledger?${qs.toString()}`, "ledger.csv").catch((err: unknown) =>
       setError(describeError(err)),
     );
@@ -1344,7 +1649,7 @@ export function ReportsPanel(): JSX.Element {
     if (fromE !== undefined) qs.set("from", String(fromE));
     if (toE !== undefined) qs.set("to", String(toE));
     if (appId !== "") qs.set("appId", appId);
-    downloadOperatorCsv(`/v5/admin/reports/send-log?${qs.toString()}`, "send-log.csv").catch((err: unknown) =>
+    downloadOperatorCsv(`/v5/admin/reports/sends?${qs.toString()}`, "send-log.csv").catch((err: unknown) =>
       setError(describeError(err)),
     );
   };
@@ -1353,9 +1658,12 @@ export function ReportsPanel(): JSX.Element {
     <ReportsView
       ledger={ledger}
       sendRows={sendRows}
+      sendNextCursor={sendNextCursor}
       error={error}
       onLedgerLoad={loadLedger}
+      onLedgerMore={moreLedger}
       onSendLoad={loadSend}
+      onSendMore={moreSend}
       onLedgerCsv={ledgerCsv}
       onSendCsv={sendCsv}
     />
@@ -1450,6 +1758,8 @@ export function Operator({ route }: { route: string[] }): JSX.Element {
         <UsersPanel />
       ) : tab === "reports" ? (
         <ReportsPanel />
+      ) : tab === "settings" ? (
+        <SettingsPanel />
       ) : (
         <BillingQueue note={setNote} />
       )}
