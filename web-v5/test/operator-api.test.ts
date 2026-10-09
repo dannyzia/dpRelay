@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   approvePayment,
   attachPayment,
+  bindAdminDevice,
   clearOperatorSecret,
   downloadOperatorCsv,
   getAdminConfig,
   getLedgerReport,
   getOperatorSecret,
   getSendLog,
+  listAdminDevices,
   listAdminPackages,
   listAdminUsers,
   listPayments,
@@ -392,5 +394,86 @@ describe("F5 admin endpoints", () => {
       Object.assign(URL, urlBackup);
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("device identity API (STAGE F7)", () => {
+  beforeEach(() => sessionStorage.clear());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setOperatorRejectedHandler(null);
+  });
+
+  it("listAdminDevices GETs /v5/admin/devices with the operator bearer and parses the identity columns", async () => {
+    setOperatorSecret("op-secret");
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({
+        ok: true,
+        staleThresholdSec: 900,
+        total: 1,
+        staleCount: 0,
+        neverSeenCount: 0,
+        quarantinedCount: 0,
+        devices: [
+          {
+            id: "dev-1",
+            label: "Redmi 9",
+            userId: null,
+            createdAt: 1791400000,
+            lastSeenAt: 1791403600,
+            secondsSinceSeen: 60,
+            neverSeen: false,
+            stale: false,
+            revocable: true,
+            revokedAt: null,
+            quarantined: false,
+            quarantinedAt: null,
+            phoneNumber: "+8801613249520",
+            boundAppId: "app_money",
+            boundAppName: "Money app",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const list = await listAdminDevices();
+    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/devices");
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit | undefined)?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(headers?.["Authorization"]).toBe("Bearer op-secret");
+    expect(list.devices[0].phoneNumber).toBe("+8801613249520");
+    expect(list.devices[0].boundAppId).toBe("app_money");
+    expect(list.devices[0].boundAppName).toBe("Money app");
+    expect(list.staleThresholdSec).toBe(900);
+  });
+
+  it("bindAdminDevice POSTs { appId } to the bind route", async () => {
+    setOperatorSecret("op-secret");
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({ ok: true, deviceId: "dev-1", boundAppId: "app_money" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await bindAdminDevice("dev-1", "app_money");
+    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/devices/dev-1/bind");
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ appId: "app_money" });
+    expect(res.boundAppId).toBe("app_money");
+  });
+
+  it("bindAdminDevice sends appId: null to unbind into the fleet", async () => {
+    setOperatorSecret("op-secret");
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({ ok: true, deviceId: "dev-1", boundAppId: null }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await bindAdminDevice("dev-1", null);
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({ appId: null });
+    expect(res.boundAppId).toBeNull();
   });
 });

@@ -262,6 +262,8 @@ export interface OwnedApp {
 export interface SelfServeApp {
   appId: string;
   appSecret: string;
+  /** STAGE F7 (ISSUE-87): per-app device enrollment secret — same one-time contract as appSecret. */
+  deviceEnrollmentSecret: string;
   name: string;
   trial: { otpSms: number; bulkSms: number; expiresAt: number } | null;
 }
@@ -475,6 +477,63 @@ export interface OversightCampaign {
 /** GET /v5/admin/metrics — also the pre-storage probe that verifies a pasted secret. */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
   return operatorFetch<AdminMetrics & { ok: true }>("/v5/admin/metrics");
+}
+
+// ── STAGE F7 (ISSUE-87): device phone identity + app binding ──
+
+/** One row of GET /v5/admin/devices — staleness is resolved server-side. */
+export interface AdminDeviceItem {
+  id: string;
+  label: string;
+  userId: string | null;
+  createdAt: number;
+  lastSeenAt: number | null;
+  /** null = never heartbeaten; age is then measured from createdAt. */
+  secondsSinceSeen: number;
+  neverSeen: boolean;
+  stale: boolean;
+  revocable: boolean;
+  revokedAt: number | null;
+  quarantined: boolean;
+  quarantinedAt: number | null;
+  /** STAGE F7: E.164 gateway number, null until a device reports one. */
+  phoneNumber: string | null;
+  /** STAGE F7: public appId of the bound app; null = operator-fleet device. */
+  boundAppId: string | null;
+  boundAppName: string | null;
+}
+
+export interface AdminDeviceList {
+  staleThresholdSec: number;
+  total: number;
+  staleCount: number;
+  neverSeenCount: number;
+  quarantinedCount: number;
+  devices: AdminDeviceItem[];
+}
+
+/** GET /v5/admin/devices — fleet listing with the F7 identity columns. */
+export async function listAdminDevices(): Promise<AdminDeviceList> {
+  const body = await operatorFetch<AdminDeviceList & { ok: true }>("/v5/admin/devices");
+  return {
+    staleThresholdSec: body.staleThresholdSec,
+    total: body.total,
+    staleCount: body.staleCount,
+    neverSeenCount: body.neverSeenCount,
+    quarantinedCount: body.quarantinedCount,
+    devices: body.devices,
+  };
+}
+
+/** POST /v5/admin/devices/:id/bind — bind a device to exactly one app, or `{ appId: null }` to unbind (fleet). */
+export async function bindAdminDevice(
+  deviceId: string,
+  appId: string | null,
+): Promise<{ deviceId: string; boundAppId: string | null }> {
+  return operatorFetch<{ ok: true; deviceId: string; boundAppId: string | null }>(
+    `/v5/admin/devices/${encodeURIComponent(deviceId)}/bind`,
+    { method: "POST", body: JSON.stringify({ appId }) },
+  );
 }
 
 // ── Mail settings (F3 amendment: operator-configured SMTP, write-only password) ──

@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
+
+    <!-- STAGE F7: optional SIM number prefill in Settings (line1Number is
+         permission-gated; denial only means the number is typed manually). -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     
     <!-- Foreground service permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

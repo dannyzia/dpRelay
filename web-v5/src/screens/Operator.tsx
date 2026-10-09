@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   approvePayment,
   attachPayment,
+  bindAdminDevice,
   clearOperatorSecret,
   describeError,
   downloadOperatorCsv,
@@ -21,6 +22,7 @@ import {
   getOperatorSecret,
   getSendLog,
   listAdminApps,
+  listAdminDevices,
   listAdminPackages,
   listAdminUsers,
   listOversightCampaigns,
@@ -42,6 +44,8 @@ import {
   upsertAdminPackage,
   type AdminApp,
   type AdminConfigKey,
+  type AdminDeviceItem,
+  type AdminDeviceList,
   type AdminMetrics,
   type AdminPackage,
   type AdminUserItem,
@@ -56,7 +60,18 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { formatBdt, formatEpochUtc, formatStatus } from "../format";
 import { hrefFor } from "../router";
 
-type OperatorTab = "billing" | "apps" | "metrics" | "campaigns" | "mail" | "payments" | "packages" | "users" | "reports" | "settings";
+type OperatorTab =
+  | "billing"
+  | "apps"
+  | "devices"
+  | "metrics"
+  | "campaigns"
+  | "mail"
+  | "payments"
+  | "packages"
+  | "users"
+  | "reports"
+  | "settings";
 
 const TABS: { id: OperatorTab; label: string }[] = [
   { id: "billing", label: "Billing queue" },
@@ -66,6 +81,7 @@ const TABS: { id: OperatorTab; label: string }[] = [
   { id: "reports", label: "Reports" },
   { id: "settings", label: "Settings" },
   { id: "apps", label: "Apps" },
+  { id: "devices", label: "Devices" },
   { id: "metrics", label: "Metrics" },
   { id: "campaigns", label: "Campaigns" },
   { id: "mail", label: "Mail Settings" },
@@ -1382,6 +1398,153 @@ export function UsersPanel(): JSX.Element {
   return <UsersView users={users} error={error} note={note} busy={busy} onToggle={toggle} />;
 }
 
+/**
+ * STAGE F7 (ISSUE-87): pure devices table — identity columns the order pins:
+ * `number | bound-app | last-seen`, plus the bind control (a bound device only
+ * ever fetches its own app's messages; the fallback fleet is everything else).
+ */
+export function DevicesView(props: {
+  list: AdminDeviceList | null;
+  apps: AdminApp[];
+  error: string | null;
+  note: string | null;
+  busy: boolean;
+  onBind: (device: AdminDeviceItem, appId: string | null) => void;
+}): JSX.Element {
+  const devices = props.list?.devices ?? [];
+  return (
+    <>
+      {props.error !== null && <ErrorBanner message={props.error} />}
+      {props.note !== null && <p className="ok-note">{props.note}</p>}
+      <section className="card">
+        <h2>Gateway devices</h2>
+        <p className="muted">
+          A device bound to an app receives only that app&apos;s pending messages. Unbound devices
+          form the operator fleet and receive messages for apps with no bound device. Every
+          device&apos;s phone number is shown once it reports one.
+        </p>
+        {props.list !== null && (
+          <p className="muted">
+            {props.list.total} devices · {props.list.staleCount} stale ·{" "}
+            {props.list.neverSeenCount} never seen · {props.list.quarantinedCount} quarantined
+          </p>
+        )}
+        {devices.length === 0 ? (
+          <p className="muted">No devices enrolled yet.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Number</th>
+                <th>Bound app</th>
+                <th>Last seen</th>
+                <th>Label</th>
+                <th>State</th>
+                <th>Binding</th>
+              </tr>
+            </thead>
+            <tbody>
+              {devices.map((d) => (
+                <tr key={d.id}>
+                  <td className="mono">{d.phoneNumber ?? "—"}</td>
+                  <td>
+                    {d.boundAppId === null ? (
+                      <span className="muted">fleet (unbound)</span>
+                    ) : (
+                      <span className="chip approved" title={d.boundAppName ?? undefined}>
+                        {d.boundAppId}
+                      </span>
+                    )}
+                  </td>
+                  <td>{d.lastSeenAt === null ? "never" : formatEpochUtc(d.lastSeenAt)}</td>
+                  <td>{d.label}</td>
+                  <td>
+                    {d.revokedAt !== null ? (
+                      <span className="chip rejected">revoked</span>
+                    ) : d.stale ? (
+                      <span className="chip rejected" title={`${d.secondsSinceSeen}s since last heartbeat`}>
+                        stale
+                      </span>
+                    ) : d.quarantined ? (
+                      <span className="chip" title="Quarantined — still able to heartbeat">
+                        quarantined
+                      </span>
+                    ) : (
+                      <span className="chip approved">online</span>
+                    )}
+                  </td>
+                  <td>
+                    <label className="sr-only" htmlFor={`bind-${d.id}`}>
+                      Bind device {d.label} to an app
+                    </label>
+                    <select
+                      id={`bind-${d.id}`}
+                      value={d.boundAppId ?? ""}
+                      disabled={props.busy || d.revokedAt !== null}
+                      onChange={(e): void => props.onBind(d, e.target.value === "" ? null : e.target.value)}
+                    >
+                      <option value="">— fleet (unbound) —</option>
+                      {props.apps.map((a) => (
+                        <option key={a.id} value={a.appId}>
+                          {a.appId} ({a.name})
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
+/** Container: fleet listing + bind/unbind actions. */
+export function DevicesPanel(): JSX.Element {
+  const [list, setList] = useState<AdminDeviceList | null>(null);
+  const [apps, setApps] = useState<AdminApp[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+
+  const reload = useCallback((): void => {
+    listAdminDevices()
+      .then(setList)
+      .catch((err: unknown) => setError(describeError(err)));
+    listAdminApps()
+      .then((res) => setApps(res.apps))
+      .catch((err: unknown) => setError(describeError(err)));
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const bind = (device: AdminDeviceItem, appId: string | null): void => {
+    const target = appId === null ? "the operator fleet (unbound)" : `app ${appId}`;
+    if (!window.confirm(`Bind device "${device.label}" (${device.phoneNumber ?? "number unknown"}) to ${target}?`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    bindAdminDevice(device.id, appId)
+      .then(() => {
+        setBusy(false);
+        setNote(`Device "${device.label}" → ${target}.`);
+        reload();
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  return <DevicesView list={list} apps={apps} error={error} note={note} busy={busy} onBind={bind} />;
+}
+
 /** Pure reports view: spec columns, app+date filters, cursor Load-more, CSV-only export. */
 export function ReportsView(props: {
   ledger: LedgerReport | null;
@@ -1744,6 +1907,8 @@ export function Operator({ route }: { route: string[] }): JSX.Element {
       {note !== null && <p className="ok-note">{note}</p>}
       {tab === "apps" ? (
         <AppsPanel />
+      ) : tab === "devices" ? (
+        <DevicesPanel />
       ) : tab === "metrics" ? (
         <MetricsPanel />
       ) : tab === "campaigns" ? (

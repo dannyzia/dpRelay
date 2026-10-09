@@ -19,6 +19,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import {
   constantTimeEquals,
   generateAppCredentials,
+  generateDeviceEnrollmentSecret,
   hashPasswordScrypt,
   newId,
   sha256Hex,
@@ -400,6 +401,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         : null;
 
     const { appId, appSecret } = generateAppCredentials();
+    // STAGE F7 (ISSUE-87): every app also gets a per-app device enrollment
+    // secret — the raw value lives only in this response, the digest in
+    // apps.device_enrollment_secret_hash (same one-time contract as appSecret).
+    const deviceEnrollmentSecret = generateDeviceEnrollmentSecret();
     const rowId = newId();
     const finalName = name ?? appId;
     const trialCount = app.config.trialSmsCount;
@@ -409,10 +414,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     app.db.transaction(() => {
       app.db
         .prepare(
-          "INSERT INTO apps (id, app_id, app_secret_hash, name, owner_user_id, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, unixepoch())",
+          "INSERT INTO apps (id, app_id, app_secret_hash, device_enrollment_secret_hash, name, owner_user_id, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, unixepoch())",
         )
-        .run(rowId, appId, app.sha256Hex(appSecret), finalName, session.user.id);
+        .run(rowId, appId, app.sha256Hex(appSecret), app.sha256Hex(deviceEnrollmentSecret), finalName, session.user.id);
       if (trialCount > 0) {
         app.db
           .prepare(
@@ -431,6 +436,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       ok: true,
       appId,
       appSecret,
+      deviceEnrollmentSecret,
       name: finalName,
       trial: trialCount > 0 ? { otpSms: trialCount, bulkSms: trialCount, expiresAt: trialExpiresAt } : null,
     });

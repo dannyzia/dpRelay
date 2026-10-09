@@ -13,6 +13,12 @@ export interface AuthenticatedDevice {
   /** Null for phone-enrolled devices (M2 /enroll creates devices without a user account). */
   userId: string | null;
   label: string;
+  /**
+   * STAGE F7 (ISSUE-87): internal apps.id this device is bound to, or null for
+   * an operator-fleet device. Drives the outstanding-fetch claim isolation —
+   * a bound device only ever sees its own app's pending messages.
+   */
+  appRowId: string | null;
 }
 
 /** Shape of a verified consumer app, attached to the request by requireApp (M3 OTP plane). */
@@ -103,7 +109,7 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
     const digest = sha256Hex(rawKey);
     const row = app.db
       .prepare(
-        "SELECT d.id, d.user_id, d.label, d.api_key_hash, d.revocable, d.revoked_at " +
+        "SELECT d.id, d.user_id, d.label, d.app_id, d.api_key_hash, d.revocable, d.revoked_at " +
           "FROM devices d WHERE d.api_key_hash = ?",
       )
       .get(digest) as
@@ -111,6 +117,7 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
           id: string;
           user_id: string;
           label: string;
+          app_id: string | null;
           api_key_hash: string;
           revocable: number;
           revoked_at: number | null;
@@ -134,6 +141,7 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
       id: row.id,
       userId: row.user_id,
       label: row.label,
+      appRowId: row.app_id,
     };
   });
 

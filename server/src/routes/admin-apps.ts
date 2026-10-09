@@ -21,7 +21,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { asRecord, asString } from "../services/parse.js";
-import { generateWebhookSecret, newId, sha256Hex } from "../services/crypto.js";
+import { generateDeviceEnrollmentSecret, generateWebhookSecret, newId, sha256Hex } from "../services/crypto.js";
 
 /** List pagination cap (campaigns parity). */
 const LIST_MAX = 100;
@@ -138,12 +138,14 @@ const adminAppRoutes: FastifyPluginAsync = async (app) => {
 
     const rowId = newId();
     const webhookSecret = generateWebhookSecret();
+    // STAGE F7 (ISSUE-87): per-app device enrollment secret, shown once here.
+    const deviceEnrollmentSecret = generateDeviceEnrollmentSecret();
     try {
       db.prepare(
-        "INSERT INTO apps (id, app_id, app_secret_hash, name, webhook_url, webhook_secret, " +
+        "INSERT INTO apps (id, app_id, app_secret_hash, device_enrollment_secret_hash, name, webhook_url, webhook_secret, " +
           "webhook_secret_hash, rate_max_per_phone, rate_window_sec, created_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())",
-      ).run(rowId, appId, sha256Hex(appSecret), name, webhookUrl, webhookSecret, sha256Hex(webhookSecret), rateMaxPerPhone, rateWindowSec);
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())",
+      ).run(rowId, appId, sha256Hex(appSecret), sha256Hex(deviceEnrollmentSecret), name, webhookUrl, webhookSecret, sha256Hex(webhookSecret), rateMaxPerPhone, rateWindowSec);
     } catch (err) {
       if (err instanceof Error && err.message.includes("UNIQUE constraint failed: apps.app_id")) {
         return fail(reply, 409, "app_id_exists", "appId already registered");
@@ -162,6 +164,8 @@ const adminAppRoutes: FastifyPluginAsync = async (app) => {
       // Return-once contract: the operator needs the effective secret either
       // way (a generated one exists nowhere else).
       appSecret,
+      // STAGE F7: shown once — the raw deviceEnrollmentSecret exists nowhere else.
+      deviceEnrollmentSecret,
     };
     return reply.code(201).send(response);
   });
@@ -273,6 +277,34 @@ const adminAppRoutes: FastifyPluginAsync = async (app) => {
     ).run(webhookSecret, sha256Hex(webhookSecret), appRowId);
     app.log.info({ appId: row.app_id }, "webhook secret rotated via admin plane");
     return { ok: true, appId: row.app_id, webhookSecret, rotatedAt: Math.floor(Date.now() / 1000) };
+  });
+
+  /**
+   * STAGE F7 (ISSUE-87): mints a NEW per-app device enrollment secret (returned
+   * ONCE here) and replaces the stored digest — the previous secret stops
+   * matching every future /v5/device/enroll attempt immediately, so a leaked
+   * or decommissioned app secret cannot keep binding phones. Apps created
+   * before migration 016 (hash NULL) get their first secret from this route.
+   */
+  app.post("/v5/admin/apps/:id/rotate-device-secret", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const appRowId = asString(params.id, 64);
+    if (appRowId === null) return fail(reply, 400, "invalid_app_id", "app id is required");
+    const row = loadApp(appRowId);
+    if (!row) return fail(reply, 404, "admin_app_not_found", "App not found");
+
+    const deviceEnrollmentSecret = generateDeviceEnrollmentSecret();
+    db.prepare("UPDATE apps SET device_enrollment_secret_hash = ? WHERE id = ?").run(
+      sha256Hex(deviceEnrollmentSecret),
+      appRowId,
+    );
+    app.log.info({ appId: row.app_id }, "device enrollment secret rotated via admin plane");
+    return {
+      ok: true,
+      appId: row.app_id,
+      deviceEnrollmentSecret,
+      rotatedAt: Math.floor(Date.now() / 1000),
+    };
   });
 
   /** Updates the webhook URL (HTTPS-only; empty string clears it). */

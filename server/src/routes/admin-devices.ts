@@ -28,6 +28,12 @@ interface DeviceRow {
   revocable: number;
   revoked_at: number | null;
   quarantined_at: number | null;
+  /** STAGE F7: E.164 gateway number, null until a device reports one. */
+  phone_number: string | null;
+  /** STAGE F7: internal apps.id of the bound app; null = operator-fleet device. */
+  app_id: string | null;
+  bound_app_id: string | null;
+  bound_app_name: string | null;
 }
 
 const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
@@ -55,9 +61,11 @@ const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
 
     const rows = db
       .prepare(
-        "SELECT id, user_id, label, last_seen_at, created_at, revocable, revoked_at, quarantined_at " +
-          "FROM devices " +
-          "WHERE (? = 1 OR revoked_at IS NULL) ORDER BY last_seen_at IS NOT NULL, last_seen_at ASC LIMIT ?",
+        "SELECT d.id, d.user_id, d.label, d.last_seen_at, d.created_at, d.revocable, d.revoked_at, " +
+          "d.quarantined_at, d.phone_number, d.app_id, " +
+          "a.app_id AS bound_app_id, a.name AS bound_app_name " +
+          "FROM devices d LEFT JOIN apps a ON a.id = d.app_id " +
+          "WHERE (? = 1 OR d.revoked_at IS NULL) ORDER BY d.last_seen_at IS NOT NULL, d.last_seen_at ASC LIMIT ?",
       )
       .all(includeRevoked ? 1 : 0, limit) as DeviceRow[];
 
@@ -79,6 +87,10 @@ const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
        */
       quarantined: r.quarantined_at !== null,
       quarantinedAt: r.quarantined_at,
+      /** STAGE F7: identity columns — number | bound-app the panel renders. */
+      phoneNumber: r.phone_number,
+      boundAppId: r.bound_app_id,
+      boundAppName: r.bound_app_name,
     }));
 
     return {
@@ -163,6 +175,45 @@ const adminDeviceRoutes: FastifyPluginAsync = async (app) => {
     db.prepare("UPDATE devices SET quarantined_at = NULL WHERE id = ?").run(deviceId);
     app.log.info({ deviceId }, "device quarantine cleared by operator");
     return { ok: true, deviceId: row.id, quarantined: false, alreadyClear: false };
+  });
+
+  /**
+   * STAGE F7 (ISSUE-87): binds a device to exactly one app (or unbinds it).
+   * Binding is what arms the outstanding-fetch claim isolation — until an
+   * operator explicitly binds, every device keeps the operator-fleet behavior.
+   * `appId` is the PUBLIC app id (`{appId: null}` unbinds), and the route is
+   * idempotent: re-posting the current binding reports state, no error.
+   */
+  app.post("/v5/admin/devices/:id/bind", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const deviceId = asString(params.id, 64);
+    if (deviceId === null) return fail(reply, 400, "invalid_device_id", "Device id is required");
+
+    const body = asRecord(request.body) ?? {};
+    const appIdRaw = body.appId;
+    if (appIdRaw !== null && typeof appIdRaw !== "string") {
+      return fail(reply, 400, "invalid_app_id", "appId must be a string or null");
+    }
+
+    const device = db.prepare("SELECT id FROM devices WHERE id = ?").get(deviceId) as
+      | { id: string }
+      | undefined;
+    if (!device) return fail(reply, 404, "device_not_found", "Device not found");
+
+    let appRowId: string | null = null;
+    let publicAppId: string | null = null;
+    if (typeof appIdRaw === "string") {
+      const appRow = db
+        .prepare("SELECT id, app_id FROM apps WHERE app_id = ?")
+        .get(appIdRaw) as { id: string; app_id: string } | undefined;
+      if (!appRow) return fail(reply, 404, "app_not_found", "App not found");
+      appRowId = appRow.id;
+      publicAppId = appRow.app_id;
+    }
+
+    db.prepare("UPDATE devices SET app_id = ? WHERE id = ?").run(appRowId, deviceId);
+    app.log.info({ deviceId, boundAppId: publicAppId }, "device binding set by operator");
+    return { ok: true, deviceId, boundAppId: publicAppId };
   });
 };
 

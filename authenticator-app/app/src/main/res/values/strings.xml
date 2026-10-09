@@ -71,4 +71,13 @@
     <string name="enrollment_dialog_message">Enter the authenticator enrollment secret to register this device.</string>
     <string name="dialog_button_save">Save</string>
     
+    <!-- STAGE F7 (ISSUE-87): gateway settings dialog -->
+    <string name="settings_button">Settings</string>
+    <string name="settings_dialog_title">Gateway settings</string>
+    <string name="settings_number_label">Gateway number (E.164)</string>
+    <string name="settings_number_hint">e.g. +8801613249520 — SIM read is often empty, type it manually</string>
+    <string name="settings_app_secret_label">App enrollment secret (optional)</string>
+    <string name="settings_app_secret_hint">Leave empty for the operator fleet (global secret)</string>
+    <string name="settings_invalid_number">Enter a valid E.164 number (e.g. +8801613249520) or leave the field blank</string>
+    
 </resources>

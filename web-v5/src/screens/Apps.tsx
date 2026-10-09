@@ -22,8 +22,13 @@ export function AppsView(props: {
   apps: OwnedApp[] | null;
   error: string | null;
   busy: boolean;
-  /** Set while a freshly minted app's secret is on screen — shown exactly once. */
-  freshSecret: { appId: string; appSecret: string; trialSms: number } | null;
+  /** Set while a freshly minted app's secrets are on screen — shown exactly once. */
+  freshSecret: {
+    appId: string;
+    appSecret: string;
+    deviceEnrollmentSecret: string;
+    trialSms: number;
+  } | null;
   /** Soft-verification banner (F3 amendment): shown when unverified AND mail is configured. */
   verifyBanner: "hidden" | "offer" | "sent";
   onResend: () => void;
@@ -100,6 +105,9 @@ export function AppsView(props: {
           <p>
             App secret: <code data-testid="fresh-app-secret">{props.freshSecret.appSecret}</code>
           </p>
+          <p>
+            Device enrollment secret: <code data-testid="fresh-device-secret">{props.freshSecret.deviceEnrollmentSecret}</code>
+          </p>
           {props.freshSecret.trialSms > 0 && (
             <p className="muted">Trial credits: {props.freshSecret.trialSms} OTP + {props.freshSecret.trialSms} bulk SMS</p>
           )}
@@ -154,6 +162,7 @@ export function Apps({
   const [freshSecret, setFreshSecret] = useState<{
     appId: string;
     appSecret: string;
+    deviceEnrollmentSecret: string;
     trialSms: number;
   } | null>(null);
   const [mailConfigured, setMailConfigured] = useState<boolean | null>(null);
@@ -179,6 +188,7 @@ export function Apps({
         setFreshSecret({
           appId: created.appId,
           appSecret: created.appSecret,
+          deviceEnrollmentSecret: created.deviceEnrollmentSecret,
           trialSms: created.trial?.otpSms ?? 0,
         });
       })

@@ -19,7 +19,7 @@
  * constant-time secret comparison even when the header is missing.
  */
 import type { FastifyPluginAsync } from "fastify";
-import { constantTimeEquals, generateWebhookSecret, newId } from "../services/crypto.js";
+import { constantTimeEquals, generateDeviceEnrollmentSecret, generateWebhookSecret, newId } from "../services/crypto.js";
 import { MIN_SECRET_LENGTH } from "../config.js";
 import { asRecord, asString } from "../services/parse.js";
 
@@ -168,6 +168,8 @@ const appProvisioningRoutes: FastifyPluginAsync = async (app) => {
 
     const rowId = newId();
     const webhookSecret = generateWebhookSecret();
+    // STAGE F7 (ISSUE-87): per-app device enrollment secret, returned once here.
+    const deviceEnrollmentSecret = generateDeviceEnrollmentSecret();
     const trialCount = app.config.trialSmsCount;
     const trialTtlSec = app.config.trialSmsTtlDays * 24 * 60 * 60;
     const trialExpiresAt = Math.floor(Date.now() / 1000) + trialTtlSec;
@@ -184,14 +186,15 @@ const appProvisioningRoutes: FastifyPluginAsync = async (app) => {
       app.db.transaction(() => {
         app.db
           .prepare(
-            "INSERT INTO apps (id, app_id, app_secret_hash, name, webhook_url, webhook_secret, " +
+            "INSERT INTO apps (id, app_id, app_secret_hash, device_enrollment_secret_hash, name, webhook_url, webhook_secret, " +
               "webhook_secret_hash, rate_max_per_phone, rate_window_sec, created_at) " +
-              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())",
+              "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())",
           )
           .run(
             rowId,
             appId,
             app.sha256Hex(appSecret),
+            app.sha256Hex(deviceEnrollmentSecret),
             name,
             webhookUrl,
             webhookSecret,
@@ -236,6 +239,7 @@ const appProvisioningRoutes: FastifyPluginAsync = async (app) => {
       name,
       webhookUrl,
       webhookSecret,
+      deviceEnrollmentSecret,
       trial: trialCount > 0 ? { otpSms: trialCount, bulkSms: trialCount, expiresAt: trialExpiresAt } : null,
     });
   });
