@@ -79,6 +79,20 @@ export interface Config {
   /** Sliding window for the provisioning rate limiter, in seconds. */
   appProvisioningRateWindowSec: number;
   /**
+   * Dashboard session-cookie lifetime in seconds (STAGE F3 customer auth).
+   * Applies to the HttpOnly `dp_session` cookie set by register/login; logout
+   * deletes the row immediately, so this is the maximum exposure of a stolen
+   * cookie that was never logged out.
+   */
+  sessionTtlSec: number;
+  /**
+   * Max customer-auth attempts (register/login/link) per client IP inside the
+   * sliding window — brute-force guard for the shared email+password surface.
+   */
+  authRateMaxPerHour: number;
+  /** Sliding window for the customer-auth rate limiter, in seconds. */
+  authRateWindowSec: number;
+  /**
    * One-time trial credits granted atomically with each successful
    * POST /v5/apps/register (ISSUE-77). 0 = trial disabled (no grant, no
    * app_credits row — a fresh app fails closed on send exactly as before).
@@ -286,6 +300,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "APP_PROVISIONING_RATE_WINDOW_SEC",
       3600,
     ),
+    sessionTtlSec: parsePositiveInt(env.SESSION_TTL_SEC, "SESSION_TTL_SEC", 7 * 24 * 60 * 60),
+    authRateMaxPerHour: parsePositiveInt(env.AUTH_RATE_MAX_PER_HOUR, "AUTH_RATE_MAX_PER_HOUR", 30),
+    authRateWindowSec: parsePositiveInt(env.AUTH_RATE_WINDOW_SEC, "AUTH_RATE_WINDOW_SEC", 3600),
     trialSmsCount: parsePositiveInt(env.TRIAL_SMS_COUNT, "TRIAL_SMS_COUNT", 20, true),
     trialSmsTtlDays: parsePositiveInt(env.TRIAL_SMS_TTL_DAYS, "TRIAL_SMS_TTL_DAYS", 30),
     outstandingRequeueSec: parsePositiveInt(

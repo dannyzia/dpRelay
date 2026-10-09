@@ -1,15 +1,48 @@
 /**
  * User-plane auth routes (M1): register, login, refresh.
  * All failures return the structured { ok: false, error, code } envelope.
+ *
+ * STAGE F3 (ISSUE-81) adds real customer auth for the web-v5 dashboard ON THE
+ * SAME PATHS, without breaking the M1 JWT contract (see the additive-hybrid
+ * decision on ISSUE-81):
+ * - register/login now hash with scrypt (new hashes; stored Argon2 PHC keeps
+ *   verifying), enforce the ordered 10-char minimum, are rate-limited per IP,
+ *   and set an HttpOnly session cookie. Their response envelopes are preserved
+ *   byte-for-byte so the legacy dashboard/ + web/ consumers and the existing
+ *   auth.test.ts / m3-tails.test.ts suites keep passing unmodified.
+ * - New routes: POST /v5/auth/logout, GET /v5/auth/me, POST+GET /v5/auth/apps,
+ *   POST /v5/auth/apps/link — all session-cookie based.
+ * - /v5/auth/refresh is untouched (M1 contract).
  */
-import type { FastifyPluginAsync } from "fastify";
-import { newId, hashPassword } from "../services/crypto.js";
+import { randomBytes } from "node:crypto";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import {
+  constantTimeEquals,
+  generateAppCredentials,
+  hashPasswordScrypt,
+  newId,
+  sha256Hex,
+  verifyStoredPassword,
+} from "../services/crypto.js";
 
 /** RFC 5322-lite email shape: local@domain.tld, no spaces. Full validation is deliverability, not syntax. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-/** NIST SP 800-63B: min 8; we cap at 128 to bound Argon2 work per request. */
-const PASSWORD_MIN = 8;
+/** F3 (ISSUE-81): minimum raised 8 → 10 by owner order; cap at 128 to bound KDF work per request. */
+const PASSWORD_MIN = 10;
 const PASSWORD_MAX = 128;
+
+/** Dashboard session cookie. HttpOnly + Secure + SameSite=Lax set on every write. */
+const SESSION_COOKIE = "dp_session";
+
+/**
+ * Format-valid scrypt hash of an unguessable value, burned on the login path
+ * when no user row exists so the KDF cost (and therefore response timing) is
+ * identical for unknown emails and wrong passwords.
+ */
+const DUMMY_SCRYPT_HASH = "scrypt:N=32768,r=8,p=1:abababababababababababababababab:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+
+/** SHA-256 of a fixed string, compared when the link target row is missing (constant-time miss path). */
+const DUMMY_APP_DIGEST = sha256Hex("dprelay-auth-link-dummy");
 
 interface RegisterBody {
   email?: unknown;
@@ -22,13 +55,148 @@ interface LoginBody {
 interface RefreshBody {
   refreshToken?: unknown;
 }
+interface LinkBody {
+  appId?: unknown;
+  appSecret?: unknown;
+}
+interface NameBody {
+  name?: unknown;
+}
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
+/** Current unixepoch seconds (session expiry comparisons). */
+function nowSec(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/**
+ * Extracts the session cookie value from the raw Cookie header. A single
+ * cookie is all we need, so this stays dependency-free (no @fastify/cookie).
+ */
+function readSessionCookie(request: FastifyRequest): string | null {
+  const header = request.headers.cookie;
+  if (typeof header !== "string") return null;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === SESSION_COOKIE) {
+      const value = part.slice(eq + 1).trim();
+      return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
+    }
+  }
+  return null;
+}
+
+interface SessionUser {
+  sessionId: string;
+  user: { id: string; email: string };
+}
+
 const authRoutes: FastifyPluginAsync = async (app) => {
+  /**
+   * Per-IP sliding-window limiter for the customer-auth surface (register,
+   * login, link) — brute-force guard for a shared email+password endpoint.
+   * All attempts count, success or failure. Per-instance state isolates tests.
+   */
+  const authAttempts = new Map<string, number[]>();
+  const authWindowMs = app.config.authRateWindowSec * 1000;
+  const authRateMax = app.config.authRateMaxPerHour;
+
+  function authRateCheck(ip: string): { allowed: boolean; retryAfterSec: number } {
+    const now = Date.now();
+    const stamps = (authAttempts.get(ip) ?? []).filter((t) => now - t < authWindowMs);
+    if (stamps.length >= authRateMax) {
+      const oldest = stamps[0] ?? now;
+      authAttempts.set(ip, stamps);
+      return {
+        allowed: false,
+        retryAfterSec: Math.max(1, Math.ceil((oldest + authWindowMs - now) / 1000)),
+      };
+    }
+    stamps.push(now);
+    authAttempts.set(ip, stamps);
+    return { allowed: true, retryAfterSec: 0 };
+  }
+
+  /** Sets the session cookie on a response (HttpOnly + Secure + SameSite=Lax). */
+  function setSessionCookie(reply: FastifyReply, token: string): void {
+    reply.header(
+      "set-cookie",
+      `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${app.config.sessionTtlSec}`,
+    );
+  }
+
+  /** Expires the session cookie (logout). Max-Age=0 makes the browser drop it. */
+  function clearSessionCookie(reply: FastifyReply): void {
+    reply.header(
+      "set-cookie",
+      `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
+    );
+  }
+
+  /**
+   * Creates a hashed session row and returns the raw token — which exists only
+   * in the Set-Cookie header, never in the DB or logs (refresh_tokens parity).
+   */
+  function createSession(userId: string): string {
+    const raw = randomBytes(32).toString("base64url");
+    app.db
+      .prepare(
+        "INSERT INTO user_sessions (id, user_id, token_hash, expires_at, created_at) " +
+          "VALUES (?, ?, ?, unixepoch() + ?, unixepoch())",
+      )
+      .run(newId(), userId, sha256Hex(raw), app.config.sessionTtlSec);
+    return raw;
+  }
+
+  /**
+   * Resolves the cookie to a live session. Expired rows and sessions of
+   * disabled users are deleted lazily (logout already deletes eagerly), so a
+   * dead token is never honored twice.
+   */
+  function resolveSession(request: FastifyRequest): SessionUser | null {
+    const raw = readSessionCookie(request);
+    if (raw === null) return null;
+    const row = app.db
+      .prepare(
+        "SELECT s.id AS session_id, s.expires_at, u.id AS user_id, u.email, u.disabled " +
+          "FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
+      )
+      .get(sha256Hex(raw)) as
+      | { session_id: string; expires_at: number; user_id: string; email: string; disabled: number }
+      | undefined;
+    if (!row) return null;
+    if (row.expires_at <= nowSec() || row.disabled !== 0) {
+      app.db.prepare("DELETE FROM user_sessions WHERE id = ?").run(row.session_id);
+      return null;
+    }
+    return { sessionId: row.session_id, user: { id: row.user_id, email: row.email } };
+  }
+
+  /**
+   * Session guard for the F3 routes: sends the 401 envelope itself (the route
+   * then returns `reply` untouched) or yields the live session.
+   */
+  function requireSession(request: FastifyRequest, reply: FastifyReply): SessionUser | null {
+    const session = resolveSession(request);
+    if (session === null) {
+      reply.code(401).send({ ok: false, error: "Sign in required", code: "auth_required" });
+    }
+    return session;
+  }
+
   app.post("/v5/auth/register", async (request, reply) => {
+    const verdict = authRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many auth attempts", code: "rate_limited" });
+    }
+
     const body = (request.body ?? {}) as RegisterBody;
     const { email, password } = body;
 
@@ -49,15 +217,30 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(409).send({ ok: false, error: "Email already registered", code: "email_taken" });
     }
 
-    const passwordHash = await hashPassword(password);
+    // F3: new hashes are scrypt (owner-ordered, node:crypto); rows minted by
+    // the M1 Argon2 flow keep verifying through verifyStoredPassword's dispatch.
+    const userId = newId();
+    const passwordHash = await hashPasswordScrypt(password);
     app.db
       .prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, unixepoch())")
-      .run(newId(), normalized, passwordHash);
+      .run(userId, normalized, passwordHash);
 
+    // Additive: a session cookie now comes with the M1 { ok: true } envelope,
+    // so the dashboard is signed in immediately after signup while legacy
+    // register consumers (which ignore cookies) see no contract change.
+    setSessionCookie(reply, createSession(userId));
     return reply.code(201).send({ ok: true });
   });
 
   app.post("/v5/auth/login", async (request, reply) => {
+    const verdict = authRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many auth attempts", code: "rate_limited" });
+    }
+
     const body = (request.body ?? {}) as LoginBody;
     const { email, password } = body;
     if (!isNonEmptyString(email) || !isNonEmptyString(password)) {
@@ -68,13 +251,27 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const user = await app.authenticateUser(email, password);
-    if (!user) {
+    const normalized = email.trim().toLowerCase();
+    const row = app.db
+      .prepare("SELECT id, email, password_hash, disabled FROM users WHERE email = ?")
+      .get(normalized) as
+      | { id: string; email: string; password_hash: string; disabled: number }
+      | undefined;
+
+    // One verifier for both hash generations; the dummy hash equalizes timing
+    // on the unknown-email path (order: constant-time verify, generic errors).
+    const passwordOk = await verifyStoredPassword(row?.password_hash ?? DUMMY_SCRYPT_HASH, password);
+    if (!row || !passwordOk || row.disabled !== 0) {
+      // Unknown email, wrong password, and disabled account share one envelope
+      // so probing cannot distinguish registered addresses.
       return reply.code(401).send({ ok: false, error: "Invalid credentials", code: "invalid_credentials" });
     }
 
-    const accessToken = app.mintAccessToken({ id: user.id, email: user.email });
-    const refreshToken = app.createRefreshToken(user.id, app.config.refreshTokenTtlSec);
+    setSessionCookie(reply, createSession(row.id));
+
+    // M1 JWT contract preserved verbatim for legacy dashboard/ + web/ clients.
+    const accessToken = app.mintAccessToken({ id: row.id, email: row.email });
+    const refreshToken = app.createRefreshToken(row.id, app.config.refreshTokenTtlSec);
     return reply.code(200).send({ ok: true, accessToken, refreshToken });
   });
 
@@ -115,6 +312,210 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     const accessToken = app.mintAccessToken(user);
     const newRefreshToken = app.createRefreshToken(user.id, app.config.refreshTokenTtlSec);
     return reply.code(200).send({ ok: true, accessToken, refreshToken: newRefreshToken });
+  });
+
+  /**
+   * F3 (ISSUE-81): ends the dashboard session. Idempotent — a missing or
+   * already-dead cookie still clears. The session ROW is deleted, not just the
+   * cookie, so a token copied before logout dies with the browser it left.
+   */
+  app.post("/v5/auth/logout", async (request, reply) => {
+    const raw = readSessionCookie(request);
+    if (raw !== null) {
+      app.db.prepare("DELETE FROM user_sessions WHERE token_hash = ?").run(sha256Hex(raw));
+    }
+    clearSessionCookie(reply);
+    return reply.code(200).send({ ok: true });
+  });
+
+  /**
+   * F3 (ISSUE-81): identifies the signed-in customer. No app-plane data here —
+   * the frontend follows up with GET /v5/auth/apps for the owned list.
+   */
+  app.get("/v5/auth/me", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const row = app.db.prepare("SELECT created_at FROM users WHERE id = ?").get(session.user.id) as
+      | { created_at: number }
+      | undefined;
+    return reply.code(200).send({
+      ok: true,
+      user: { id: session.user.id, email: session.user.email, createdAt: row?.created_at ?? null },
+    });
+  });
+
+  /**
+   * F3 (ISSUE-81): self-serve app registration. Any signed-in customer mints
+   * their own appId+appSecret — the SAME entropy policy as the operator route's
+   * credential handling (32 random bytes, SHA-256-at-rest) — and owns the row
+   * via apps.owner_user_id. The trial grant is applied in the SAME transaction
+   * as the app row (ISSUE-77 invariant: UNIQUE(app_id) + PK(app_credits.app_id)
+   * make the one-time property a database invariant, not an app-level flag).
+   * appSecret is returned EXACTLY once here; the DB keeps only its digest.
+   */
+  app.post("/v5/auth/apps", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+
+    const body = (request.body ?? {}) as NameBody;
+    const name =
+      typeof body.name === "string" && body.name.trim().length > 0
+        ? body.name.trim().slice(0, 128)
+        : null;
+
+    const { appId, appSecret } = generateAppCredentials();
+    const rowId = newId();
+    const finalName = name ?? appId;
+    const trialCount = app.config.trialSmsCount;
+    const trialTtlSec = app.config.trialSmsTtlDays * 24 * 60 * 60;
+    const trialExpiresAt = nowSec() + trialTtlSec;
+
+    app.db.transaction(() => {
+      app.db
+        .prepare(
+          "INSERT INTO apps (id, app_id, app_secret_hash, name, owner_user_id, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, unixepoch())",
+        )
+        .run(rowId, appId, app.sha256Hex(appSecret), finalName, session.user.id);
+      if (trialCount > 0) {
+        app.db
+          .prepare(
+            "INSERT INTO app_credits (app_id, otp_sms_remaining, bulk_sms_remaining, " +
+              "otp_expires_at, bulk_expires_at, updated_at) " +
+              "VALUES (?, ?, ?, unixepoch() + ?, unixepoch() + ?, unixepoch())",
+          )
+          .run(rowId, trialCount, trialCount, trialTtlSec, trialTtlSec);
+      }
+    })();
+
+    app.log.info({ appId, userId: session.user.id, trialSms: trialCount }, "self-serve app registered");
+    return reply.code(201).send({
+      ok: true,
+      appId,
+      appSecret,
+      name: finalName,
+      trial: trialCount > 0 ? { otpSms: trialCount, bulkSms: trialCount, expiresAt: trialExpiresAt } : null,
+    });
+  });
+
+  /**
+   * F3 (ISSUE-81): lists the signed-in customer's apps. Secrets are never
+   * re-served: the projection carries no hash material, so even a hijacked
+   * session cannot exfiltrate credentials that were shown exactly once. The
+   * secret-less list is also what makes an owned app recoverable in a new tab:
+   * the user re-proves via POST /v5/auth/apps/link.
+   */
+  app.get("/v5/auth/apps", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const rows = app.db
+      .prepare(
+        "SELECT app_id, name, revoked_at, created_at FROM apps " +
+          "WHERE owner_user_id = ? ORDER BY created_at DESC, app_id",
+      )
+      .all(session.user.id) as Array<{
+      app_id: string;
+      name: string;
+      revoked_at: number | null;
+      created_at: number;
+    }>;
+    return reply.code(200).send({
+      ok: true,
+      apps: rows.map((r) => ({
+        appId: r.app_id,
+        name: r.name,
+        revoked: r.revoked_at !== null,
+        createdAt: r.created_at,
+      })),
+    });
+  });
+
+  /**
+   * F3 (ISSUE-81): claims an operator-provisioned app (owner_user_id IS NULL —
+   * how Haven et al. get into the dashboard) by proving possession of its
+   * appId+appSecret once. Idempotent re-prove for an app the user already owns
+   * (recovering credentials in a fresh tab). Unknown appId and secret mismatch
+   * share ONE envelope so the endpoint cannot enumerate registered appIds.
+   */
+  app.post("/v5/auth/apps/link", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+
+    const verdict = authRateCheck(request.ip);
+    if (!verdict.allowed) {
+      return reply
+        .code(429)
+        .header("Retry-After", String(verdict.retryAfterSec))
+        .send({ ok: false, error: "Too many auth attempts", code: "rate_limited" });
+    }
+
+    const body = (request.body ?? {}) as LinkBody;
+    const { appId, appSecret } = body;
+    if (!isNonEmptyString(appId) || !isNonEmptyString(appSecret)) {
+      return reply.code(400).send({
+        ok: false,
+        error: "appId and appSecret are required",
+        code: "invalid_request",
+      });
+    }
+
+    const row = app.db
+      .prepare(
+        "SELECT id, app_id, name, app_secret_hash, owner_user_id, revoked_at FROM apps WHERE app_id = ?",
+      )
+      .get(appId) as
+      | {
+          id: string;
+          app_id: string;
+          name: string;
+          app_secret_hash: string;
+          owner_user_id: string | null;
+          revoked_at: number | null;
+        }
+      | undefined;
+
+    // Constant-time comparison even when the row is missing (dummy digest).
+    const matches = constantTimeEquals(app.sha256Hex(appSecret), row?.app_secret_hash ?? DUMMY_APP_DIGEST);
+    if (!row || !matches) {
+      return reply
+        .code(401)
+        .send({ ok: false, error: "Invalid app credentials", code: "invalid_app_credentials" });
+    }
+
+    if (row.owner_user_id === session.user.id) {
+      // Re-prove: the caller owns this app and just supplied its credentials
+      // again (e.g. new browser tab — GET /v5/auth/apps never re-serves secrets).
+      return reply.code(200).send({
+        ok: true,
+        appId: row.app_id,
+        name: row.name,
+        revoked: row.revoked_at !== null,
+      });
+    }
+    if (row.owner_user_id !== null) {
+      return reply
+        .code(409)
+        .send({ ok: false, error: "This app is linked to another account", code: "app_already_linked" });
+    }
+    if (row.revoked_at !== null) {
+      return reply
+        .code(409)
+        .send({ ok: false, error: "This app is revoked and cannot be linked", code: "app_revoked" });
+    }
+
+    // Guarded claim: the IS NULL predicate makes two concurrent claims race to
+    // exactly one winner (changes === 0 → the other session won).
+    const result = app.db
+      .prepare("UPDATE apps SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL")
+      .run(session.user.id, row.id);
+    if (result.changes === 0) {
+      return reply
+        .code(409)
+        .send({ ok: false, error: "This app is linked to another account", code: "app_already_linked" });
+    }
+
+    app.log.info({ appId: row.app_id, userId: session.user.id }, "operator-provisioned app linked by owner");
+    return reply.code(200).send({ ok: true, appId: row.app_id, name: row.name, revoked: false });
   });
 };
 

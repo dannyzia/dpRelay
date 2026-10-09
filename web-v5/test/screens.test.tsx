@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
-import type { CreditPackage, Credits, Transaction } from "../src/api";
+import type { CreditPackage, Credits, OwnedApp, Transaction } from "../src/api";
+import { AppsView } from "../src/screens/Apps";
 import { CheckoutView, PackageListView } from "../src/screens/BuyCredits";
 import { CredentialsView } from "../src/screens/Credentials";
 import { CreditsView } from "../src/screens/Credits";
 import { Docs } from "../src/screens/Docs";
 import { HistoryView } from "../src/screens/History";
+import { LinkAppView } from "../src/screens/LinkApp";
 import { LoginView } from "../src/screens/Login";
 
 /**
@@ -27,25 +29,122 @@ const FIXTURE_CREDITS: Credits = {
   purchasedAt: null,
 };
 
-describe("LoginView", () => {
-  it("renders the credential form", () => {
-    const html = render(<LoginView error={null} busy={false} onSubmit={(): void => undefined} />);
-    expect(html).toContain('id="appId"');
-    expect(html).toContain('id="appSecret"');
+describe("LoginView (F3 email/password)", () => {
+  it("renders the email/password sign-in form", () => {
+    const html = render(
+      <LoginView mode="login" error={null} busy={false} onSubmit={(): void => undefined} onToggleMode={(): void => undefined} />,
+    );
+    expect(html).toContain('id="email"');
+    expect(html).toContain('id="password"');
     expect(html).toContain("Sign in");
+    expect(html).toContain("Create one");
+    // The raw credential gate is gone: no app-plane fields on the front door.
+    expect(html).not.toContain('id="appId"');
+    expect(html).not.toContain('id="appSecret"');
+  });
+
+  it("renders the signup variant with the 10-char hint", () => {
+    const html = render(
+      <LoginView mode="signup" error={null} busy={false} onSubmit={(): void => undefined} onToggleMode={(): void => undefined} />,
+    );
+    expect(html).toContain("Create your account");
+    expect(html).toContain("At least 10 characters");
+    // renderToString emits the camelCase React attribute verbatim.
+    expect(html).toContain("minLength=\"10\"");
+    expect(html).toContain("Create account");
   });
 
   it("surfaces the server rejection and disables while busy", () => {
     const html = renderToString(
       <LoginView
-        error="Sign-in rejected: Unknown X-App-Id (unknown_app)"
+        mode="login"
+        error="Invalid credentials (invalid_credentials)"
         busy
         onSubmit={(): void => undefined}
+        onToggleMode={(): void => undefined}
       />,
     );
-    expect(html).toContain("unknown_app");
+    expect(html).toContain("invalid_credentials");
     expect(html).toContain("Checking…");
     expect(html).toContain("disabled");
+  });
+});
+
+describe("AppsView (F3 owned apps)", () => {
+  const OWNED: OwnedApp[] = [
+    { appId: "app_alpha", name: "My shop", revoked: false, createdAt: 1791500000 },
+    { appId: "app_dead", name: "Old shop", revoked: true, createdAt: 1791400000 },
+  ];
+
+  it("lists owned apps with per-app actions and the revoked badge", () => {
+    const html = render(
+      <AppsView
+        apps={OWNED}
+        error={null}
+        busy={false}
+        freshSecret={null}
+        onOpen={(): void => undefined}
+        onCreate={(): void => undefined}
+        onAcknowledgeSecret={(): void => undefined}
+        onLinkExisting={(): void => undefined}
+      />,
+    );
+    expect(html).toContain("My shop");
+    expect(html).toContain("app_alpha");
+    expect(html).toContain("revoked");
+    expect(html).toContain("Register a new app");
+    expect(html).toContain("Link existing app");
+  });
+
+  it("shows the empty state and the one-time secret panel", () => {
+    const empty = render(
+      <AppsView
+        apps={[]}
+        error={null}
+        busy={false}
+        freshSecret={null}
+        onOpen={(): void => undefined}
+        onCreate={(): void => undefined}
+        onAcknowledgeSecret={(): void => undefined}
+        onLinkExisting={(): void => undefined}
+      />,
+    );
+    expect(empty).toContain("No apps yet");
+
+    const withSecret = render(
+      <AppsView
+        apps={[]}
+        error={null}
+        busy={false}
+        freshSecret={{ appId: "app_new1", appSecret: "s3cret-value", trialSms: 20 }}
+        onOpen={(): void => undefined}
+        onCreate={(): void => undefined}
+        onAcknowledgeSecret={(): void => undefined}
+        onLinkExisting={(): void => undefined}
+      />,
+    );
+    expect(withSecret).toContain("only time the server will show it");
+    expect(withSecret).toContain("app_new1");
+    expect(withSecret).toContain("s3cret-value");
+    expect(withSecret).toContain("20 OTP + 20 bulk SMS");
+  });
+});
+
+describe("LinkAppView (F3 link existing app)", () => {
+  it("prefills the appId, hides the secret, surfaces errors", () => {
+    const html = renderToString(
+      <LinkAppView
+        appId="haven-app"
+        error="Invalid app credentials (invalid_app_credentials)"
+        busy
+        onLink={(): void => undefined}
+        onBack={(): void => undefined}
+      />,
+    );
+    expect(html).toContain('value="haven-app"');
+    expect(html).toContain('type="password"');
+    expect(html).toContain("invalid_app_credentials");
+    expect(html).toContain("Checking…");
   });
 });
 

@@ -115,6 +115,12 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
       origin: allowedOrigins,
       methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-App-Id", "X-App-Secret"],
+      // STAGE F3 (ISSUE-81): the dashboard authenticates with an HttpOnly
+      // session cookie cross-origin (API + site are both on onrender.com, so
+      // SameSite=Lax still sends it). Browsers refuse credentialed responses
+      // unless ACAO is an exact origin AND Allow-Credentials is true — the
+      // allowlist is exact origins, never `*`, so this cannot widen exposure.
+      credentials: true,
       maxAge: 86400,
     });
   }
