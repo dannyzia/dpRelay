@@ -384,6 +384,15 @@
         }
       }
     },
+    "/v5/bulk/campaigns/preview": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/bulk/campaigns": {
       "post": {
         "responses": {

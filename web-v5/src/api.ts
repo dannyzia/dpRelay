@@ -883,3 +883,62 @@ export async function downloadOperatorCsv(path: string, filename: string): Promi
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// ── Bulk recipient upload (F5c: preview → checksum-bound confirm) ─────────
+
+/** One rejected recipient row: 1-based file line + why it failed. */
+export interface BulkInvalidRow {
+  line: number;
+  reason: string;
+}
+
+export interface BulkPreview {
+  total: number;
+  sampleFirst5: string[];
+  invalidRows: BulkInvalidRow[];
+  /** SHA-256 the create route must reproduce — binds submit to this preview. */
+  checksum: string;
+  headerSkipped?: boolean;
+  perCampaignLimit?: number;
+}
+
+export interface BulkCreateResult {
+  ok: true;
+  campaignId: string;
+  totalRecipients: number;
+  creditsReserved: number;
+  charset: string;
+  status: string;
+  duplicateCount?: number;
+}
+
+/**
+ * Step 1 — POST /v5/bulk/campaigns/preview with the RAW csv text
+ * (Content-Type: text/csv; the server parses natively, no library here).
+ * Pure validation: spends nothing, stores nothing.
+ */
+export async function previewBulkCsv(csvText: string): Promise<BulkPreview> {
+  return appFetch<BulkPreview & { ok: true }>("/v5/bulk/campaigns/preview", {
+    method: "POST",
+    headers: { "Content-Type": "text/csv" },
+    body: csvText,
+  });
+}
+
+/**
+ * Step 2 — POST /v5/bulk/campaigns carrying the preview checksum. The server
+ * recomputes it over the submitted csv and answers `checksum_mismatch` when
+ * the list changed, so a list the operator never reviewed cannot spend
+ * credits. The confirm payload names the field `name` (F5c AC).
+ */
+export async function createBulkCampaign(input: {
+  checksum: string;
+  name: string;
+  message: string;
+  csv: string;
+}): Promise<BulkCreateResult> {
+  return appFetch<BulkCreateResult>("/v5/bulk/campaigns", {
+    method: "POST",
+    body: JSON.stringify({ ...input, sourceType: "csv" }),
+  });
+}

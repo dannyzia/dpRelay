@@ -15,7 +15,7 @@
  *   at-least-once).
  */
 import type { FastifyInstance } from "fastify";
-import { newId } from "./crypto.js";
+import { newId, sha256Hex } from "./crypto.js";
 
 /** GSM 03.38 basic charset — v4 parity (functions/src/bulk/bulkHelpers.js). */
 const GSM_7BIT_CHARSET = new Set([
@@ -74,6 +74,77 @@ export function deduplicatePhones(phones: string[]): { unique: string[]; duplica
     unique.push(phone);
   }
   return { unique, duplicateCount: phones.length - unique.length };
+}
+
+/**
+ * Recipient-file preview caps (F5c spec): at most 5 MB and 50 000 rows per
+ * upload. Spec-fixed literals rather than env config — the browser panel and
+ * the server must agree on them, and they are not deployment-dependent.
+ */
+export const BULK_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
+export const BULK_PREVIEW_MAX_ROWS = 50_000;
+
+/** One rejected recipient row: 1-based file line (or array index) + why. */
+export interface InvalidRow {
+  line: number;
+  reason: string;
+}
+
+export interface ParsedRecipientCsv {
+  /** Valid E.164 rows in file order — duplicates preserved (dedup is a create-time concern). */
+  phones: string[];
+  invalidRows: InvalidRow[];
+  headerSkipped: boolean;
+}
+
+/** Letters-only first cell → header row ("Phone Number", "msisdn", …), not data. */
+const HEADER_RE = /^[A-Za-z][A-Za-z0-9 _-]*$/;
+
+/**
+ * Native recipient-CSV parser (F5c: "CSV parse: native, no new server dep").
+ *
+ * Takes the first comma-separated cell of each non-empty line (exports are
+ * single-column or header + rows), strips surrounding quotes, and validates
+ * strict E.164. Blank lines are skipped and a letters-only first line is
+ * treated as a header; every other non-E.164 cell is reported with its file
+ * line number — rows are NEVER silently dropped (F5c acceptance criterion).
+ */
+export function parseRecipientCsv(text: string): ParsedRecipientCsv {
+  const lines = text.split(/\r?\n/);
+  const phones: string[] = [];
+  const invalidRows: InvalidRow[] = [];
+  let headerSkipped = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = i + 1;
+    const rawLine = lines[i] ?? "";
+    if (rawLine.trim().length === 0) continue;
+    let cell = (rawLine.split(",")[0] ?? "").trim();
+    if (cell.length >= 2 && cell.startsWith("\"") && cell.endsWith("\"")) {
+      cell = cell.slice(1, -1).trim();
+    }
+    if (line === 1 && HEADER_RE.test(cell)) {
+      headerSkipped = true;
+      continue;
+    }
+    if (cell.length === 0) {
+      invalidRows.push({ line, reason: "empty phone number" });
+    } else if (!isValidE164(cell)) {
+      invalidRows.push({ line, reason: "not a valid E.164 number (expected +<country><number>)" });
+    } else {
+      phones.push(cell);
+    }
+  }
+  return { phones, invalidRows, headerSkipped };
+}
+
+/**
+ * Canonical preview checksum (F5c two-step): SHA-256 over the valid phones
+ * in file order joined by newlines, BEFORE deduplication. Adding, removing,
+ * reordering, or editing any row between preview and submit changes this
+ * value, so the create route rejects a spend the operator never reviewed.
+ */
+export function previewChecksum(phones: string[]): string {
+  return sha256Hex(phones.join("\n"));
 }
 
 /** Recipients created for this app since the current UTC-day start (quota input). */

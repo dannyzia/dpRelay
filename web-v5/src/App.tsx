@@ -23,6 +23,7 @@ import {
 } from "./api";
 import { hrefFor, useRoute } from "./router";
 import { Apps } from "./screens/Apps";
+import { Bulk } from "./screens/Bulk";
 import { BuyCredits } from "./screens/BuyCredits";
 import { Credentials } from "./screens/Credentials";
 import { Credits } from "./screens/Credits";
@@ -38,11 +39,12 @@ import { ResetPassword } from "./screens/ResetPassword";
 import { VerifyEmail } from "./screens/VerifyEmail";
 import "./styles.css";
 
-type CustomerTab = "credits" | "buy" | "history" | "credentials";
+type CustomerTab = "credits" | "buy" | "bulk" | "history" | "credentials";
 
 const TABS: { id: CustomerTab; label: string }[] = [
   { id: "credits", label: "Balance" },
   { id: "buy", label: "Buy credits" },
+  { id: "bulk", label: "Bulk" },
   { id: "history", label: "History" },
   { id: "credentials", label: "Credentials" },
 ];
@@ -235,6 +237,8 @@ export function App(): JSX.Element {
           />
         ) : section === "buy" ? (
           <BuyCredits />
+        ) : section === "bulk" ? (
+          <Bulk />
         ) : section === "history" ? (
           <History />
         ) : section === "credentials" ? (
