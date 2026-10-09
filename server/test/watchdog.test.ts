@@ -241,6 +241,8 @@ const noopLog = { warn() {}, info() {}, error() {}, debug() {} } as unknown as F
 const STALE_ALERT: WatchdogAlert = {
   type: "device_heartbeat_stale",
   deviceIds: ["dev-1", "dev-2"],
+  // STAGE F7 (ISSUE-87): positionally aligned with deviceIds; null = unknown.
+  phones: [null, null],
   count: 2,
   threshold_sec: 900,
   detected_at: "2026-01-01T00:00:00.000Z",

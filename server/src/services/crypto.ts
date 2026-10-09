@@ -192,3 +192,14 @@ export function generateAppCredentials(): { appId: string; appSecret: string } {
     appSecret: randomBytes(DEVICE_KEY_BYTES).toString("hex"),
   };
 }
+
+/**
+ * Generates a per-app device enrollment secret (STAGE F7 / ISSUE-87). Same
+ * entropy policy as app secrets (32 random bytes, hex); only its SHA-256
+ * digest is persisted (apps.device_enrollment_secret_hash), so the raw value
+ * exists solely in the ONE creation/rotation response that carries it.
+ * @returns Raw secret for the single response that ever exposes it.
+ */
+export function generateDeviceEnrollmentSecret(): string {
+  return randomBytes(DEVICE_KEY_BYTES).toString("hex");
+}

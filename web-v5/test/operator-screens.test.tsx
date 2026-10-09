@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
 import type {
   AdminApp,
+  AdminDeviceItem,
+  AdminDeviceList,
   AdminMetrics,
   AdminPackage,
   AdminUserItem,
@@ -15,6 +17,7 @@ import {
   AppsView,
   BillingQueueView,
   CampaignsView,
+  DevicesView,
   MetricsView,
   PackagesView,
   PaymentsView,
@@ -559,5 +562,82 @@ describe("ReportsView (F5b spec)", () => {
       <ReportsView ledger={ledger} sendRows={sendRows} sendNextCursor={null} error={null} {...noop} />,
     );
     expect(html.match(/Download CSV/g)).toHaveLength(2);
+  });
+});
+
+describe("DevicesView (STAGE F7)", () => {
+  const device: AdminDeviceItem = {
+    id: "dev-1",
+    label: "Redmi 9",
+    userId: null,
+    createdAt: 1791400000,
+    lastSeenAt: 1791403600,
+    secondsSinceSeen: 60,
+    neverSeen: false,
+    stale: false,
+    revocable: true,
+    revokedAt: null,
+    quarantined: false,
+    quarantinedAt: null,
+    phoneNumber: "+8801613249520",
+    boundAppId: "app_money",
+    boundAppName: "Money app",
+  };
+  const fleetDevice: AdminDeviceItem = {
+    ...device,
+    id: "dev-2",
+    label: "Spare",
+    lastSeenAt: null,
+    neverSeen: true,
+    stale: true,
+    phoneNumber: null,
+    boundAppId: null,
+    boundAppName: null,
+  };
+  const list: AdminDeviceList = {
+    staleThresholdSec: 900,
+    total: 2,
+    staleCount: 1,
+    neverSeenCount: 1,
+    quarantinedCount: 0,
+    devices: [device, fleetDevice],
+  };
+  const apps: AdminApp[] = [
+    {
+      id: "row-1",
+      appId: "app_money",
+      name: "Money app",
+      webhookUrl: null,
+      rateMaxPerPhone: 3,
+      rateWindowSec: 3600,
+      createdAt: 1791400000,
+      revokedAt: null,
+    },
+  ];
+  const noop = { error: null, note: null, busy: false, onBind: (): void => undefined };
+
+  it("renders the ordered identity columns: number | bound-app | last-seen", () => {
+    const html = renderToString(<DevicesView list={list} apps={apps} {...noop} />);
+    expect(html).toContain("+8801613249520");
+    expect(html).toContain("app_money");
+    expect(html).toContain("2026-10-07"); // lastSeenAt formatted UTC
+    expect(html).toContain("fleet (unbound)");
+    expect(html).toContain("never"); // dev-2 has no heartbeat
+    expect(html).toContain("2 devices · 1 stale · 1 never seen · 0 quarantined");
+    // Bound device select carries the app as an option plus the sr-only label.
+    expect(html).toContain("— fleet (unbound) —");
+    expect(html).toContain("app_money (Money app)");
+    expect(html).toContain("Bind device Redmi 9 to an app");
+  });
+
+  it("marks revoked/stale state distinctly and shows the empty state", () => {
+    const html = renderToString(<DevicesView list={list} apps={apps} {...noop} />);
+    // Stale chip carries the seconds-since-heartbeat tooltip.
+    expect(html).toContain('<span class="chip rejected" title="60s since last heartbeat">stale</span>');
+
+    const empty = renderToString(
+      <DevicesView list={{ ...list, devices: [] }} apps={apps} {...noop} />,
+    );
+    expect(empty).toContain("No devices enrolled yet.");
   });
 });

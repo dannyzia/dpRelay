@@ -142,6 +142,15 @@
         }
       }
     },
+    "/v5/device/phone-number": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/device/heartbeat": {
       "post": {
         "responses": {
@@ -787,6 +796,25 @@
         }
       }
     },
+    "/v5/admin/apps/{id}/rotate-device-secret": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/admin/apps/{id}/webhook": {
       "patch": {
         "parameters": [
@@ -906,6 +934,25 @@
       }
     },
     "/v5/admin/devices/{id}/unquarantine": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/admin/devices/{id}/bind": {
       "post": {
         "parameters": [
           {

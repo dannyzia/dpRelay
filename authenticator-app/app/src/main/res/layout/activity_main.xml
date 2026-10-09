@@ -31,4 +31,13 @@
         android:text="@string/auto_start_button"
         android:textAllCaps="false" />
 
+    <!-- STAGE F7 (ISSUE-87): gateway number + optional app enrollment secret. -->
+    <Button
+        android:id="@+id/settingsButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/settings_button"
+        android:textAllCaps="false" />
+
 </LinearLayout>

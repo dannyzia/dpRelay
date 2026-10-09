@@ -27,11 +27,15 @@ export interface StaleDevice {
   user_id: string;
   label: string;
   last_seen_at: number | null;
+  /** STAGE F7 (ISSUE-87): gateway number when known, else null. */
+  phone_number: string | null;
 }
 
 export interface WatchdogAlert {
   type: "device_heartbeat_stale";
   deviceIds: string[];
+  /** STAGE F7: the stale devices' phone numbers, positionally aligned with deviceIds (null = unknown). */
+  phones: (string | null)[];
   count: number;
   threshold_sec: number;
   detected_at: string;
@@ -112,6 +116,9 @@ function formatAlertHtml(alert: OpsAlert): string {
         "🔔 <b>device_heartbeat_stale</b>\n" +
         `count: ${alert.count} (threshold ${alert.threshold_sec}s)\n` +
         `devices: ${alert.deviceIds.map((id) => escapeHtml(id)).join(", ")}\n` +
+        // STAGE F7: the number makes a stale phone identifiable without
+        // opening the panel — the whole point of the identity primitive.
+        `phones: ${alert.phones.map((p) => escapeHtml(p ?? "unknown")).join(", ")}\n` +
         `detected_at: ${escapeHtml(alert.detected_at)}`
       );
     case "webhook_exhaustion":
@@ -748,7 +755,7 @@ export function findStaleDevices(db: FastifyInstance["db"], staleSec: number): S
   const cutoff = Math.floor(Date.now() / 1000) - staleSec;
   return db
     .prepare(
-      "SELECT id, user_id, label, last_seen_at FROM devices " +
+      "SELECT id, user_id, label, last_seen_at, phone_number FROM devices " +
         "WHERE revoked_at IS NULL AND quarantined_at IS NULL AND " +
         "((last_seen_at IS NULL AND created_at < ?) OR " +
         "(last_seen_at IS NOT NULL AND last_seen_at < ?)) " +
@@ -960,6 +967,7 @@ export async function watchdogTick(
   const alert: WatchdogAlert = {
     type: "device_heartbeat_stale",
     deviceIds: stale.map((d) => d.id),
+    phones: stale.map((d) => d.phone_number),
     count: stale.length,
     threshold_sec: config.watchdogStaleSec,
     detected_at: new Date().toISOString(),

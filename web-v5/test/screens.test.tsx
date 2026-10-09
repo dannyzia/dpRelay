@@ -126,7 +126,12 @@ describe("AppsView (F3 owned apps)", () => {
         apps={[]}
         error={null}
         busy={false}
-        freshSecret={{ appId: "app_new1", appSecret: "s3cret-value", trialSms: 20 }}
+        freshSecret={{
+          appId: "app_new1",
+          appSecret: "s3cret-value",
+          deviceEnrollmentSecret: "dev-enroll-value",
+          trialSms: 20,
+        }}
         verifyBanner="hidden"
         onResend={(): void => undefined}
         onOpen={(): void => undefined}
@@ -138,6 +143,9 @@ describe("AppsView (F3 owned apps)", () => {
     expect(withSecret).toContain("only time the server will show it");
     expect(withSecret).toContain("app_new1");
     expect(withSecret).toContain("s3cret-value");
+    // STAGE F7: the per-app device enrollment secret is shown once alongside it.
+    expect(withSecret).toContain("dev-enroll-value");
+    expect(withSecret).toContain("Device enrollment secret");
     expect(withSecret).toContain("20 OTP + 20 bulk SMS");
   });
 

@@ -20,6 +20,10 @@ object EncryptedPrefsHelper {
   private const val KEY_ENROLLMENT_SECRET = "enrollment_secret"
   private const val KEY_DEVICE_API_KEY = "device_api_key_v5"
 
+  // STAGE F7 (ISSUE-87): gateway phone identity + optional per-app enrollment secret.
+  private const val KEY_GATEWAY_NUMBER = "gateway_phone_number"
+  private const val KEY_APP_ENROLLMENT_SECRET = "app_enrollment_secret"
+
   private var encryptedPrefs: SharedPreferences? = null
 
   /**
@@ -58,7 +62,7 @@ object EncryptedPrefsHelper {
       PREFS_FILE_NAME,
       masterKey,
       EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-      EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+      EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
   }
 
@@ -154,5 +158,77 @@ object EncryptedPrefsHelper {
     }
 
     return encryptedPrefs?.getString(KEY_DEVICE_API_KEY, null)
+  }
+
+  /**
+   * Stores the gateway phone number (STAGE F7). Validation lives in
+   * [GatewayIdentity.isValidE164] — Settings rejects anything the server
+   * would refuse; a blank value removes the stored number entirely.
+   *
+   * @param context Application context
+   * @param number E.164 number, or blank/null to clear
+   */
+  fun storeGatewayNumber(context: Context, number: String?) {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    val editor = encryptedPrefs?.edit() ?: return
+    if (number.isNullOrBlank()) {
+      editor.remove(KEY_GATEWAY_NUMBER)
+    } else {
+      editor.putString(KEY_GATEWAY_NUMBER, number)
+    }
+    editor.apply()
+  }
+
+  /**
+   * Retrieves the stored gateway phone number.
+   *
+   * @param context Application context
+   * @return The E.164 number, or null when never set
+   */
+  fun getGatewayNumber(context: Context): String? {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    return encryptedPrefs?.getString(KEY_GATEWAY_NUMBER, null)
+  }
+
+  /**
+   * Stores the optional per-app device enrollment secret (STAGE F7). When set,
+   * enrollment binds this phone to that app; blank/null clears it so the
+   * global operator-fleet secret applies again.
+   *
+   * @param context Application context
+   * @param secret The app's deviceEnrollmentSecret, or blank/null to clear
+   */
+  fun storeAppEnrollmentSecret(context: Context, secret: String?) {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    val editor = encryptedPrefs?.edit() ?: return
+    if (secret.isNullOrBlank()) {
+      editor.remove(KEY_APP_ENROLLMENT_SECRET)
+    } else {
+      editor.putString(KEY_APP_ENROLLMENT_SECRET, secret)
+    }
+    editor.apply()
+  }
+
+  /**
+   * Retrieves the optional per-app device enrollment secret.
+   *
+   * @param context Application context
+   * @return The stored secret, or null when unset (global secret applies)
+   */
+  fun getAppEnrollmentSecret(context: Context): String? {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    return encryptedPrefs?.getString(KEY_APP_ENROLLMENT_SECRET, null)
   }
 }

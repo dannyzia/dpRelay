@@ -30,6 +30,7 @@ const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const ALERT: WatchdogAlert = {
   type: "device_heartbeat_stale",
   deviceIds: ["dev-1"],
+  phones: [null],
   count: 1,
   threshold_sec: 900,
   detected_at: "2026-01-01T00:00:00.000Z",
