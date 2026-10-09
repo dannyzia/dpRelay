@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { describeError, listTransactions, type Transaction } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
-import { formatBdt, formatEpochUtc, formatStatus } from "../format";
+import { formatPrice, formatEpochUtc, formatStatus } from "../format";
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
 
@@ -29,7 +29,7 @@ export function HistoryView({ transactions }: { transactions: Transaction[] }): 
             <td>
               {t.packageCode} <span className="chip">{t.packageType}</span>
             </td>
-            <td className="num">{formatBdt(t.amountBdt)}</td>
+            <td className="num">{formatPrice(t.amountBdt, t.currency)}</td>
             <td className="mono">{t.trxId ?? "—"}</td>
             <td>
               <span className={`chip ${t.status}`}>{formatStatus(t.status)}</span>

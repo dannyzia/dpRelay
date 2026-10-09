@@ -626,8 +626,12 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (session === null) return reply;
     const rows = app.db
       .prepare(
-        "SELECT id, package_code, sms_quota, amount_bdt, package_type, status, trx_id, requested_at, resolved_at " +
-          "FROM credit_transactions WHERE user_id = ? ORDER BY requested_at DESC LIMIT 100",
+        // ISSUE-89: the price unit rides the row so the wallet history never
+        // renders a USD purchase with the taka symbol.
+        "SELECT ct.id, ct.package_code, ct.sms_quota, ct.amount_bdt, ct.package_type, ct.status, " +
+          "ct.trx_id, ct.requested_at, ct.resolved_at, COALESCE(p.currency, 'BDT') AS currency " +
+          "FROM credit_transactions ct LEFT JOIN packages p ON p.id = ct.package_id " +
+          "WHERE ct.user_id = ? ORDER BY ct.requested_at DESC LIMIT 100",
       )
       .all(session.user.id) as Array<{
       id: string;
@@ -639,6 +643,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       trx_id: string | null;
       requested_at: number;
       resolved_at: number | null;
+      currency: string;
     }>;
     return reply.code(200).send({
       ok: true,
@@ -648,6 +653,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         smsQuota: t.sms_quota,
         amountBdt: t.amount_bdt,
         packageType: t.package_type,
+        currency: t.currency,
         status: t.status,
         trxId: t.trx_id,
         requestedAt: t.requested_at,

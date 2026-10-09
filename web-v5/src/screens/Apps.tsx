@@ -18,7 +18,7 @@ import {
   type Wallet,
   type WalletTransaction,
 } from "../api";
-import { formatBdt } from "../format";
+import { formatPrice } from "../format";
 
 /** Epoch-seconds → a short UTC date for the wallet panels. */
 function shortDate(epochSec: number | null): string {
@@ -74,7 +74,7 @@ export function WalletHeader(props: {
                     {t.packageCode} <span className="chip">{t.status}</span>
                   </span>
                   <span>
-                    {t.smsQuota} SMS · {formatBdt(t.amountBdt)} · {shortDate(t.requestedAt)}
+                    {t.smsQuota} SMS · {formatPrice(t.amountBdt, t.currency)} · {shortDate(t.requestedAt)}
                   </span>
                 </li>
               ))}

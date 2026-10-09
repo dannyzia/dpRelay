@@ -81,6 +81,12 @@ interface LedgerRow {
   packageCode: string;
   qty: number;
   amountBdt: number;
+  /**
+   * ISSUE-89: the amount's unit. Purchases carry the package's price
+   * currency; trial grants and spend rows are internal taka-denominated
+   * accounting (qty × UNIT_PRICE_BDT), so they are always BDT.
+   */
+  currency: string;
   trxId: string | null;
 }
 
@@ -125,13 +131,18 @@ const adminReportRoutes: FastifyPluginAsync = async (app) => {
     const appParam = appId !== null ? [appId] : [];
 
     // 1) Purchases: settled money (approved only — see file header).
+    // STAGE F9 (ISSUE-88) fallout fix: wallet purchases carry NO app
+    // (credit_transactions.user_id set, app_id NULL) — LEFT JOIN keeps them,
+    // and the owner identity resolves through the attribution column first.
+    // Wallet rows render as appId "wallet" (CSV/JSON stay honest: no app sold it).
     const purchases = db
       .prepare(
         "SELECT ct.id, ct.resolved_at AS ts, a.app_id, a.name AS app_name, u.email AS owner_email, " +
-          "ct.package_code, ct.sms_quota AS qty, ct.amount_bdt, ct.trx_id " +
+          "ct.package_code, ct.sms_quota AS qty, ct.amount_bdt, ct.trx_id, COALESCE(p.currency, 'BDT') AS currency " +
           "FROM credit_transactions ct " +
-          "JOIN apps a ON a.id = ct.app_id " +
-          "LEFT JOIN users u ON u.id = a.owner_user_id " +
+          "LEFT JOIN apps a ON a.id = ct.app_id " +
+          "LEFT JOIN packages p ON p.id = ct.package_id " +
+          "LEFT JOIN users u ON u.id = COALESCE(ct.user_id, a.owner_user_id) " +
           "WHERE ct.status = 'approved' AND ct.resolved_at IS NOT NULL " +
           "AND ct.resolved_at >= ? AND ct.resolved_at <= ?" +
           appClause +
@@ -140,13 +151,14 @@ const adminReportRoutes: FastifyPluginAsync = async (app) => {
       .all(from, to, ...appParam) as {
       id: string;
       ts: number;
-      app_id: string;
-      app_name: string;
+      app_id: string | null;
+      app_name: string | null;
       owner_email: string | null;
       package_code: string;
       qty: number;
       amount_bdt: number;
       trx_id: string | null;
+      currency: string;
     }[];
 
     // 2) Trial grants: the migration-015 snapshot (going forward).
@@ -196,13 +208,14 @@ const adminReportRoutes: FastifyPluginAsync = async (app) => {
       ...purchases.map((r) => ({
         id: r.id,
         timestamp: r.ts,
-        appId: r.app_id,
+        appId: r.app_id ?? "wallet",
         appName: r.app_name,
         ownerEmail: r.owner_email,
         kind: "purchase" as const,
         packageCode: r.package_code,
         qty: r.qty,
         amountBdt: r.amount_bdt,
+        currency: r.currency,
         trxId: r.trx_id,
       })),
       ...trials.map((r) => ({
@@ -215,6 +228,7 @@ const adminReportRoutes: FastifyPluginAsync = async (app) => {
         packageCode: "trial",
         qty: r.qty ?? 0,
         amountBdt: 0,
+        currency: "BDT",
         trxId: null,
       })),
       ...spends.map((r) => ({
@@ -227,6 +241,7 @@ const adminReportRoutes: FastifyPluginAsync = async (app) => {
         packageCode: "",
         qty: r.qty,
         amountBdt: Math.round(r.qty * UNIT_PRICE_BDT * 100) / 100,
+        currency: "BDT",
         trxId: null,
       })),
     ];
@@ -248,14 +263,19 @@ const adminReportRoutes: FastifyPluginAsync = async (app) => {
     // for the window's REQUESTS, independent of the row pagination).
     const totals = db
       .prepare(
-        "SELECT package_type, status, COUNT(*) AS n, COALESCE(SUM(amount_bdt), 0) AS amount, " +
-          "COALESCE(SUM(CASE WHEN status = 'approved' THEN sms_quota ELSE 0 END), 0) AS granted " +
-          "FROM credit_transactions WHERE requested_at >= ? AND requested_at <= ? " +
-          "GROUP BY package_type, status ORDER BY package_type, status",
+        // ISSUE-89: currency joins the GROUP BY so a USD total is never
+        // summed into (or rendered as) taka — 1 USD ≠ 1 BDT.
+        "SELECT ct.package_type, ct.status, COALESCE(p.currency, 'BDT') AS currency, " +
+          "COUNT(*) AS n, COALESCE(SUM(ct.amount_bdt), 0) AS amount, " +
+          "COALESCE(SUM(CASE WHEN ct.status = 'approved' THEN ct.sms_quota ELSE 0 END), 0) AS granted " +
+          "FROM credit_transactions ct LEFT JOIN packages p ON p.id = ct.package_id " +
+          "WHERE ct.requested_at >= ? AND ct.requested_at <= ? " +
+          "GROUP BY ct.package_type, ct.status, currency ORDER BY ct.package_type, ct.status, currency",
       )
       .all(from, to) as {
       package_type: string;
       status: string;
+      currency: string;
       n: number;
       amount: number;
       granted: number;
@@ -290,10 +310,74 @@ const adminReportRoutes: FastifyPluginAsync = async (app) => {
       totals: totals.map((t) => ({
         packageType: t.package_type,
         status: t.status,
+        currency: t.currency,
         count: t.n,
         amountBdt: t.amount,
         grantedSms: t.granted,
       })),
+    };
+  });
+
+  /**
+   * F5 amendment (ISSUE-89, hub event 1318): package-aggregate report —
+   * per package: count sold, total amount, SMS sold, first/last sale inside
+   * the window, each carrying the package's PRICE CURRENCY (the report is
+   * currency-dimensioned: totals are rolled up per currency and NEVER summed
+   * across currencies, since 1 USD ≠ 1 BDT). Approved purchases only (settled
+   * money — ledger parity), read from the request-time snapshot columns so
+   * later package edits cannot rewrite history. `?from=&to=` epoch seconds,
+   * default last 30 days (shared window helper).
+   */
+  app.get("/v5/admin/reports/packages", { preHandler: [app.requireOperator] }, async (request) => {
+    const query = asRecord(request.query) ?? {};
+    const { from, to } = window(query);
+    const rows = db
+      .prepare(
+        "SELECT ct.package_code, p.name, p.currency, COUNT(*) AS count_sold, " +
+          "COALESCE(SUM(ct.amount_bdt), 0) AS total_amount, " +
+          "COALESCE(SUM(ct.sms_quota), 0) AS sms_sold, " +
+          "MIN(ct.resolved_at) AS first_sold_at, MAX(ct.resolved_at) AS last_sold_at " +
+          "FROM credit_transactions ct JOIN packages p ON p.id = ct.package_id " +
+          "WHERE ct.status = 'approved' AND ct.resolved_at IS NOT NULL " +
+          "AND ct.resolved_at >= ? AND ct.resolved_at <= ? " +
+          "GROUP BY ct.package_code, p.name, p.currency " +
+          "ORDER BY p.currency, ct.package_code",
+      )
+      .all(from, to) as {
+      package_code: string;
+      name: string;
+      currency: string;
+      count_sold: number;
+      total_amount: number;
+      sms_sold: number;
+      first_sold_at: number | null;
+      last_sold_at: number | null;
+    }[];
+
+    // Currency rollup: one bucket per currency — sums stay unit-consistent.
+    const rollup = new Map<string, { currency: string; countSold: number; totalAmount: number }>();
+    for (const r of rows) {
+      const acc = rollup.get(r.currency) ?? { currency: r.currency, countSold: 0, totalAmount: 0 };
+      acc.countSold += r.count_sold;
+      acc.totalAmount += r.total_amount;
+      rollup.set(r.currency, acc);
+    }
+
+    return {
+      ok: true,
+      from,
+      to,
+      rows: rows.map((r) => ({
+        packageCode: r.package_code,
+        name: r.name,
+        currency: r.currency,
+        countSold: r.count_sold,
+        totalAmount: r.total_amount,
+        smsSold: r.sms_sold,
+        firstSoldAt: r.first_sold_at,
+        lastSoldAt: r.last_sold_at,
+      })),
+      totalsByCurrency: Array.from(rollup.values()).sort((a, b) => a.currency.localeCompare(b.currency)),
     };
   });
 

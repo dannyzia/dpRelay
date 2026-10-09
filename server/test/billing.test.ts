@@ -281,6 +281,33 @@ describe("operator queue", () => {
   });
 });
 
+describe("package currency surfaces (ISSUE-89)", () => {
+  it("rides the package currency on the queue and customer history; BDT stays the default", async () => {
+    app = makeApp();
+    seedApp("app_a", CRED_A["x-app-secret"]);
+    await upsertPackage(PKG); // no currency field → server defaults to BDT
+    await upsertPackage({ ...PKG, packageCode: "usd50", name: "USD 50", smsQuota: 50, priceBdt: 20, currency: "USD" });
+    const bdtTx = await purchase(CRED_A, "otp100", "TRX-CUR-BDT");
+    const usdTx = await purchase(CRED_A, "usd50", "TRX-CUR-USD");
+
+    const queue = (await app.inject({
+      method: "GET",
+      url: "/v5/admin/billing/queue",
+      headers: { authorization: `Bearer ${TEST_OPERATOR_SECRET}` },
+    })).json() as { pending: { transactionId: string; currency: string; amountBdt: number }[] };
+    expect(queue.pending.find((t) => t.transactionId === bdtTx)).toMatchObject({ currency: "BDT", amountBdt: 200 });
+    expect(queue.pending.find((t) => t.transactionId === usdTx)).toMatchObject({ currency: "USD", amountBdt: 20 });
+
+    const history = (await app.inject({
+      method: "GET",
+      url: "/v5/billing/transactions",
+      headers: CRED_A,
+    })).json() as { transactions: { transactionId: string; currency: string }[] };
+    expect(history.transactions.find((t) => t.transactionId === bdtTx)?.currency).toBe("BDT");
+    expect(history.transactions.find((t) => t.transactionId === usdTx)?.currency).toBe("USD");
+  });
+});
+
 describe("transaction history + invoice", () => {
   it("history is app-scoped, filterable, cursor-paginated", async () => {
     app = makeApp();

@@ -1,10 +1,11 @@
 /**
- * STAGE F5 (ISSUE-83): package CRUD.
- * Ordered invariants: PATCH edits whitelisted fields (404 unknown, 400
- * malformed), DELETE ALWAYS soft-retires — hard-delete is forbidden, so even
- * a package referenced by transactions keeps its row (audit history), and a
- * retired package's existing transactions still approve from their
- * request-time snapshots.
+ * STAGE F5 (ISSUE-83) → F5 amendment (ISSUE-89, RATIFIED hub event 1319):
+ * package CRUD. Ordered invariants: PATCH edits whitelisted fields (404
+ * unknown, 400 malformed); DELETE is SAFE DELETE — 409 package_in_use for any
+ * package a transaction references (financial history → retire-only,
+ * permanently), hard-delete only for never-used packages. The dedicated
+ * POST …/retire endpoint soft-retires regardless of references, and a retired
+ * package's existing transactions still approve from their snapshots.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
@@ -135,61 +136,73 @@ describe("PATCH /v5/admin/billing/packages/:code", () => {
   });
 });
 
-describe("DELETE /v5/admin/billing/packages/:code (retire only)", () => {
-  it("soft-retires: row survives, public catalog hides it, second delete is idempotent", async () => {
+describe("DELETE /v5/admin/billing/packages/:code (RATIFIED safe-delete)", () => {
+  it("hard-deletes a never-used package: row gone, catalog hides it, second delete 404s, gated", async () => {
     await op("POST", "/v5/admin/billing/packages", PKG);
 
     const res = await op("DELETE", "/v5/admin/billing/packages/otp100");
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, packageCode: "otp100", isActive: false });
+    expect(res.json()).toMatchObject({ ok: true, packageCode: "otp100", deleted: true });
 
-    // Hard-delete is forbidden: the row still exists, just inactive.
-    const row = packageRow("otp100");
-    expect(row).toBeDefined();
-    expect(row?.is_active).toBe(0);
+    // Zero references → the row is GONE (the ratified branch).
+    expect(packageRow("otp100")).toBeUndefined();
 
     const catalog = (await app.inject({ method: "GET", url: "/v5/billing/packages" })).json() as {
       packages: { packageCode: string }[];
     };
     expect(catalog.packages.map((p) => p.packageCode)).not.toContain("otp100");
 
+    // Second delete: unknown row now.
     const again = await op("DELETE", "/v5/admin/billing/packages/otp100");
-    expect(again.statusCode).toBe(200);
-    expect(packageRow("otp100")).toBeDefined();
+    expect(again.statusCode).toBe(404);
 
     expect((await op("DELETE", "/v5/admin/billing/packages/nope")).statusCode).toBe(404);
     const noAuth = await app.inject({ method: "DELETE", url: "/v5/admin/billing/packages/otp100" });
     expect(noAuth.statusCode).toBe(401);
   });
 
-  it("the admin directory lists retired rows too (reactivable), behind the operator gate", async () => {
-    await op("POST", "/v5/admin/billing/packages", PKG);
-    const before = (await op("GET", "/v5/admin/billing/packages")) as { statusCode: number; json: () => unknown };
-    expect(before.statusCode).toBe(200);
-    const initial = before.json() as { packages: { packageCode: string; isActive: boolean }[] };
-    expect(initial.packages.find((p) => p.packageCode === "otp100")?.isActive).toBe(true);
+  it("409s package_in_use when transactions reference it; retire endpoint still soft-retires", async () => {
+    const transactionId = await setupWithTransaction();
 
-    await op("DELETE", "/v5/admin/billing/packages/otp100");
-    const after = (await op("GET", "/v5/admin/billing/packages")) as { json: () => unknown };
-    const rows = (after.json() as { packages: { packageCode: string; isActive: boolean }[] }).packages;
-    expect(rows.find((p) => p.packageCode === "otp100")?.isActive).toBe(false);
+    // Referenced → the RATIFIED branch: retire-only, forever.
+    const res = await op("DELETE", "/v5/admin/billing/packages/otp100");
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "package_in_use" });
+    const row = packageRow("otp100");
+    expect(row).toBeDefined();
+    expect(row?.is_active).toBe(1);
 
-    // Reactivate via PATCH (the reverse of DELETE).
+    // The dedicated retire endpoint soft-retires the same referenced package.
+    const retire = await op("POST", "/v5/admin/billing/packages/otp100/retire");
+    expect(retire.statusCode).toBe(200);
+    expect(packageRow("otp100")?.is_active).toBe(0);
+
+    // Public catalog hides it; admin directory still lists it (reactivable).
+    const catalog = (await app.inject({ method: "GET", url: "/v5/billing/packages" })).json() as {
+      packages: { packageCode: string }[];
+    };
+    expect(catalog.packages.map((p) => p.packageCode)).not.toContain("otp100");
+    const dir = (await op("GET", "/v5/admin/billing/packages")).json() as {
+      packages: { packageCode: string; isActive: boolean }[];
+    };
+    expect(dir.packages.find((p) => p.packageCode === "otp100")?.isActive).toBe(false);
+
+    // Reactivate via PATCH (the reverse of retire).
     const re = await op("PATCH", "/v5/admin/billing/packages/otp100", { isActive: true });
     expect(re.statusCode).toBe(200);
     const reRows = ((await op("GET", "/v5/admin/billing/packages")) as { json: () => unknown }).json() as {
       packages: { packageCode: string; isActive: boolean }[];
     };
     expect(reRows.packages.find((p) => p.packageCode === "otp100")?.isActive).toBe(true);
-
-    const noAuth = await app.inject({ method: "GET", url: "/v5/admin/billing/packages" });
-    expect(noAuth.statusCode).toBe(401);
+    expect(transactionId).toBeTruthy();
   });
 
-  it("a package referenced by transactions can be retired and its pending transaction still approves from the snapshot", async () => {
+  it("a retired (referenced) package's pending transaction still approves from the snapshot", async () => {
     const transactionId = await setupWithTransaction();
 
-    const retire = await op("DELETE", "/v5/admin/billing/packages/otp100");
+    // DELETE refuses (409), retire succeeds — history row stays intact.
+    expect((await op("DELETE", "/v5/admin/billing/packages/otp100")).statusCode).toBe(409);
+    const retire = await op("POST", "/v5/admin/billing/packages/otp100/retire");
     expect(retire.statusCode).toBe(200);
     expect(packageRow("otp100")).toBeDefined(); // history reference intact
 
@@ -208,7 +221,7 @@ describe("DELETE /v5/admin/billing/packages/:code (retire only)", () => {
 });
 
 describe("POST /v5/admin/billing/packages/:code/retire (ISSUE-84 spec endpoint)", () => {
-  it("soft-retires exactly like the DELETE alias: row survives, catalog hides it, idempotent, gated", async () => {
+  it("soft-retires regardless of references: row survives, catalog hides it, idempotent, gated", async () => {
     const up = await op("POST", "/v5/admin/billing/packages", PKG);
     expect(up.statusCode).toBe(201);
 
@@ -217,7 +230,7 @@ describe("POST /v5/admin/billing/packages/:code/retire (ISSUE-84 spec endpoint)"
     expect(retire.json()).toMatchObject({ ok: true, packageCode: "otp100", isActive: false });
     expect(packageRow("otp100")?.is_active).toBe(0);
 
-    // Row survives (hard-delete forbidden) and the public catalog hides it.
+    // Row survives (soft retire) and the public catalog hides it.
     expect(packageRow("otp100")).toBeDefined();
     const catalog = (await app.inject({ method: "GET", url: "/v5/billing/packages" })).json() as {
       packages: unknown[];
@@ -232,11 +245,15 @@ describe("POST /v5/admin/billing/packages/:code/retire (ISSUE-84 spec endpoint)"
     };
     expect(dir.packages.find((p) => p.packageCode === "otp100")?.isActive).toBe(false);
 
-    // Unknown code 404s; operator gate holds; DELETE stays a working alias.
+    // Unknown code 404s; operator gate holds.
     expect((await op("POST", "/v5/admin/billing/packages/nope/retire")).statusCode).toBe(404);
     const noAuth = await app.inject({ method: "POST", url: "/v5/admin/billing/packages/otp100/retire" });
     expect(noAuth.statusCode).toBe(401);
     expect((await op("POST", "/v5/admin/billing/packages/otp100/retire")).statusCode).toBe(200);
+
+    // Safe-delete note: this retired row is still unreferenced, so DELETE
+    // legitimately hard-deletes it (200 + row gone) — the ratified branch.
     expect((await op("DELETE", "/v5/admin/billing/packages/otp100")).statusCode).toBe(200);
+    expect(packageRow("otp100")).toBeUndefined();
   });
 });

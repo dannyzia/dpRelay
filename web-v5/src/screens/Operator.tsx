@@ -20,6 +20,7 @@ import {
   getLedgerReport,
   getMailConfig,
   getOperatorSecret,
+  getPackageReport,
   getSendLog,
   listAdminApps,
   listAdminDevices,
@@ -52,12 +53,13 @@ import {
   type LedgerReport,
   type MailConfigView,
   type OversightCampaign,
+  type PackageReport,
   type PaymentSmsItem,
   type PendingTransaction,
   type SendLogRow,
 } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
-import { formatBdt, formatEpochUtc, formatStatus } from "../format";
+import { formatBdt, formatEpochUtc, formatPrice, formatStatus } from "../format";
 import { hrefFor } from "../router";
 
 type OperatorTab =
@@ -157,8 +159,7 @@ export function BillingQueueView(props: {
             <td className="mono">{tx.appId}</td>
             <td>
               {tx.packageCode} <span className="chip">{tx.packageType}</span>
-            </td>
-            <td className="num">{formatBdt(tx.amountBdt)}</td>
+            </td>              <td className="num">{formatPrice(tx.amountBdt, tx.currency)}</td>
             <td className="mono">{tx.trxId ?? "—"}</td>
             <td>
               <div className="inline-actions">
@@ -371,12 +372,22 @@ function BillingQueue({ note }: { note: (msg: string | null) => void }): JSX.Ele
   const act = (tx: PendingTransaction, approve: boolean): void => {
     setError(null);
     let reason: string | undefined;
+    let notes: string | undefined;
     if (!approve) {
       const input = window.prompt(`Reject reason for ${tx.transactionId}:`);
       if (input === null) return; // cancelled — leave the queue row untouched
       reason = input;
+    } else {
+      // ISSUE-89: approve optionally records the remittance-reference note
+      // (the paper trail for manual USD/EUR approvals). Cancel aborts the
+      // approval, mirroring the reject prompt; an empty note is no note.
+      const input = window.prompt(
+        `Approve note for ${tx.transactionId} (optional — e.g. remittance reference):`,
+      );
+      if (input === null) return; // cancelled — leave the queue row untouched
+      notes = input.trim() === "" ? undefined : input.trim();
     }
-    resolveTransaction(tx.transactionId, approve, reason)
+    resolveTransaction(tx.transactionId, approve, reason, notes)
       .then((res) => {
         note(
           `${tx.transactionId} ${res.status}` +
@@ -1044,8 +1055,9 @@ export function SettingsPanel(): JSX.Element {
 
 /**
  * Pure packages view: full directory (retired rows visible + reactivate),
- * inline per-row edit form, retire button, and the create form. Exported for
- * tests.
+ * inline per-row edit form, retire button, and the create form. Every price
+ * row carries its currency (ISSUE-89: BDT | USD | EUR — priceBdt is in that
+ * unit, never implicitly taka). Exported for tests.
  */
 export function PackagesView(props: {
   packages: AdminPackage[];
@@ -1059,10 +1071,18 @@ export function PackagesView(props: {
     priceBdt: number;
     validityDays: number;
     type: string;
+    currency: string;
   }) => void;
   onPatch: (
     packageCode: string,
-    patch: { name: string; smsQuota: number; priceBdt: number; validityDays: number; type: string },
+    patch: {
+      name: string;
+      smsQuota: number;
+      priceBdt: number;
+      validityDays: number;
+      type: string;
+      currency: string;
+    },
   ) => void;
   onToggleActive: (pkg: AdminPackage) => void;
 }): JSX.Element {
@@ -1083,6 +1103,7 @@ export function PackagesView(props: {
               priceBdt: Number(data.get("priceBdt") ?? 0),
               validityDays: Number(data.get("validityDays") ?? 0),
               type: String(data.get("type") ?? "otp"),
+              currency: String(data.get("currency") ?? "BDT"),
             });
             e.currentTarget.reset();
           }}
@@ -1093,8 +1114,14 @@ export function PackagesView(props: {
           <input id="pkgName" name="name" required maxLength={128} />
           <label htmlFor="pkgQuota">SMS quota</label>
           <input id="pkgQuota" name="smsQuota" type="number" min={1} required />
-          <label htmlFor="pkgPrice">Price (BDT)</label>
+          <label htmlFor="pkgPrice">Price</label>
           <input id="pkgPrice" name="priceBdt" type="number" min={0} required />
+          <label htmlFor="pkgCurrency">Currency</label>
+          <select id="pkgCurrency" name="currency" defaultValue="BDT">
+            <option value="BDT">BDT</option>
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+          </select>
           <label htmlFor="pkgValidity">Validity (days)</label>
           <input id="pkgValidity" name="validityDays" type="number" min={1} required />
           <label htmlFor="pkgType">Type</label>
@@ -1120,6 +1147,7 @@ export function PackagesView(props: {
                 <th>Name</th>
                 <th>Quota</th>
                 <th>Price</th>
+                <th>Currency</th>
                 <th>Days</th>
                 <th>Type</th>
                 <th>State</th>
@@ -1129,7 +1157,7 @@ export function PackagesView(props: {
             <tbody>
               {props.packages.map((p) => (
                 <tr key={p.packageCode}>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <form
                       className="inline-actions"
                       onSubmit={(e): void => {
@@ -1141,6 +1169,7 @@ export function PackagesView(props: {
                           priceBdt: Number(data.get("priceBdt") ?? 0),
                           validityDays: Number(data.get("validityDays") ?? 0),
                           type: String(data.get("type") ?? p.type),
+                          currency: String(data.get("currency") ?? p.currency),
                         });
                       }}
                     >
@@ -1148,6 +1177,11 @@ export function PackagesView(props: {
                       <input name="name" defaultValue={p.name} required maxLength={128} aria-label={`name-${p.packageCode}`} />
                       <input name="smsQuota" type="number" min={1} defaultValue={p.smsQuota} aria-label={`quota-${p.packageCode}`} />
                       <input name="priceBdt" type="number" min={0} defaultValue={p.priceBdt} aria-label={`price-${p.packageCode}`} />
+                      <select name="currency" defaultValue={p.currency} aria-label={`currency-${p.packageCode}`}>
+                        <option value="BDT">BDT</option>
+                        <option value="USD">USD</option>
+                        <option value="EUR">EUR</option>
+                      </select>
                       <input name="validityDays" type="number" min={1} defaultValue={p.validityDays} aria-label={`days-${p.packageCode}`} />
                       <select name="type" defaultValue={p.type} aria-label={`type-${p.packageCode}`}>
                         <option value="otp">otp</option>
@@ -1204,6 +1238,7 @@ export function PackagesPanel(): JSX.Element {
     priceBdt: number;
     validityDays: number;
     type: string;
+    currency: string;
   }): void => {
     setBusy(true);
     setError(null);
@@ -1222,7 +1257,14 @@ export function PackagesPanel(): JSX.Element {
 
   const patch = (
     packageCode: string,
-    fields: { name: string; smsQuota: number; priceBdt: number; validityDays: number; type: string },
+    fields: {
+      name: string;
+      smsQuota: number;
+      priceBdt: number;
+      validityDays: number;
+      type: string;
+      currency: string;
+    },
   ): void => {
     setBusy(true);
     setError(null);
@@ -1545,14 +1587,20 @@ export function DevicesPanel(): JSX.Element {
   return <DevicesView list={list} apps={apps} error={error} note={note} busy={busy} onBind={bind} />;
 }
 
-/** Pure reports view: spec columns, app+date filters, cursor Load-more, CSV-only export. */
+/**
+ * Pure reports view: spec columns, app+date filters, cursor Load-more,
+ * CSV-only export, plus the ISSUE-89 package-aggregate report (currency-
+ * dimensioned — totals roll up per currency, never across).
+ */
 export function ReportsView(props: {
   ledger: LedgerReport | null;
+  pkgReport: PackageReport | null;
   sendRows: SendLogRow[] | null;
   sendNextCursor: string | null;
   error: string | null;
   onLedgerLoad: (from: string, to: string, appId: string) => void;
   onLedgerMore: () => void;
+  onPkgLoad: (from: string, to: string) => void;
   onSendLoad: (from: string, to: string, appId: string) => void;
   onSendMore: () => void;
   onLedgerCsv: (from: string, to: string, appId: string) => void;
@@ -1603,7 +1651,7 @@ export function ReportsView(props: {
           <>
             <p className="muted">
               {props.ledger.rows.length} row(s) — {props.ledger.totals
-                .map((t) => `${t.packageType}/${t.status}: ${t.count} (৳${String(t.amountBdt)}, ${String(t.grantedSms)} SMS granted)`)
+                .map((t) => `${t.packageType}/${t.status} ${t.currency}: ${t.count} (${formatPrice(t.amountBdt, t.currency)}, ${String(t.grantedSms)} SMS granted)`)
                 .join(" · ")}
             </p>
             <table>
@@ -1633,7 +1681,7 @@ export function ReportsView(props: {
                     </td>
                     <td>{r.packageCode === "" ? "—" : r.packageCode}</td>
                     <td className="num">{r.qty}</td>
-                    <td className="num">{formatBdt(r.amountBdt)}</td>
+                    <td className="num">{formatPrice(r.amountBdt, r.currency)}</td>
                     <td className="mono">{r.trxId ?? "—"}</td>
                   </tr>
                 ))}
@@ -1643,6 +1691,70 @@ export function ReportsView(props: {
               <button type="button" className="secondary" onClick={props.onLedgerMore}>
                 Load more
               </button>
+            )}
+          </>
+        )}
+      </section>
+      <section className="card">
+        <h2>Package sales (aggregated)</h2>
+        <p className="muted">
+          Approved purchases per package — totals roll up per currency and are never summed
+          across currencies.
+        </p>
+        <form
+          id="pkgReportForm"
+          className="inline-actions"
+          onSubmit={(e): void => {
+            e.preventDefault();
+            const data = new FormData(e.currentTarget);
+            props.onPkgLoad(String(data.get("from") ?? ""), String(data.get("to") ?? ""));
+          }}
+        >
+          <label htmlFor="pkgRFrom">From</label>
+          <input id="pkgRFrom" name="from" type="date" />
+          <label htmlFor="pkgRTo">To</label>
+          <input id="pkgRTo" name="to" type="date" />
+          <button type="submit">Load package report</button>
+        </form>
+        {props.pkgReport !== null && (
+          <>
+            <p className="muted">
+              {props.pkgReport.rows.length} package(s) —{" "}
+              {props.pkgReport.totalsByCurrency
+                .map((t) => `${t.currency}: ${t.countSold} sold · ${formatPrice(t.totalAmount, t.currency)}`)
+                .join(" · ")}
+            </p>
+            {props.pkgReport.rows.length === 0 ? (
+              <p className="muted">No approved sales in this window.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Package</th>
+                    <th>Name</th>
+                    <th>Currency</th>
+                    <th>Sold</th>
+                    <th>Total</th>
+                    <th>SMS sold</th>
+                    <th>First sale</th>
+                    <th>Last sale</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {props.pkgReport.rows.map((r) => (
+                    <tr key={`${r.packageCode}:${r.currency}`}>
+                      <td className="mono">{r.packageCode}</td>
+                      <td>{r.name}</td>
+                      <td>{r.currency}</td>
+                      <td className="num">{r.countSold}</td>
+                      <td className="num">{formatPrice(r.totalAmount, r.currency)}</td>
+                      <td className="num">{r.smsSold}</td>
+                      <td>{formatEpochUtc(r.firstSoldAt)}</td>
+                      <td>{formatEpochUtc(r.lastSoldAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </>
         )}
@@ -1736,6 +1848,7 @@ export function ReportsView(props: {
 /** Container: filtered + cursor-paged ledger/send log and CSV-only downloads. */
 export function ReportsPanel(): JSX.Element {
   const [ledger, setLedger] = useState<LedgerReport | null>(null);
+  const [pkgReport, setPkgReport] = useState<PackageReport | null>(null);
   const [sendRows, setSendRows] = useState<SendLogRow[] | null>(null);
   const [sendNextCursor, setSendNextCursor] = useState<string | null>(null);
   const [ledgerFilters, setLedgerFilters] = useState<{ appId: string; from?: number; to?: number }>({
@@ -1765,6 +1878,14 @@ export function ReportsPanel(): JSX.Element {
     setError(null);
     getLedgerReport({ ...ledgerFilters, cursor: ledger.nextCursor })
       .then((next) => setLedger({ ...next, rows: [...ledger.rows, ...next.rows] }))
+      .catch((err: unknown) => setError(describeError(err)));
+  };
+
+  /** ISSUE-89 package report: same date-widget → epoch conversion; empty dates → server default window. */
+  const loadPkgReport = (from: string, to: string): void => {
+    setError(null);
+    getPackageReport({ from: dayToEpoch(from), to: dayToEpoch(to) })
+      .then(setPkgReport)
       .catch((err: unknown) => setError(describeError(err)));
   };
 
@@ -1820,11 +1941,13 @@ export function ReportsPanel(): JSX.Element {
   return (
     <ReportsView
       ledger={ledger}
+      pkgReport={pkgReport}
       sendRows={sendRows}
       sendNextCursor={sendNextCursor}
       error={error}
       onLedgerLoad={loadLedger}
       onLedgerMore={moreLedger}
+      onPkgLoad={loadPkgReport}
       onSendLoad={loadSend}
       onSendMore={moreSend}
       onLedgerCsv={ledgerCsv}

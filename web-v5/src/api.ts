@@ -158,6 +158,8 @@ export interface CreditPackage {
   priceBdt: number;
   validityDays: number;
   type: string;
+  /** ISSUE-89: price currency (BDT | USD | EUR) — priceBdt is in this unit. */
+  currency: string;
 }
 
 export interface CreditRequestAccepted {
@@ -174,6 +176,8 @@ export interface Transaction {
   validityDays: number;
   amountBdt: number;
   packageType: string;
+  /** ISSUE-89: amountBdt is in this unit — render with formatPrice, never bare ৳. */
+  currency: string;
   trxId: string | null;
   status: string;
   adminNotes: string | null;
@@ -375,6 +379,8 @@ export interface WalletTransaction {
   smsQuota: number;
   amountBdt: number;
   packageType: string;
+  /** ISSUE-89: the price unit (BDT | USD | EUR). */
+  currency: string;
   status: string;
   trxId: string | null;
   requestedAt: number;
@@ -566,6 +572,8 @@ export interface PendingTransaction {
   smsQuota: number;
   amountBdt: number;
   packageType: string;
+  /** ISSUE-89: USD/EUR pendings are approved manually — show their unit. */
+  currency: string;
   trxId: string | null;
   requestedAt: number;
 }
@@ -705,15 +713,30 @@ export async function listPendingTransactions(): Promise<PendingTransaction[]> {
   return body.pending;
 }
 
-/** POST /v5/admin/billing/approve — approve:false is the reject path (rejectReason travels with it). */
+/**
+ * POST /v5/admin/billing/approve — approve:false is the reject path
+ * (rejectReason travels with it). ISSUE-89: `notes` is the optional
+ * remittance-reference paper trail stored on the pending row in the SAME
+ * transaction as the award (required reading for manual USD/EUR approvals).
+ * Undefined fields are omitted from the body, never sent as null.
+ */
 export async function resolveTransaction(
   transactionId: string,
   approve: boolean,
   rejectReason?: string,
+  notes?: string,
 ): Promise<{ status: string; newOtpBalance?: number; newBulkBalance?: number }> {
   return operatorFetch<{ ok: true; status: string; newOtpBalance?: number; newBulkBalance?: number }>(
     "/v5/admin/billing/approve",
-    { method: "POST", body: JSON.stringify({ transactionId, approve, rejectReason }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        transactionId,
+        approve,
+        ...(rejectReason !== undefined ? { rejectReason } : {}),
+        ...(notes !== undefined && notes !== "" ? { notes } : {}),
+      }),
+    },
   );
 }
 
@@ -866,6 +889,8 @@ export interface AdminPackage {
   validityDays: number;
   type: string;
   isActive: boolean;
+  /** ISSUE-89: price currency — BDT | USD | EUR (server-enforced enum). */
+  currency: string;
   updatedAt?: number;
 }
 
@@ -886,6 +911,8 @@ export async function upsertAdminPackage(pkg: {
   validityDays: number;
   type: string;
   isActive?: boolean;
+  /** ISSUE-89: required here so the create form always states the unit. */
+  currency: string;
 }): Promise<void> {
   await operatorFetch("/v5/admin/billing/packages", { method: "POST", body: JSON.stringify(pkg) });
 }
@@ -893,7 +920,7 @@ export async function upsertAdminPackage(pkg: {
 /** PATCH /v5/admin/billing/packages/:code — partial edit of whitelisted fields. */
 export async function patchAdminPackage(
   packageCode: string,
-  patch: Partial<Pick<AdminPackage, "name" | "smsQuota" | "priceBdt" | "validityDays" | "type" | "isActive">>,
+  patch: Partial<Pick<AdminPackage, "name" | "smsQuota" | "priceBdt" | "validityDays" | "type" | "isActive" | "currency">>,
 ): Promise<void> {
   await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}`, {
     method: "PATCH",
@@ -957,6 +984,8 @@ export interface LedgerRow {
   packageCode: string;
   qty: number;
   amountBdt: number;
+  /** ISSUE-89: purchases carry the package currency; trial/spend rows are BDT. */
+  currency: string;
   trxId: string | null;
 }
 
@@ -965,7 +994,7 @@ export interface LedgerReport {
   to: number;
   rows: LedgerRow[];
   nextCursor: string | null;
-  totals: { packageType: string; status: string; count: number; amountBdt: number; grantedSms: number }[];
+  totals: { packageType: string; status: string; currency: string; count: number; amountBdt: number; grantedSms: number }[];
 }
 
 /** One send-log row (spec: timestamp | app | kind | recipient | ref | status | campaign-name). */
@@ -998,6 +1027,37 @@ export async function getLedgerReport(params: {
   const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
   const body = await operatorFetch<LedgerReport & { ok: true }>(`/v5/admin/reports/ledger${suffix}`);
   return { from: body.from, to: body.to, rows: body.rows, nextCursor: body.nextCursor, totals: body.totals };
+}
+
+/** One row of GET /v5/admin/reports/packages — approved sales aggregated per package. */
+export interface PackageReportRow {
+  packageCode: string;
+  name: string;
+  /** ISSUE-89: the package's price currency — totalAmount is in this unit. */
+  currency: string;
+  countSold: number;
+  totalAmount: number;
+  smsSold: number;
+  firstSoldAt: number | null;
+  lastSoldAt: number | null;
+}
+
+export interface PackageReport {
+  from: number;
+  to: number;
+  rows: PackageReportRow[];
+  /** One bucket per currency — sums stay unit-consistent, never crossed. */
+  totalsByCurrency: { currency: string; countSold: number; totalAmount: number }[];
+}
+
+/** GET /v5/admin/reports/packages — window is `?from=&to=` epoch s (server defaults to last 30 days). */
+export async function getPackageReport(params: { from?: number; to?: number } = {}): Promise<PackageReport> {
+  const qs = new URLSearchParams();
+  if (params.from !== undefined) qs.set("from", String(params.from));
+  if (params.to !== undefined) qs.set("to", String(params.to));
+  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
+  const body = await operatorFetch<PackageReport & { ok: true }>(`/v5/admin/reports/packages${suffix}`);
+  return { from: body.from, to: body.to, rows: body.rows, totalsByCurrency: body.totalsByCurrency };
 }
 
 /** GET /v5/admin/reports/sends (spec path) — cursor-paginated; recipient numbers are PII: operator-only. */

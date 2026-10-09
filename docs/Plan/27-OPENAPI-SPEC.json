@@ -1201,6 +1201,15 @@
         }
       }
     },
+    "/v5/admin/reports/packages": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/admin/reports/sends": {
       "get": {
         "responses": {

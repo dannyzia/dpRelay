@@ -60,6 +60,8 @@ interface PendingTxn {
   id: string;
   app_id: string;
   package_code: string;
+  /** F5 amendment (ISSUE-89): the package's price currency (join on package_id). */
+  currency: string;
   amount_bdt: number;
   requested_at: number;
   trx_id: string | null;
@@ -114,8 +116,16 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
    * committed elsewhere would 409 at attach time, so it is not actionable),
    * the amount is within tolerance (default 0 = exact), and the SMS arrived
    * within the window of the request.
+   *
+   * F5 amendment (ISSUE-89): CURRENCY-AWARE — only BDT-package transactions
+   * are auto-match candidates. USD/EUR packages are paid via the remittance
+   * rails as bKash BDT-equivalents, so amount/time arithmetic can never
+   * prove they bought THAT package: they are MANUAL operator approvals by
+   * design (approve with a remittance reference note) and must never be
+   * auto-matched or auto-attached.
    */
   function isCandidate(p: { txnId: string; amountPaisa: number; receivedAt: number }, t: PendingTxn, cfg: MatchConfig): boolean {
+    if (t.currency !== "BDT") return false;
     if (t.trx_id !== null) return false;
     if (Math.abs(t.amount_bdt * 100 - p.amountPaisa) > cfg.toleranceBdt * 100) return false;
     return Math.abs(p.receivedAt - t.requested_at) <= cfg.windowSec;
@@ -304,8 +314,9 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
 
     const pending = db
       .prepare(
-        "SELECT id, app_id, package_code, amount_bdt, requested_at, trx_id FROM credit_transactions " +
-          "WHERE status = 'pending' ORDER BY requested_at ASC",
+        "SELECT t.id, t.app_id, t.package_code, p.currency, t.amount_bdt, t.requested_at, t.trx_id " +
+          "FROM credit_transactions t JOIN packages p ON p.id = t.package_id " +
+          "WHERE t.status = 'pending' ORDER BY t.requested_at ASC",
       )
       .all() as PendingTxn[];
 
@@ -399,8 +410,9 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
     } else {
       const pending = db
         .prepare(
-          "SELECT id, app_id, package_code, amount_bdt, requested_at, trx_id FROM credit_transactions " +
-            "WHERE status = 'pending' ORDER BY requested_at ASC",
+          "SELECT t.id, t.app_id, t.package_code, p.currency, t.amount_bdt, t.requested_at, t.trx_id " +
+            "FROM credit_transactions t JOIN packages p ON p.id = t.package_id " +
+            "WHERE t.status = 'pending' ORDER BY t.requested_at ASC",
         )
         .all() as PendingTxn[];
       const base = { txnId: payment.txn_id, amountPaisa: payment.amount_paisa, receivedAt: payment.received_at };

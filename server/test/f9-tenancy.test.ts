@@ -420,7 +420,7 @@ describe("wallet purchases (session route + operator approval)", () => {
     });
     expect(queue.statusCode).toBe(200);
     const pending = (queue.json() as { pending: Array<Record<string, unknown>> }).pending;
-    expect(pending.find((t) => t.transactionId === transactionId)).toMatchObject({ userId, appId: null });
+    expect(pending.find((t) => t.transactionId === transactionId)).toMatchObject({ userId, appId: null, currency: "BDT" });
 
     const approve = await app.inject({
       method: "POST",
@@ -439,7 +439,7 @@ describe("wallet purchases (session route + operator approval)", () => {
     const history = await app.inject(authed(cookie, { url: "/v5/auth/wallet/transactions" }));
     expect(history.statusCode).toBe(200);
     const rows = (history.json() as { transactions: Array<Record<string, unknown>> }).transactions;
-    expect(rows.find((t) => t.transactionId === transactionId)).toMatchObject({ status: "approved" });
+    expect(rows.find((t) => t.transactionId === transactionId)).toMatchObject({ status: "approved", currency: "BDT" });
   });
 
   it("an app-credential purchase for a COMPANY app is also wallet-attributed; submit-trx enforces ownership", async () => {

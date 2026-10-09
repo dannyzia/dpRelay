@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBdt, formatEpochUtc, formatSms, formatStatus } from "../src/format";
+import { formatBdt, formatEpochUtc, formatPrice, formatSms, formatStatus } from "../src/format";
 
 describe("formatEpochUtc", () => {
   it("renders epoch seconds as a fixed UTC stamp", () => {
@@ -21,6 +21,21 @@ describe("formatBdt", () => {
   it("keeps two decimals for fractional prices", () => {
     expect(formatBdt(0.2)).toBe("৳0.20");
     expect(formatBdt(12.5)).toBe("৳12.50");
+  });
+});
+
+describe("formatPrice (ISSUE-89)", () => {
+  it("renders BDT prices exactly like formatBdt", () => {
+    expect(formatPrice(200, "BDT")).toBe("৳200");
+    expect(formatPrice(0.2, "BDT")).toBe("৳0.20");
+    // Empty currency (legacy rows) falls back to taka, never to a bare number.
+    expect(formatPrice(50, "")).toBe("৳50");
+  });
+
+  it("renders non-BDT prices as amount + code, never with the taka symbol", () => {
+    expect(formatPrice(20, "USD")).toBe("20 USD");
+    expect(formatPrice(15, "EUR")).toBe("15 EUR");
+    expect(formatPrice(99, "GBP")).not.toContain("৳");
   });
 });
 

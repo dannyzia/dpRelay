@@ -179,10 +179,11 @@ describe("GET /v5/admin/reports/ledger (spec kinds + columns)", () => {
         packageCode: string;
         qty: number;
         amountBdt: number;
+        currency: string;
         trxId: string | null;
       }[];
       nextCursor: string | null;
-      totals: { packageType: string; status: string; count: number; amountBdt: number; grantedSms: number }[];
+      totals: { packageType: string; status: string; currency: string; count: number; amountBdt: number; grantedSms: number }[];
     };
 
     // 5 rows: 1 purchase + 1 trial + 3 spend groups. NOT present: the
@@ -199,6 +200,7 @@ describe("GET /v5/admin/reports/ledger (spec kinds + columns)", () => {
       packageCode: "otp100",
       qty: 100,
       amountBdt: 200,
+      currency: "BDT",
       trxId: null,
     });
     expect(purchase?.timestamp).toBe(NOW - 4 * 86400);
@@ -210,13 +212,15 @@ describe("GET /v5/admin/reports/ledger (spec kinds + columns)", () => {
       packageCode: "trial",
       qty: 20,
       amountBdt: 0,
+      currency: "BDT",
       trxId: null,
     });
 
     const spends = body.rows.filter((r) => r.kind.startsWith("spend-"));
     expect(spends).toHaveLength(3);
     const ownedBulk = spends.find((r) => r.kind === "spend-bulk");
-    expect(ownedBulk).toMatchObject({ appId: "app_owned", qty: 1, amountBdt: 0.2, packageCode: "" });
+    // Trial/spend rows are internal taka accounting (qty × UNIT_PRICE_BDT).
+    expect(ownedBulk).toMatchObject({ appId: "app_owned", qty: 1, amountBdt: 0.2, packageCode: "", currency: "BDT" });
     const ownedOtp = spends.find((r) => r.kind === "spend-otp" && r.appId === "app_owned");
     // m1 + m5 are both app_owned OTP sends on the same UTC day → one group.
     expect(ownedOtp).toMatchObject({ qty: 2, amountBdt: 0.4 });
@@ -228,10 +232,12 @@ describe("GET /v5/admin/reports/ledger (spec kinds + columns)", () => {
     const stamps = body.rows.map((r) => r.timestamp);
     expect([...stamps].sort((a, b) => b - a)).toEqual(stamps);
 
-    // Additive context totals keep their semantics (request pipeline).
+    // Additive context totals keep their semantics (request pipeline) and
+    // are currency-dimensioned (ISSUE-89): a USD bucket never joins a taka one.
     expect(body.totals).toContainEqual({
       packageType: "otp",
       status: "approved",
+      currency: "BDT",
       count: 1,
       amountBdt: 200,
       grantedSms: 100,
@@ -239,10 +245,56 @@ describe("GET /v5/admin/reports/ledger (spec kinds + columns)", () => {
     expect(body.totals).toContainEqual({
       packageType: "otp",
       status: "pending",
+      currency: "BDT",
       count: 1,
       amountBdt: 200,
       grantedSms: 0,
     });
+  });
+
+  it("dimensiones USD sales by currency: row currency + split totals, never taka-summed (ISSUE-89)", async () => {
+    // A USD package + one approved in-window sale (seedTransaction's 200 is
+    // interpreted in the package's unit → 200 USD, not ৳200).
+    const usdPkgId = crypto.randomUUID();
+    app.db
+      .prepare(
+        "INSERT INTO packages (id, package_code, name, sms_quota, price_bdt, validity_days, type, is_active, currency, created_at, updated_at) " +
+          "VALUES (?, 'usd50', 'USD 50', 50, 200, 30, 'otp', 1, 'USD', unixepoch(), unixepoch())",
+      )
+      .run(usdPkgId);
+    seedTransaction(usdPkgId, "usd50", appAId, "approved", NOW - 2 * 86400, NOW - 86400);
+
+    const res = await op("GET", "/v5/admin/reports/ledger");
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      rows: { kind: string; packageCode: string; amountBdt: number; currency: string }[];
+      totals: { packageType: string; status: string; currency: string; count: number; amountBdt: number; grantedSms: number }[];
+    };
+
+    const usdRow = body.rows.find((r) => r.packageCode === "usd50");
+    expect(usdRow).toMatchObject({ kind: "purchase", amountBdt: 200, currency: "USD" });
+
+    // (otp, approved) now exists in TWO currency buckets with their own sums.
+    const approved = body.totals.filter((t) => t.packageType === "otp" && t.status === "approved");
+    expect(approved).toContainEqual({
+      packageType: "otp",
+      status: "approved",
+      currency: "BDT",
+      count: 1,
+      amountBdt: 200,
+      grantedSms: 100,
+    });
+    expect(approved).toContainEqual({
+      packageType: "otp",
+      status: "approved",
+      currency: "USD",
+      count: 1,
+      amountBdt: 200,
+      grantedSms: 100,
+    });
+    // Invariant: no total mixes units — every bucket is exactly one currency.
+    expect(body.totals.every((t) => t.currency === "BDT" || t.currency === "USD")).toBe(true);
+    expect(new Set(approved.map((t) => t.currency)).size).toBe(2);
   });
 
   it("cursor-paginates strictly (max 100 rows per page, lossless, no duplicates)", async () => {

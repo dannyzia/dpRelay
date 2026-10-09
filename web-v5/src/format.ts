@@ -15,6 +15,15 @@ export function formatBdt(amount: number): string {
   return Number.isInteger(amount) ? `৳${amount}` : `৳${amount.toFixed(2)}`;
 }
 
+/**
+ * Price with its currency — ৳-prefixed for BDT (taka), plain `amount CODE`
+ * otherwise. ISSUE-89: package prices are currency-dimensioned; a USD price
+ * rendered with the taka symbol would misstate what the customer owes.
+ */
+export function formatPrice(amount: number, currency: string): string {
+  return currency === "BDT" || currency === "" ? formatBdt(amount) : `${amount} ${currency}`;
+}
+
 /** Count with the SMS unit. */
 export function formatSms(n: number): string {
   return `${n} SMS`;

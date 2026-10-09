@@ -46,13 +46,24 @@ interface UpsertPackageBody {
   validityDays?: unknown;
   type?: unknown;
   isActive?: unknown;
+  /** F5 amendment (ISSUE-89): price currency — BDT | USD | EUR, default BDT. */
+  currency?: unknown;
 }
 
 interface ApproveBody {
   transactionId?: unknown;
   approve?: unknown;
   rejectReason?: unknown;
+  /**
+   * F5 amendment (ISSUE-89): remittance reference note stored on approve —
+   * the REQUIRED paper trail for manual non-BDT approvals (USD/EUR package
+   * payments arriving as bKash BDT-equivalents are manual by design).
+   */
+  notes?: unknown;
 }
+
+/** F5 amendment (ISSUE-89): the package price-currency enum. */
+const PACKAGE_CURRENCIES = new Set(["BDT", "USD", "EUR"]);
 
 const PACKAGE_CODE_PATTERN = /^[A-Za-z0-9_-]{2,64}$/;
 
@@ -70,7 +81,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
   app.get("/v5/billing/packages", async () => {
     const rows = db
       .prepare(
-        "SELECT package_code, name, sms_quota, price_bdt, validity_days, type " +
+        "SELECT package_code, name, sms_quota, price_bdt, validity_days, type, currency " +
           "FROM packages WHERE is_active = 1",
       )
       .all() as {
@@ -80,6 +91,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       price_bdt: number;
       validity_days: number;
       type: string;
+      currency: string;
     }[];
     const typeOrder: Record<string, number> = { otp: 0, bulk: 1, both: 2 };
     rows.sort(
@@ -96,6 +108,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         priceBdt: r.price_bdt,
         validityDays: r.validity_days,
         type: r.type,
+        currency: r.currency,
       })),
     };
   });
@@ -208,12 +221,17 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     const attrValue = walletOwner === null ? appId : walletOwner;
     const rows = db
       .prepare(
-        "SELECT id, package_code, sms_quota, validity_days, amount_bdt, package_type, " +
-          "trx_id, status, admin_notes, requested_at, resolved_at " +
-          `FROM credit_transactions WHERE ${attrColumn} = ? ` +
-          "AND (? IS NULL OR status = ?) " +
-          "AND (? IS NULL OR requested_at < ? OR (requested_at = ? AND id > ?)) " +
-          "ORDER BY requested_at DESC, id ASC LIMIT ?",
+        // ISSUE-89 currency display: LEFT JOIN packages supplies the price
+        // unit (referenced packages cannot be hard-deleted, so it resolves);
+        // COALESCE keeps legacy rows taka-denominated.
+        "SELECT ct.id, ct.package_code, ct.sms_quota, ct.validity_days, ct.amount_bdt, ct.package_type, " +
+          "ct.trx_id, ct.status, ct.admin_notes, ct.requested_at, ct.resolved_at, " +
+          "COALESCE(p.currency, 'BDT') AS currency " +
+          "FROM credit_transactions ct LEFT JOIN packages p ON p.id = ct.package_id " +
+          `WHERE ct.${attrColumn} = ? ` +
+          "AND (? IS NULL OR ct.status = ?) " +
+          "AND (? IS NULL OR ct.requested_at < ? OR (ct.requested_at = ? AND ct.id > ?)) " +
+          "ORDER BY ct.requested_at DESC, ct.id ASC LIMIT ?",
       )
       .all(
         attrValue,
@@ -236,6 +254,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       admin_notes: string | null;
       requested_at: number;
       resolved_at: number | null;
+      currency: string;
     }[];
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
@@ -248,6 +267,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         validityDays: t.validity_days,
         amountBdt: t.amount_bdt,
         packageType: t.package_type,
+        currency: t.currency,
         trxId: t.trx_id,
         status: t.status,
         adminNotes: t.admin_notes,
@@ -519,26 +539,28 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     const validityDays = body.validityDays;
     const type = body.type;
     const isActive = body.isActive;
+    const currency = body.currency === undefined ? "BDT" : body.currency;
     if (
       name === null ||
       typeof smsQuota !== "number" || !Number.isInteger(smsQuota) || smsQuota < 1 ||
       typeof priceBdt !== "number" || !Number.isInteger(priceBdt) || priceBdt < 0 ||
       typeof validityDays !== "number" || !Number.isInteger(validityDays) || validityDays < 1 ||
       (type !== undefined && type !== "otp" && type !== "bulk" && type !== "both") ||
-      (isActive !== undefined && typeof isActive !== "boolean")
+      (isActive !== undefined && typeof isActive !== "boolean") ||
+      typeof currency !== "string" || !PACKAGE_CURRENCIES.has(currency)
     ) {
       return reply.code(400).send({
         ok: false,
-        error: "name, smsQuota>=1, priceBdt>=0, validityDays>=1, type(otp|bulk|both), isActive required",
+        error: "name, smsQuota>=1, priceBdt>=0, validityDays>=1, type(otp|bulk|both), isActive, currency(BDT|USD|EUR) required",
         code: "invalid_package",
       });
     }
     db.prepare(
-      "INSERT INTO packages (id, package_code, name, sms_quota, price_bdt, validity_days, type, is_active, created_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch()) " +
+      "INSERT INTO packages (id, package_code, name, sms_quota, price_bdt, validity_days, type, is_active, currency, created_at, updated_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch()) " +
         "ON CONFLICT(package_code) DO UPDATE SET name = excluded.name, sms_quota = excluded.sms_quota, " +
         "price_bdt = excluded.price_bdt, validity_days = excluded.validity_days, type = excluded.type, " +
-        "is_active = excluded.is_active, updated_at = excluded.updated_at",
+        "is_active = excluded.is_active, currency = excluded.currency, updated_at = excluded.updated_at",
     ).run(
       newId(),
       packageCode,
@@ -548,6 +570,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       validityDays,
       type ?? "otp",
       isActive === false ? 0 : 1,
+      currency,
     );
     app.log.info({ packageCode }, "package upserted");
     return reply.code(201).send({ ok: true, packageCode });
@@ -611,8 +634,15 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       sets.push("is_active = ?");
       values.push(body.isActive ? 1 : 0);
     }
+    if (body.currency !== undefined) {
+      if (typeof body.currency !== "string" || !PACKAGE_CURRENCIES.has(body.currency)) {
+        return reject400(reply, "invalid_package", "currency must be BDT|USD|EUR");
+      }
+      sets.push("currency = ?");
+      values.push(body.currency);
+    }
     if (sets.length === 0) {
-      return reject400(reply, "invalid_package", "at least one of name, smsQuota, priceBdt, validityDays, type, isActive is required");
+      return reject400(reply, "invalid_package", "at least one of name, smsQuota, priceBdt, validityDays, type, isActive, currency is required");
     }
     const exists = db.prepare("SELECT 1 FROM packages WHERE package_code = ?").get(packageCode);
     if (!exists) {
@@ -630,8 +660,9 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
    * forever (audit history), so retire always soft-retires (is_active = 0)
    * regardless of references. A second retire is an idempotent no-op;
    * reactivation goes through PATCH/upsert (isActive). The spec names the
-   * POST …/retire endpoint; DELETE remains as the ISSUE-83 alias (same
-   * behaviour, one implementation below).
+   * POST …/retire endpoint; DELETE became the RATIFIED safe-delete
+   * (F5 amendment ISSUE-89, hub event 1319) — hard-delete only when the
+   * package has zero transaction history, 409 package_in_use otherwise.
    */
   async function retireByCode(
     request: { params: unknown },
@@ -665,9 +696,47 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => retireByCode(request, reply),
   );
 
-  app.delete("/v5/admin/billing/packages/:code", { preHandler: [app.requireOperator] }, async (request, reply) =>
-    retireByCode(request, reply),
-  );
+  /**
+   * STAGE F5 → F5 amendment (ISSUE-89, RATIFIED hub event 1319): SAFE DELETE.
+   * A package with zero transaction history hard-deletes cleanly; anything a
+   * transaction references (financial history) answers 409 package_in_use and
+   * is retire-only permanently (POST …/retire above — unchanged, idempotent).
+   * The pre-check also keeps the FK from throwing: credit_transactions has
+   * NO ACTION on package_id, so an unguarded DELETE of a referenced package
+   * would 500 instead of the structured 409 the operator UI renders.
+   */
+  app.delete("/v5/admin/billing/packages/:code", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const packageCode = asString(params.code, 64);
+    if (packageCode === null || !PACKAGE_CODE_PATTERN.test(packageCode)) {
+      return reply.code(400).send({
+        ok: false,
+        error: "package code must be 2-64 chars of [A-Za-z0-9_-]",
+        code: "invalid_package_code",
+      });
+    }
+    const pkg = db.prepare("SELECT id FROM packages WHERE package_code = ?").get(packageCode) as
+      | { id: string }
+      | undefined;
+    if (!pkg) {
+      return reply.code(404).send({ ok: false, error: "Package not found", code: "package_not_found" });
+    }
+    const refs = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM credit_transactions WHERE package_id = ? OR package_code = ?",
+      )
+      .get(pkg.id, packageCode) as { n: number };
+    if (refs.n > 0) {
+      return reply.code(409).send({
+        ok: false,
+        error: "Package has transaction history — retire it instead (soft retire is permanent)",
+        code: "package_in_use",
+      });
+    }
+    db.prepare("DELETE FROM packages WHERE package_code = ?").run(packageCode);
+    app.log.info({ packageCode }, "package hard-deleted (zero transaction history)");
+    return reply.send({ ok: true, packageCode, deleted: true });
+  });
 
   /**
    * STAGE F5 (ISSUE-83): full package directory for the panel — unlike the
@@ -677,7 +746,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
   app.get("/v5/admin/billing/packages", { preHandler: [app.requireOperator] }, async () => {
     const rows = db
       .prepare(
-        "SELECT package_code, name, sms_quota, price_bdt, validity_days, type, is_active, updated_at " +
+        "SELECT package_code, name, sms_quota, price_bdt, validity_days, type, is_active, currency, updated_at " +
           "FROM packages ORDER BY package_code",
       )
       .all() as {
@@ -688,6 +757,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       validity_days: number;
       type: string;
       is_active: number;
+      currency: string;
       updated_at: number;
     }[];
     return {
@@ -700,6 +770,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         validityDays: r.validity_days,
         type: r.type,
         isActive: r.is_active === 1,
+        currency: r.currency,
         updatedAt: r.updated_at,
       })),
     };
@@ -711,6 +782,10 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
    * (decision Sep 27). REPORT ONLY: violations are surfaced, never silently
    * repriced; fixing a row is an operator decision through the upsert route.
    *
+   * F5 amendment (ISSUE-89): the 0.20 figure is a BDT unit price — non-BDT
+   * packages are regional prices and are EXCLUDED (counted, not judged),
+   * otherwise every USD/EUR row would "violate" a currency it is not in.
+   *
    * The 1e-9 epsilon absorbs double rounding on `sms_quota * 0.20` (0.2 is not
    * exactly representable); anything a human would call a pricing mismatch is
    * orders of magnitude larger than that.
@@ -721,7 +796,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     async () => {
       const rows = db
         .prepare(
-          "SELECT package_code, name, sms_quota, price_bdt, is_active FROM packages ORDER BY package_code",
+          "SELECT package_code, name, sms_quota, price_bdt, is_active, currency FROM packages ORDER BY package_code",
         )
         .all() as {
         package_code: string;
@@ -729,8 +804,10 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         sms_quota: number;
         price_bdt: number;
         is_active: number;
+        currency: string;
       }[];
-      const violations = rows
+      const bdtRows = rows.filter((r) => r.currency === "BDT");
+      const violations = bdtRows
         .map((r) => ({
           packageCode: r.package_code,
           name: r.name,
@@ -746,7 +823,8 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         ok: true,
         unitPriceBdt: UNIT_PRICE_BDT,
         packageCount: rows.length,
-        conformantCount: rows.length - violations.length,
+        excludedNonBdtCount: rows.length - bdtRows.length,
+        conformantCount: bdtRows.length - violations.length,
         violationCount: violations.length,
         violations,
       };
@@ -812,7 +890,21 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     // of money code is how they drift). Claiming the pending row inside the
     // transaction is the linearization point; concurrent approvals race to a
     // 409, never to a double award.
-    const award = db.transaction(() => awardPendingTransaction(db, trx));
+    // F5 amendment (ISSUE-89): a remittance reference note rides the SAME
+    // transaction as the award — written only while the row is still pending,
+    // so a lost race can leave the note on a pending row (harmless, retryable)
+    // but never overwrite a resolved row's audit trail. Non-BDT approvals
+    // (USD/EUR packages, bKash BDT-equivalents) are manual by design and use
+    // this note as their paper trail.
+    const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 512) : null;
+    const award = db.transaction(() => {
+      if (notes !== null && notes !== "") {
+        db.prepare(
+          "UPDATE credit_transactions SET admin_notes = ? WHERE id = ? AND status = 'pending'",
+        ).run(notes, transactionId);
+      }
+      return awardPendingTransaction(db, trx);
+    });
 
     if (!award()) {
       return reply.code(409).send({
@@ -848,8 +940,10 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     // buy (both still approve through the same award core).
     const rows = db
       .prepare(
-        "SELECT id, app_id, user_id, package_code, sms_quota, amount_bdt, package_type, trx_id, requested_at " +
-          "FROM credit_transactions WHERE status = 'pending' ORDER BY requested_at ASC",
+        "SELECT ct.id, ct.app_id, ct.user_id, ct.package_code, ct.sms_quota, ct.amount_bdt, " +
+          "ct.package_type, ct.trx_id, ct.requested_at, COALESCE(p.currency, 'BDT') AS currency " +
+          "FROM credit_transactions ct LEFT JOIN packages p ON p.id = ct.package_id " +
+          "WHERE ct.status = 'pending' ORDER BY ct.requested_at ASC",
       )
       .all() as {
       id: string;
@@ -861,6 +955,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       package_type: string;
       trx_id: string | null;
       requested_at: number;
+      currency: string;
     }[];
     return {
       ok: true,
@@ -872,6 +967,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         smsQuota: t.sms_quota,
         amountBdt: t.amount_bdt,
         packageType: t.package_type,
+        currency: t.currency,
         trxId: t.trx_id,
         requestedAt: t.requested_at,
       })),

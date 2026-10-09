@@ -185,6 +185,7 @@ describe("AppsView (F9 wallet + companies)", () => {
         smsQuota: 100,
         amountBdt: 20,
         packageType: "otp",
+        currency: "USD",
         status: "approved",
         trxId: "BK1",
         requestedAt: 1791500000,
@@ -196,6 +197,9 @@ describe("AppsView (F9 wallet + companies)", () => {
     );
     expect(html).toContain("otp-100");
     expect(html).toContain("approved");
+    // ISSUE-89: a USD purchase renders its unit — never the taka symbol.
+    expect(html).toContain("20 USD");
+    expect(html).not.toContain("৳20");
     expect(html).toContain("Hide purchase history");
   });
 
@@ -370,6 +374,7 @@ describe("PackageListView", () => {
       priceBdt: 50,
       validityDays: 30,
       type: "otp",
+      currency: "BDT",
     },
     {
       packageCode: "BULK-100",
@@ -378,6 +383,16 @@ describe("PackageListView", () => {
       priceBdt: 0.2,
       validityDays: 30,
       type: "both",
+      currency: "BDT",
+    },
+    {
+      packageCode: "OTP-USD",
+      name: "USD Pack",
+      smsQuota: 50,
+      priceBdt: 20,
+      validityDays: 30,
+      type: "otp",
+      currency: "USD",
     },
   ];
 
@@ -390,6 +405,15 @@ describe("PackageListView", () => {
     expect(html).toContain("Bulk Pack");
     expect(html).toContain("৳0.20");
     expect(html).toContain("100 SMS · valid 30 days · code BULK-100");
+  });
+
+  it("prices non-BDT packages in their own currency (ISSUE-89)", () => {
+    const html = renderToString(
+      <PackageListView packages={packages} onBuy={(): void => undefined} />,
+    );
+    expect(html).toContain("20 USD");
+    // The taka symbol must never adorn a USD price.
+    expect(html).not.toContain("৳20");
   });
 
   it("renders the empty-catalog message", () => {
@@ -449,6 +473,7 @@ describe("HistoryView", () => {
       validityDays: 30,
       amountBdt: 50,
       packageType: "otp",
+      currency: "BDT",
       trxId: "TRX123",
       status: "approved",
       adminNotes: null,
@@ -462,6 +487,7 @@ describe("HistoryView", () => {
       validityDays: 30,
       amountBdt: 0.2,
       packageType: "both",
+      currency: "BDT",
       trxId: null,
       status: "pending",
       adminNotes: null,
@@ -483,6 +509,28 @@ describe("HistoryView", () => {
   it("renders the empty-state message", () => {
     const html = render(<HistoryView transactions={[]} />);
     expect(html).toContain("No transactions yet.");
+  });
+
+  it("prices each row in its package's currency (ISSUE-89)", () => {
+    const usdRows: Transaction[] = [
+      {
+        transactionId: "txn-usd",
+        packageCode: "OTP-USD",
+        smsQuota: 50,
+        validityDays: 30,
+        amountBdt: 20,
+        packageType: "otp",
+        currency: "USD",
+        trxId: "TRXUSD",
+        status: "approved",
+        adminNotes: null,
+        requestedAt: 1791400000,
+        resolvedAt: 1791405000,
+      },
+    ];
+    const html = render(<HistoryView transactions={usdRows} />);
+    expect(html).toContain("20 USD");
+    expect(html).not.toContain("৳20");
   });
 });
 
