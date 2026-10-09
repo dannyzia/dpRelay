@@ -17,6 +17,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { randomBytes, randomInt } from "node:crypto";
 import { constantTimeEquals, newId, sha256Hex } from "../services/crypto.js";
 import { asRecord, asString } from "../services/parse.js";
+import { resolveWalletOwner } from "../services/wallet.js";
 import { dispatchOtpStatusWebhooks, type OtpWebhookStatus } from "../services/webhooks.js";
 
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
@@ -166,11 +167,21 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
       // zero-balance or expired send 402s BEFORE the resend cooldown is armed
       // (otherwise topping up would still hit resend_cooldown on the
       // immediate retry).
-      const preCredit = app.db
-        .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
-        .get(appRow.id) as
-        | { otp_sms_remaining: number; otp_expires_at: number | null }
-        | undefined;
+      // STAGE F9 (ISSUE-88) dual-path: a company-backed app draws from the
+      // owner's user_credits wallet; an operator-legacy app from app_credits.
+      // Same envelope either way — the caller cannot probe which plane it is on.
+      const preCredit =
+        appRow.walletOwnerId === null
+          ? (app.db
+              .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
+              .get(appRow.id) as
+              | { otp_sms_remaining: number; otp_expires_at: number | null }
+              | undefined)
+          : (app.db
+              .prepare("SELECT otp_sms_remaining, otp_expires_at FROM user_credits WHERE user_id = ?")
+              .get(appRow.walletOwnerId) as
+              | { otp_sms_remaining: number; otp_expires_at: number | null }
+              | undefined);
       if (!preCredit || preCredit.otp_sms_remaining < 1) {
         return reply.code(402).send({
           ok: false,
@@ -231,18 +242,38 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
       // atomic with the check — the UPDATE below never runs for an expired
       // bucket).
       const createSession = app.db.transaction((): "insufficient_credits" | null => {
-        const credit = app.db
-          .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
-          .get(appRow.id) as
-          | { otp_sms_remaining: number; otp_expires_at: number | null }
-          | undefined;
+        // STAGE F9 (ISSUE-88): wallet resolution re-derived INSIDE the
+        // transaction — the authoritative dual-path guard. Balance check +
+        // deduct both hit the same bucket, so two concurrent sends still
+        // cannot both spend the last credit of either plane.
+        const owner = resolveWalletOwner(app.db, appRow.id);
+        const credit =
+          owner === null
+            ? (app.db
+                .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
+                .get(appRow.id) as
+                | { otp_sms_remaining: number; otp_expires_at: number | null }
+                | undefined)
+            : (app.db
+                .prepare("SELECT otp_sms_remaining, otp_expires_at FROM user_credits WHERE user_id = ?")
+                .get(owner) as
+                | { otp_sms_remaining: number; otp_expires_at: number | null }
+                | undefined);
         if (!credit || credit.otp_sms_remaining < 1) return "insufficient_credits";
         if (otpCreditsExpired(credit.otp_expires_at, ts)) return "insufficient_credits";
-        app.db
-          .prepare(
-            "UPDATE app_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE app_id = ?",
-          )
-          .run(ts, appRow.id);
+        if (owner === null) {
+          app.db
+            .prepare(
+              "UPDATE app_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE app_id = ?",
+            )
+            .run(ts, appRow.id);
+        } else {
+          app.db
+            .prepare(
+              "UPDATE user_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE user_id = ?",
+            )
+            .run(ts, owner);
+        }
         app.db
           .prepare(
             "UPDATE otp_sessions SET status = 'expired' " +

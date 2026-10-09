@@ -156,13 +156,14 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
     }
     const trx = db
       .prepare(
-        "SELECT id, app_id, sms_quota, validity_days, package_type, status, amount_bdt, requested_at, trx_id " +
+        "SELECT id, app_id, user_id, sms_quota, validity_days, package_type, status, amount_bdt, requested_at, trx_id " +
           "FROM credit_transactions WHERE id = ?",
       )
       .get(transactionId) as
       | {
           id: string;
-          app_id: string;
+          app_id: string | null;
+          user_id: string | null;
           sms_quota: number;
           validity_days: number;
           package_type: string;
@@ -212,9 +213,16 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
     db.prepare(
       "UPDATE payment_sms SET review_state = 'approved', review_reason = NULL, reviewed_at = unixepoch() WHERE id = ?",
     ).run(payment.id);
-    const credits = db
-      .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits WHERE app_id = ?")
-      .get(trx.app_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined;
+    // STAGE F9 (ISSUE-88): the reported balance must be the plane the award
+    // actually landed on — user wallet or app bucket, by attribution.
+    const credits =
+      trx.user_id !== null
+        ? (db
+            .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM user_credits WHERE user_id = ?")
+            .get(trx.user_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined)
+        : (db
+            .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits WHERE app_id = ?")
+            .get(trx.app_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined);
     app.log.info({ paymentId: payment.id, transactionId, txnId: payment.txn_id }, "payment attached + credits awarded");
     return {
       ok: true,

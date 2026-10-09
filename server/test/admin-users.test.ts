@@ -44,8 +44,31 @@ function seedOperatorApp(appId: string, secret: string): { id: string; cred: Rec
   return { id, cred: { "x-app-id": appId, "x-app-secret": secret } };
 }
 
-/** Forces a deterministic credit balance on an app (trial grant is config-dependent). */
+/**
+ * STAGE F9 (ISSUE-88): self-serve apps are company-backed, so their sends
+ * draw from the owner's user wallet — these helpers resolve the same
+ * app -> company -> owner chain the server enforces, keeping the withhold
+ * assertions honest on whichever plane the balance lives.
+ */
+function walletOwnerOf(appRowId: string): string | null {
+  const row = app.db
+    .prepare("SELECT c.owner_user_id AS uid FROM apps a JOIN companies c ON c.id = a.company_id WHERE a.id = ?")
+    .get(appRowId) as { uid: string } | undefined;
+  return row?.uid ?? null;
+}
+
+/** Forces a deterministic credit balance on the app's actual spend plane. */
 function forceCredits(appRowId: string, otp: number): void {
+  const owner = walletOwnerOf(appRowId);
+  if (owner !== null) {
+    app.db
+      .prepare(
+        "INSERT INTO user_credits (user_id, otp_sms_remaining, updated_at) VALUES (?, ?, unixepoch()) " +
+          "ON CONFLICT(user_id) DO UPDATE SET otp_sms_remaining = excluded.otp_sms_remaining, otp_expires_at = NULL",
+      )
+      .run(owner, otp);
+    return;
+  }
   app.db
     .prepare(
       "INSERT INTO app_credits (app_id, otp_sms_remaining, updated_at) VALUES (?, ?, unixepoch()) " +
@@ -55,9 +78,15 @@ function forceCredits(appRowId: string, otp: number): void {
 }
 
 function otpRemaining(appRowId: string): number {
-  const row = app.db
-    .prepare("SELECT otp_sms_remaining FROM app_credits WHERE app_id = ?")
-    .get(appRowId) as { otp_sms_remaining: number } | undefined;
+  const owner = walletOwnerOf(appRowId);
+  const row =
+    owner === null
+      ? (app.db.prepare("SELECT otp_sms_remaining FROM app_credits WHERE app_id = ?").get(appRowId) as
+          | { otp_sms_remaining: number }
+          | undefined)
+      : (app.db.prepare("SELECT otp_sms_remaining FROM user_credits WHERE user_id = ?").get(owner) as
+          | { otp_sms_remaining: number }
+          | undefined);
   return row?.otp_sms_remaining ?? -1;
 }
 

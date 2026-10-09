@@ -24,6 +24,7 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { asRecord, asString } from "../services/parse.js";
 import { newId } from "../services/crypto.js";
 import { awardPendingTransaction, UNIT_PRICE_BDT } from "../services/credits.js";
+import { requireSession } from "../services/session.js";
 
 /** Parses an ISO-8601 date/datetime query value into epoch SECONDS (null if absent/invalid). */
 function parseDateBound(value: unknown): number | null {
@@ -99,24 +100,46 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  /** Current credit balance for the authenticated app (v4 getCredits). */
+  /**
+   * Current credit balance for the authenticated app (v4 getCredits).
+   * STAGE F9 (ISSUE-88): a company-backed app reports its OWNER'S wallet —
+   * the balance its sends actually draw from (dual-path rule); operator-
+   * legacy apps keep reporting app_credits unchanged.
+   */
   app.get("/v5/billing/credits", { preHandler: [app.requireApp] }, async (request) => {
-    const appId = request.appRow?.id ?? "";
-    const row = db
-      .prepare(
-        "SELECT otp_sms_remaining, bulk_sms_remaining, otp_expires_at, bulk_expires_at, " +
-          "last_transaction_id, purchased_at FROM app_credits WHERE app_id = ?",
-      )
-      .get(appId) as
-      | {
-          otp_sms_remaining: number;
-          bulk_sms_remaining: number;
-          otp_expires_at: number | null;
-          bulk_expires_at: number | null;
-          last_transaction_id: string | null;
-          purchased_at: number | null;
-        }
-      | undefined;
+    const walletOwner = request.appRow?.walletOwnerId ?? null;
+    const row =
+      walletOwner === null
+        ? (db
+            .prepare(
+              "SELECT otp_sms_remaining, bulk_sms_remaining, otp_expires_at, bulk_expires_at, " +
+                "last_transaction_id, purchased_at FROM app_credits WHERE app_id = ?",
+            )
+            .get(request.appRow?.id ?? "") as
+            | {
+                otp_sms_remaining: number;
+                bulk_sms_remaining: number;
+                otp_expires_at: number | null;
+                bulk_expires_at: number | null;
+                last_transaction_id: string | null;
+                purchased_at: number | null;
+              }
+            | undefined)
+        : (db
+            .prepare(
+              "SELECT otp_sms_remaining, bulk_sms_remaining, otp_expires_at, bulk_expires_at, " +
+                "last_transaction_id, purchased_at FROM user_credits WHERE user_id = ?",
+            )
+            .get(walletOwner) as
+            | {
+                otp_sms_remaining: number;
+                bulk_sms_remaining: number;
+                otp_expires_at: number | null;
+                bulk_expires_at: number | null;
+                last_transaction_id: string | null;
+                purchased_at: number | null;
+              }
+            | undefined);
     return {
       ok: true,
       credits: {
@@ -176,17 +199,24 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    // STAGE F9 (ISSUE-88): wallet-backed apps list their OWNER'S wallet
+    // purchases (buys land on the wallet, not app_credits — an app-attributed
+    // query would return nothing for every company app). Operator-legacy apps
+    // keep the app-attributed query unchanged.
+    const walletOwner = request.appRow?.walletOwnerId ?? null;
+    const attrColumn = walletOwner === null ? "app_id" : "user_id";
+    const attrValue = walletOwner === null ? appId : walletOwner;
     const rows = db
       .prepare(
         "SELECT id, package_code, sms_quota, validity_days, amount_bdt, package_type, " +
           "trx_id, status, admin_notes, requested_at, resolved_at " +
-          "FROM credit_transactions WHERE app_id = ? " +
+          `FROM credit_transactions WHERE ${attrColumn} = ? ` +
           "AND (? IS NULL OR status = ?) " +
           "AND (? IS NULL OR requested_at < ? OR (requested_at = ? AND id > ?)) " +
           "ORDER BY requested_at DESC, id ASC LIMIT ?",
       )
       .all(
-        appId,
+        attrValue,
         status,
         status,
         cursorAt,
@@ -291,7 +321,26 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
    * Fails closed when BKASH_PERSONAL_NUMBER is unset — a request whose payment
    * destination cannot be told to the customer must not exist.
    */
-  app.post("/v5/billing/credits/request", { preHandler: [app.requireApp] }, async (request, reply) => {
+  app.post("/v5/billing/credits/request", async (request, reply) => {
+    // STAGE F9 (ISSUE-88) dual auth: app credentials (API plane — legacy
+    // operator apps AND company apps) OR the dashboard session cookie (wallet
+    // buy). App creds win when both are present (API parity); requireApp
+    // sends its own failure envelope and leaves appRow unset on failure.
+    let sessionUserId: string | null = null;
+    const headerAppId = request.headers["x-app-id"];
+    if (typeof headerAppId === "string" && headerAppId.length > 0) {
+      await app.requireApp(request, reply);
+      if (!request.appRow) return reply;
+    } else {
+      const session = requireSession(app.db, request, reply);
+      if (session === null) return reply;
+      sessionUserId = session.user.id;
+    }
+    // Attribution (F9 wallet rule): session buys always land on the user's
+    // wallet; app buys land on the wallet too when the app is company-backed
+    // (its sends already draw from there — an app-attributed award would be
+    // dead money), otherwise on app_credits exactly as before.
+    const walletUserId = sessionUserId ?? request.appRow?.walletOwnerId ?? null;
     if (app.config.bkashPersonalNumber === "") {
       return reply.code(503).send({
         ok: false,
@@ -322,11 +371,12 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     const transactionId = newId();
     db.prepare(
       "INSERT INTO credit_transactions " +
-        "(id, app_id, package_id, package_code, sms_quota, validity_days, amount_bdt, " +
-        "package_type, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', unixepoch())",
+        "(id, app_id, user_id, package_id, package_code, sms_quota, validity_days, amount_bdt, " +
+        "package_type, status, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', unixepoch())",
     ).run(
       transactionId,
-      request.appRow?.id,
+      walletUserId === null ? request.appRow?.id ?? null : null,
+      walletUserId,
       pkg.id,
       packageCode,
       pkg.sms_quota,
@@ -334,7 +384,10 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       pkg.price_bdt,
       pkg.type,
     );
-    app.log.info({ appId: request.appRow?.appId, transactionId, packageCode }, "credit requested");
+    app.log.info(
+      { appId: request.appRow?.appId ?? null, userId: walletUserId, transactionId, packageCode },
+      "credit requested",
+    );
     return reply.code(201).send({
       ok: true,
       transactionId,
@@ -350,7 +403,21 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
    * this handler also rejects a TrxID already on an APPROVED one with a
    * clearer 409 before the database has to.
    */
-  app.post("/v5/billing/credits/submit-trx", { preHandler: [app.requireApp] }, async (request, reply) => {
+  app.post("/v5/billing/credits/submit-trx", async (request, reply) => {
+    // STAGE F9 (ISSUE-88): same dual auth as credits/request — the dashboard
+    // submits a wallet purchase's TrxID with its session; API consumers keep
+    // the app-credential path.
+    let sessionUserId: string | null = null;
+    const headerAppId = request.headers["x-app-id"];
+    if (typeof headerAppId === "string" && headerAppId.length > 0) {
+      await app.requireApp(request, reply);
+      if (!request.appRow) return reply;
+    } else {
+      const session = requireSession(app.db, request, reply);
+      if (session === null) return reply;
+      sessionUserId = session.user.id;
+    }
+    const callerUserId = sessionUserId ?? request.appRow?.walletOwnerId ?? null;
     const body = (asRecord(request.body) ?? {}) as {
       transactionId?: unknown;
       trxId?: unknown;
@@ -365,9 +432,17 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     const row = db
-      .prepare("SELECT status, trx_id FROM credit_transactions WHERE id = ? AND app_id = ?")
-      .get(transactionId, request.appRow?.id) as { status: string; trx_id: string | null } | undefined;
-    if (!row) {
+      .prepare("SELECT status, trx_id, app_id, user_id FROM credit_transactions WHERE id = ?")
+      .get(transactionId) as
+      | { status: string; trx_id: string | null; app_id: string | null; user_id: string | null }
+      | undefined;
+    // Ownership (F9): user-attributed rows need the same user behind the
+    // credentials; app-attributed rows need the same app. Unknown id and
+    // foreign row share ONE envelope — no transaction-id enumeration.
+    const owns =
+      row !== undefined &&
+      (row.user_id !== null ? row.user_id === callerUserId : row.app_id === request.appRow?.id);
+    if (!owns) {
       return reply.code(404).send({
         ok: false,
         error: "Transaction not found",
@@ -695,9 +770,17 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     const trx = db
-      .prepare("SELECT id, app_id, sms_quota, validity_days, package_type, status FROM credit_transactions WHERE id = ?")
+      .prepare("SELECT id, app_id, user_id, sms_quota, validity_days, package_type, status FROM credit_transactions WHERE id = ?")
       .get(transactionId) as
-      | { id: string; app_id: string; sms_quota: number; validity_days: number; package_type: string; status: string }
+      | {
+          id: string;
+          app_id: string | null;
+          user_id: string | null;
+          sms_quota: number;
+          validity_days: number;
+          package_type: string;
+          status: string;
+        }
       | undefined;
     if (!trx) {
       return reply.code(404).send({
@@ -739,10 +822,17 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const credits = db
-      .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits WHERE app_id = ?")
-      .get(trx.app_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined;
-    app.log.info({ transactionId, appId: trx.app_id }, "credit approved");
+    // STAGE F9 (ISSUE-88): report the balance of the plane the award landed
+    // on — user wallet (user-attributed buys) or app bucket (legacy).
+    const credits =
+      trx.user_id !== null
+        ? (db
+            .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM user_credits WHERE user_id = ?")
+            .get(trx.user_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined)
+        : (db
+            .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits WHERE app_id = ?")
+            .get(trx.app_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined);
+    app.log.info({ transactionId, appId: trx.app_id, userId: trx.user_id }, "credit approved");
     return {
       ok: true,
       status: "approved",
@@ -753,14 +843,18 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
 
   /** Operator view: pending transactions queue (approval workflow input). */
   app.get("/v5/admin/billing/queue", { preHandler: [app.requireOperator] }, async () => {
+    // STAGE F9 (ISSUE-88): wallet purchases carry no app — the queue shows
+    // the user attribution so the operator can tell a wallet buy from an app
+    // buy (both still approve through the same award core).
     const rows = db
       .prepare(
-        "SELECT id, app_id, package_code, sms_quota, amount_bdt, package_type, trx_id, requested_at " +
+        "SELECT id, app_id, user_id, package_code, sms_quota, amount_bdt, package_type, trx_id, requested_at " +
           "FROM credit_transactions WHERE status = 'pending' ORDER BY requested_at ASC",
       )
       .all() as {
       id: string;
-      app_id: string;
+      app_id: string | null;
+      user_id: string | null;
       package_code: string;
       sms_quota: number;
       amount_bdt: number;
@@ -773,6 +867,7 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       pending: rows.map((t) => ({
         transactionId: t.id,
         appId: t.app_id,
+        userId: t.user_id,
         packageCode: t.package_code,
         smsQuota: t.sms_quota,
         amountBdt: t.amount_bdt,
