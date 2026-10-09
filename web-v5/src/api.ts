@@ -83,6 +83,11 @@ export async function request<T>(path: string, init: RequestInit): Promise<T> {
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...init,
+      // STAGE F3: the customer session is an HttpOnly cookie set by
+      // /v5/auth/*; credentialed fetch is what sends it cross-origin (the
+      // API answers with Access-Control-Allow-Credentials for allow-listed
+      // origins only). Harmless for the header-based planes.
+      credentials: "include",
       headers: {
         ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(init.headers ?? {}),
@@ -232,6 +237,132 @@ export function describeError(err: unknown): string {
   return "Unexpected error — see the browser console";
 }
 
+// ── Customer auth (STAGE F3: /v5/auth/*, HttpOnly session cookie) ─────────
+//
+// The session cookie is HttpOnly — JS never sees it, so "am I signed in?" is
+// answered by GET /v5/auth/me, not by reading storage. App credentials remain
+// a separate, per-app plane (X-App-Id/X-App-Secret above): owning an app in
+// the dashboard does not leak its secret back out of the server.
+
+export interface SessionUser {
+  id: string;
+  email: string;
+  createdAt: number | null;
+  /** Soft verification (F3 amendment): null = unverified; login never gated on it. */
+  emailVerifiedAt?: number | null;
+}
+
+export interface OwnedApp {
+  appId: string;
+  name: string;
+  revoked: boolean;
+  createdAt: number;
+}
+
+export interface SelfServeApp {
+  appId: string;
+  appSecret: string;
+  name: string;
+  trial: { otpSms: number; bulkSms: number; expiresAt: number } | null;
+}
+
+/** POST /v5/auth/register — creates the account and opens a session (cookie). */
+export async function registerAccount(email: string, password: string): Promise<void> {
+  await request<{
+    ok: true;
+  }>("/v5/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+
+/** POST /v5/auth/login — opens a session (cookie). Tokens in the response are ignored here. */
+export async function loginAccount(email: string, password: string): Promise<void> {
+  await request<{
+    ok: true;
+    accessToken: string;
+    refreshToken: string;
+  }>("/v5/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+
+/** POST /v5/auth/logout — deletes the session server-side; idempotent. */
+export async function logoutAccount(): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/logout", { method: "POST" });
+}
+
+/**
+ * GET /v5/auth/me — the signed-in user, or null when there is no live
+ * session (401 auth_required is the normal signed-out answer, not an error).
+ */
+export async function getCurrentUser(): Promise<SessionUser | null> {
+  try {
+    const body = await request<{ ok: true; user: SessionUser }>("/v5/auth/me", { method: "GET" });
+    return body.user;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return null;
+    throw err;
+  }
+}
+
+/** GET /v5/auth/apps — owned apps; secrets are never re-served by the server. */
+export async function listOwnedApps(): Promise<OwnedApp[]> {
+  const body = await request<{ ok: true; apps: OwnedApp[] }>("/v5/auth/apps", { method: "GET" });
+  return body.apps;
+}
+
+/**
+ * POST /v5/auth/apps — self-serve registration. The response is the ONLY
+ * place appSecret ever appears: persist it now or unlock via link later.
+ */
+export async function createSelfServeApp(name?: string): Promise<SelfServeApp> {
+  return request<SelfServeApp & { ok: true }>("/v5/auth/apps", {
+    method: "POST",
+    body: JSON.stringify(name !== undefined ? { name } : {}),
+  });
+}
+
+/** POST /v5/auth/apps/link — claims/proves an app by its credentials once. */
+export async function linkOwnedApp(
+  appId: string,
+  appSecret: string,
+): Promise<{ appId: string; name: string; revoked: boolean }> {
+  return request<{ ok: true; appId: string; name: string; revoked: boolean }>("/v5/auth/apps/link", {
+    method: "POST",
+    body: JSON.stringify({ appId, appSecret }),
+  });
+}
+
+// ── Email features (F3 amendment: verification + self-service reset) ───────
+
+/** GET /v5/auth/mail-status — public: is SMTP configured on this deployment. */
+export async function getMailStatus(): Promise<boolean> {
+  const body = await request<{ ok: true; configured: boolean }>("/v5/auth/mail-status", { method: "GET" });
+  return body.configured;
+}
+
+/** POST /v5/auth/verify-email — consumes the emailed token (idempotent once verified). */
+export async function verifyEmail(token: string): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/verify-email", { method: "POST", body: JSON.stringify({ token }) });
+}
+
+/** POST /v5/auth/verify-email/resend — session-required; server answers ok regardless. */
+export async function resendVerification(): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/verify-email/resend", { method: "POST" });
+}
+
+/** POST /v5/auth/password/forgot — always generic-ok server-side (anti-enumeration). */
+export async function forgotPassword(email: string): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/password/forgot", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+/** POST /v5/auth/password/reset — token + new password; revokes every session. */
+export async function resetPassword(token: string, password: string): Promise<void> {
+  await request<{ ok: true }>("/v5/auth/password/reset", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
+  });
+}
+
 // ── Operator plane (server requireOperator routes — Stage F2) ──────────────
 //
 // `Authorization: Bearer <OPERATOR_SECRET>` — a third credential plane,
@@ -344,6 +475,46 @@ export interface OversightCampaign {
 /** GET /v5/admin/metrics — also the pre-storage probe that verifies a pasted secret. */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
   return operatorFetch<AdminMetrics & { ok: true }>("/v5/admin/metrics");
+}
+
+// ── Mail settings (F3 amendment: operator-configured SMTP, write-only password) ──
+
+export interface MailConfigView {
+  configured: boolean;
+  host: string | null;
+  port: number | null;
+  fromAddress: string | null;
+  passwordMasked: string | null;
+  updatedAt: number | null;
+}
+
+/** GET /v5/admin/mail-config — masked; the password is never returned. */
+export async function getMailConfig(): Promise<MailConfigView> {
+  const body = await operatorFetch<MailConfigView & { ok: true }>("/v5/admin/mail-config");
+  return { configured: body.configured, host: body.host, port: body.port, fromAddress: body.fromAddress, passwordMasked: body.passwordMasked, updatedAt: body.updatedAt };
+}
+
+/** PUT /v5/admin/mail-config — password optional (empty = keep the stored one, write-only). */
+export async function updateMailConfig(cfg: {
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  fromAddress: string;
+}): Promise<MailConfigView> {
+  const body = await operatorFetch<MailConfigView & { ok: true }>("/v5/admin/mail-config", {
+    method: "PUT",
+    body: JSON.stringify(cfg),
+  });
+  return { configured: body.configured, host: body.host, port: body.port, fromAddress: body.fromAddress, passwordMasked: body.passwordMasked, updatedAt: body.updatedAt };
+}
+
+/** POST /v5/admin/mail-config/test — sends one real test email to `to`. */
+export async function testMailConfig(to: string): Promise<void> {
+  await operatorFetch<{ ok: true }>("/v5/admin/mail-config/test", {
+    method: "POST",
+    body: JSON.stringify({ to }),
+  });
 }
 
 /** GET /v5/admin/billing/queue — pending TrxID approvals. */

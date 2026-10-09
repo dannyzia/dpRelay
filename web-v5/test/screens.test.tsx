@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
-import type { CreditPackage, Credits, Transaction } from "../src/api";
+import type { CreditPackage, Credits, OwnedApp, Transaction } from "../src/api";
+import { AppsView } from "../src/screens/Apps";
 import { CheckoutView, PackageListView } from "../src/screens/BuyCredits";
 import { CredentialsView } from "../src/screens/Credentials";
 import { CreditsView } from "../src/screens/Credits";
 import { Docs } from "../src/screens/Docs";
+import { FaqView } from "../src/screens/Faq";
+import { ForgotPasswordView } from "../src/screens/ForgotPassword";
 import { HistoryView } from "../src/screens/History";
+import { LinkAppView } from "../src/screens/LinkApp";
 import { LoginView } from "../src/screens/Login";
+import { MailSettingsView } from "../src/screens/Operator";
+import { PaymentView } from "../src/screens/Payment";
+import { ResetPasswordView } from "../src/screens/ResetPassword";
+import { VerifyEmailView } from "../src/screens/VerifyEmail";
 
 /**
  * renderToString + normalization: React inserts `<!-- -->` separators between
@@ -27,25 +35,238 @@ const FIXTURE_CREDITS: Credits = {
   purchasedAt: null,
 };
 
-describe("LoginView", () => {
-  it("renders the credential form", () => {
-    const html = render(<LoginView error={null} busy={false} onSubmit={(): void => undefined} />);
-    expect(html).toContain('id="appId"');
-    expect(html).toContain('id="appSecret"');
+describe("LoginView (F3 email/password)", () => {
+  it("renders the email/password sign-in form", () => {
+    const html = render(
+      <LoginView mode="login" error={null} busy={false} onSubmit={(): void => undefined} onToggleMode={(): void => undefined} />,
+    );
+    expect(html).toContain('id="email"');
+    expect(html).toContain('id="password"');
     expect(html).toContain("Sign in");
+    expect(html).toContain("Create one");
+    // The raw credential gate is gone: no app-plane fields on the front door.
+    expect(html).not.toContain('id="appId"');
+    expect(html).not.toContain('id="appSecret"');
+  });
+
+  it("renders the signup variant with the 10-char hint", () => {
+    const html = render(
+      <LoginView mode="signup" error={null} busy={false} onSubmit={(): void => undefined} onToggleMode={(): void => undefined} />,
+    );
+    expect(html).toContain("Create your account");
+    expect(html).toContain("At least 10 characters");
+    // renderToString emits the camelCase React attribute verbatim.
+    expect(html).toContain("minLength=\"10\"");
+    expect(html).toContain("Create account");
   });
 
   it("surfaces the server rejection and disables while busy", () => {
     const html = renderToString(
       <LoginView
-        error="Sign-in rejected: Unknown X-App-Id (unknown_app)"
+        mode="login"
+        error="Invalid credentials (invalid_credentials)"
         busy
         onSubmit={(): void => undefined}
+        onToggleMode={(): void => undefined}
       />,
     );
-    expect(html).toContain("unknown_app");
+    expect(html).toContain("invalid_credentials");
     expect(html).toContain("Checking…");
     expect(html).toContain("disabled");
+  });
+});
+
+describe("AppsView (F3 owned apps)", () => {
+  const OWNED: OwnedApp[] = [
+    { appId: "app_alpha", name: "My shop", revoked: false, createdAt: 1791500000 },
+    { appId: "app_dead", name: "Old shop", revoked: true, createdAt: 1791400000 },
+  ];
+
+  it("lists owned apps with per-app actions and the revoked badge", () => {
+    const html = render(
+      <AppsView
+        apps={OWNED}
+        error={null}
+        busy={false}
+        freshSecret={null}
+        verifyBanner="hidden"
+        onResend={(): void => undefined}
+        onOpen={(): void => undefined}
+        onCreate={(): void => undefined}
+        onAcknowledgeSecret={(): void => undefined}
+        onLinkExisting={(): void => undefined}
+      />,
+    );
+    expect(html).toContain("My shop");
+    expect(html).toContain("app_alpha");
+    expect(html).toContain("revoked");
+    expect(html).toContain("Register a new app");
+    expect(html).toContain("Link existing app");
+  });
+
+  it("shows the empty state and the one-time secret panel", () => {
+    const empty = render(
+      <AppsView
+        apps={[]}
+        error={null}
+        busy={false}
+        freshSecret={null}
+        verifyBanner="hidden"
+        onResend={(): void => undefined}
+        onOpen={(): void => undefined}
+        onCreate={(): void => undefined}
+        onAcknowledgeSecret={(): void => undefined}
+        onLinkExisting={(): void => undefined}
+      />,
+    );
+    expect(empty).toContain("No apps yet");
+
+    const withSecret = render(
+      <AppsView
+        apps={[]}
+        error={null}
+        busy={false}
+        freshSecret={{ appId: "app_new1", appSecret: "s3cret-value", trialSms: 20 }}
+        verifyBanner="hidden"
+        onResend={(): void => undefined}
+        onOpen={(): void => undefined}
+        onCreate={(): void => undefined}
+        onAcknowledgeSecret={(): void => undefined}
+        onLinkExisting={(): void => undefined}
+      />,
+    );
+    expect(withSecret).toContain("only time the server will show it");
+    expect(withSecret).toContain("app_new1");
+    expect(withSecret).toContain("s3cret-value");
+    expect(withSecret).toContain("20 OTP + 20 bulk SMS");
+  });
+
+  it("offers the verification banner only when unverified and mail is configured", () => {
+    const base = {
+      apps: OWNED,
+      error: null,
+      busy: false,
+      freshSecret: null,
+      onResend: (): void => undefined,
+      onOpen: (): void => undefined,
+      onCreate: (): void => undefined,
+      onAcknowledgeSecret: (): void => undefined,
+      onLinkExisting: (): void => undefined,
+    };
+    const offer = render(<AppsView {...base} verifyBanner="offer" />);
+    expect(offer).toContain("Confirm your email");
+    expect(offer).toContain("Send verification email");
+    const sent = render(<AppsView {...base} verifyBanner="sent" />);
+    expect(sent).toContain("Verification email sent");
+    const hidden = render(<AppsView {...base} verifyBanner="hidden" />);
+    expect(hidden).not.toContain("Confirm your email");
+  });
+});
+
+describe("LinkAppView (F3 link existing app)", () => {
+  it("prefills the appId, hides the secret, surfaces errors", () => {
+    const html = renderToString(
+      <LinkAppView
+        appId="haven-app"
+        error="Invalid app credentials (invalid_app_credentials)"
+        busy
+        onLink={(): void => undefined}
+        onBack={(): void => undefined}
+      />,
+    );
+    expect(html).toContain('value="haven-app"');
+    expect(html).toContain('type="password"');
+    expect(html).toContain("invalid_app_credentials");
+    expect(html).toContain("Checking…");
+  });
+});
+
+describe("F3 amendment screens (email + payment + FAQ)", () => {
+  it("PaymentView lists the five remittance methods and the bKash number", () => {
+    const html = render(<PaymentView />);
+    for (const name of ["TapTap Send", "Remitly", "Wise", "Western Union", "WorldRemit"]) {
+      expect(html).toContain(name);
+    }
+    expect(html).toContain("01613249520");
+    expect(html).toContain("+8801613249520");
+    expect(html).toContain("MTCN");
+  });
+
+  it("FaqView renders the owner-approved safe question set and no SMTP details", () => {
+    const html = render(<FaqView />);
+    expect(html).toContain("How do I pay?");
+    expect(html).toContain("How do I get API keys?");
+    expect(html).toContain("How do I reset my password?");
+    expect(html).toContain("What does an OTP cost?");
+    // React escapes the apostrophe in renderToString — assert without it.
+    expect(html).toContain("my SMS arrived");
+    // Owner flag: infrastructure details never appear on customer pages.
+    expect(html).not.toContain("smtp");
+    expect(html).not.toContain("stackmail");
+  });
+
+  it("ForgotPasswordView shows the clean-disable hint when mail is unconfigured", () => {
+    const unconfigured = render(
+      <ForgotPasswordView sent={false} error={null} busy={false} mailConfigured={false} onSubmit={(): void => undefined} />,
+    );
+    expect(unconfigured).toContain("Email is not enabled");
+    const sent = render(
+      <ForgotPasswordView sent error={null} busy={false} mailConfigured onSubmit={(): void => undefined} />,
+    );
+    expect(sent).toContain("reset link is on its way");
+  });
+
+  it("ResetPasswordView handles missing token, form, and success states", () => {
+    const noToken = render(
+      <ResetPasswordView hasToken={false} done={false} error={null} busy={false} onSubmit={(): void => undefined} />,
+    );
+    expect(noToken).toContain("link is incomplete");
+    const form = renderToString(
+      <ResetPasswordView hasToken done={false} error={null} busy onSubmit={(): void => undefined} />,
+    );
+    expect(form).toContain("minLength=\"10\"");
+    expect(form).toContain("Saving…");
+    const done = render(
+      <ResetPasswordView hasToken done error={null} busy={false} onSubmit={(): void => undefined} />,
+    );
+    expect(done).toContain("Password updated");
+  });
+
+  it("VerifyEmailView renders pending/verified/failed states", () => {
+    expect(render(<VerifyEmailView state="pending" error={null} />)).toContain("Verifying…");
+    expect(render(<VerifyEmailView state="verified" error={null} />)).toContain("Your email is verified");
+    const failed = render(<VerifyEmailView state="failed" error="Invalid or expired token (invalid_token)" />);
+    expect(failed).toContain("invalid_token");
+  });
+
+  it("MailSettingsView masks the password and disables test-send when unconfigured", () => {
+    const html = render(
+      <MailSettingsView
+        config={{ configured: true, host: "smtp.example.test", port: 465, fromAddress: "f@example.test", passwordMasked: "••••", updatedAt: 1 }}
+        error={null}
+        note={null}
+        busy={false}
+        onSave={(): void => undefined}
+        onTest={(): void => undefined}
+      />,
+    );
+    expect(html).toContain("smtp.example.test");
+    expect(html).toContain("••••");
+    expect(html).toContain("Send test");
+    expect(html).not.toContain('name="password" value');
+
+    const unconfigured = render(
+      <MailSettingsView
+        config={{ configured: false, host: null, port: null, fromAddress: null, passwordMasked: null, updatedAt: null }}
+        error={null}
+        note={null}
+        busy={false}
+        onSave={(): void => undefined}
+        onTest={(): void => undefined}
+      />,
+    );
+    expect(unconfigured).toContain("Not configured yet");
+    expect(unconfigured).toContain("disabled");
   });
 });
 

@@ -16,6 +16,7 @@ import bulkRoutes from "./routes/bulk.js";
 import contactGroupRoutes from "./routes/contact-groups.js";
 import messageTemplateRoutes from "./routes/message-templates.js";
 import adminAppRoutes from "./routes/admin-apps.js";
+import adminMailRoutes from "./routes/admin-mail.js";
 import adminDeviceRoutes from "./routes/admin-devices.js";
 import { registerJobs, alertCanaryStatus, alertSinkStatus } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
@@ -115,6 +116,12 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
       origin: allowedOrigins,
       methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-App-Id", "X-App-Secret"],
+      // STAGE F3 (ISSUE-81): the dashboard authenticates with an HttpOnly
+      // session cookie cross-origin (API + site are both on onrender.com, so
+      // SameSite=Lax still sends it). Browsers refuse credentialed responses
+      // unless ACAO is an exact origin AND Allow-Credentials is true — the
+      // allowlist is exact origins, never `*`, so this cannot widen exposure.
+      credentials: true,
       maxAge: 86400,
     });
   }
@@ -174,6 +181,7 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   app.register(contactGroupRoutes);
   app.register(messageTemplateRoutes);
   app.register(adminAppRoutes);
+  app.register(adminMailRoutes);
   app.register(adminDeviceRoutes);
 
   // Jobs (R3) + wake guard (R5). Decorators must exist before hooks run.
