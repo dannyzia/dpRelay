@@ -192,6 +192,33 @@ describe("F3 amendment screens (email + payment + FAQ)", () => {
     expect(html).toContain("MTCN");
   });
 
+  it("PaymentView carries the owner's five verbatim remittance guides (hub 1243)", () => {
+    const html = render(<PaymentView />);
+    // Owner headings, composed as one text node per heading (React splits
+    // adjacent text children with <!-- --> in renderToString).
+    for (const name of ["TapTap Send", "Remitly", "Wise", "Western Union", "WorldRemit"]) {
+      expect(html).toContain(`How to Send Using ${name}`);
+    }
+    // Verbatim taglines (chosen without apostrophes/ampersands — those get
+    // entity-escaped by renderToString).
+    expect(html).toContain("Best for users in the US, UK, Canada, UAE, and Europe.");
+    expect(html).toContain("Best for competitive exchange rates and promotional offers.");
+    expect(html).toContain("Best for getting the mid-market exchange rate with low, transparent fees.");
+    expect(html).toContain("Best for sending online or paying with cash at a brick-and-mortar location.");
+    expect(html).toContain("Available in over 50 countries for fast mobile wallet routing.");
+    // One verbatim step from each of the five guides.
+    expect(html).toContain("Open the App: Download the TapTap Send app, log in, or set up your account.");
+    expect(html).toContain("Select Mobile Money and click on bKash.");
+    expect(html).toContain("Type the complete phone number: +8801613249520.");
+    expect(html).toContain("The funds will route directly into the mobile wallet in minutes.");
+    expect(html).toContain("Put in your international card details to authorize the transaction.");
+    // Western Union keeps the owner's two route labels.
+    expect(html).toContain("Option A: Via the Western Union App/Website");
+    expect(html).toContain("Option B: In-Person at an Agent Location (Cash Payment)");
+    // Placeholder notes from the pre-ANSWER scaffold are gone.
+    expect(html).not.toContain("Send money to a Bangladesh bKash number from the TapTap Send app");
+  });
+
   it("FaqView renders the owner-approved safe question set and no SMTP details", () => {
     const html = render(<FaqView />);
     expect(html).toContain("How do I pay?");
