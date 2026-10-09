@@ -112,6 +112,7 @@ jobs:
     outputs:
       dashboard: ${{ steps.filter.outputs.dashboard }}
       webv5: ${{ steps.filter.outputs.webv5 }}
+      landing: ${{ steps.filter.outputs.landing }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,6 +131,13 @@ jobs:
             echo "webv5=true" >> "$GITHUB_OUTPUT"
           else
             echo "webv5=false" >> "$GITHUB_OUTPUT"
+          fi
+          # landing (STAGE F6): content files, the zero-dep checker, or this
+          # workflow — CI edits must always smoke-validate the gate they edit.
+          if git diff --name-only "HEAD^" "HEAD" | grep -qE '^(landing/|scripts/check-landing\.mjs|\.github/workflows/pr-checks\.yml)'; then
+            echo "landing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "landing=false" >> "$GITHUB_OUTPUT"
           fi
 
   # PR-time gate for the dashboard SPA: typecheck + build when dashboard/ is
@@ -181,3 +189,19 @@ jobs:
         run: npm test
       - name: Build
         run: npx vite build
+
+  # STAGE F6 (ISSUE-86): static marketing site gate — zero-dependency
+  # structural checks (internal links, per-page SEO, owner-verbatim guide
+  # pins, SMTP-free FAQ, AGPL pattern) on plain Node. landing/ has no
+  # package.json by contract, so there is deliberately no install step.
+  landing-checks:
+    needs: changes
+    if: needs.changes.outputs.landing == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check landing site
+        run: node scripts/check-landing.mjs

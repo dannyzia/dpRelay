@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API docs — send, verify, status | dP Relay</title>
+  <meta name="description" content="OTP send/verify/status API contract, error codes, signed-webhook verification, and curl examples for the dP Relay SMS platform.">
+  <link rel="canonical" href="https://dprelay.digital-papyrus.com/docs/">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/">dP Relay</a>
+      <nav aria-label="Main">
+        <a href="/">Home</a>
+        <a href="/pricing/">Pricing</a>
+        <a href="/payment/">Payment</a>
+        <a href="/faq/">FAQ</a>
+        <a href="/docs/" aria-current="page">Docs</a>
+        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <h1>Integration docs</h1>
+    <p class="muted">
+      Base URL of this deployment's API. All request and response bodies are JSON; every
+      failure response carries <code>{ ok, error, code }</code>. Authenticate every
+      app-plane call with the two headers below.
+    </p>
+    <pre><code>X-App-Id: &lt;your app id&gt;
+X-App-Secret: &lt;your app secret&gt;</code></pre>
+
+    <section aria-labelledby="send">
+      <h2 id="send">1 · Send an OTP</h2>
+      <pre><code>POST /v5/otp/send
+{ "phone": "+8801XXXXXXXXX" }
+
+201 { "ok": true, "sessionId": "...", "expiresAt": 1794000000 }</code></pre>
+      <p class="muted">
+        Phone must be strict E.164. Each send consumes one OTP credit —
+        <code>402 insufficient_credits</code> when the balance is zero. Rate limits answer
+        <code>429 rate_limited</code> (per-app per-number) and
+        <code>429 resend_cooldown</code> (per-number cooldown).
+      </p>
+    </section>
+
+    <section aria-labelledby="verify">
+      <h2 id="verify">2 · Verify the code</h2>
+      <pre><code>POST /v5/otp/verify
+{ "phone": "+8801XXXXXXXXX", "otp": "123456" }
+
+200 { "ok": true, "verified": true }</code></pre>
+      <p class="muted">
+        Failure codes: <code>400 otp_expired</code> (no active session / TTL passed),
+        <code>423 otp_locked</code> (too many attempts — <code>retryAfterSec</code> tells you
+        when), <code>400 invalid_otp_format</code> / <code>invalid_phone</code>.
+      </p>
+    </section>
+
+    <section aria-labelledby="status">
+      <h2 id="status">3 · Poll status</h2>
+      <pre><code>GET /v5/otp/status?phone=%2B8801XXXXXXXXX
+
+200 { "ok": true, "status": "pending|verified|expired",
+      "expiresAt": 1794000000, "attemptsLeft": 5,
+      "lockedUntil": null, "verifiedAt": null }</code></pre>
+      <p class="muted"><code>404 not_found</code> when the number never requested a session.</p>
+    </section>
+
+    <section aria-labelledby="errors">
+      <h2 id="errors">Error codes</h2>
+      <table>
+        <thead>
+          <tr><th>Status</th><th>code</th><th>Meaning</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>400</td><td><code>invalid_phone</code> / <code>invalid_otp_format</code></td><td>Number or code failed strict validation.</td></tr>
+          <tr><td>400</td><td><code>otp_expired</code></td><td>No active session for that number, or the TTL passed.</td></tr>
+          <tr><td>402</td><td><code>insufficient_credits</code></td><td>Credit balance is zero — buy a package in the dashboard.</td></tr>
+          <tr><td>404</td><td><code>not_found</code></td><td>No such session (status) or resource.</td></tr>
+          <tr><td>409</td><td><code>trx_id_exists</code></td><td>That bKash TrxID is already attached to another pending transaction.</td></tr>
+          <tr><td>423</td><td><code>otp_locked</code></td><td>Too many verify attempts; retry after <code>retryAfterSec</code>.</td></tr>
+          <tr><td>429</td><td><code>rate_limited</code> / <code>resend_cooldown</code></td><td>Per-app per-number rate limit, or per-number resend cooldown.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section aria-labelledby="webhooks">
+      <h2 id="webhooks">Webhook signature</h2>
+      <p class="muted">
+        Deliveries to your app's webhook URL carry the header
+        <code>X-DP-Signature</code>: the hex-encoded HMAC-SHA256 of the raw request body,
+        keyed with your app's webhook secret. Verify it with a timing-safe comparison over
+        the raw bytes before parsing the JSON, and answer 2xx promptly — failed deliveries
+        are retried.
+      </p>
+    </section>
+
+    <section aria-labelledby="curl">
+      <h2 id="curl">curl examples</h2>
+      <p class="muted">Set the base URL once, then the three core calls:</p>
+      <pre><code># Your deployment's API base URL
+API=https://dprelay-api-hug8.onrender.com
+
+# 1) Send an OTP
+curl -sS -X POST "$API/v5/otp/send" \
+  -H 'Content-Type: application/json' \
+  -H 'X-App-Id: &lt;your app id&gt;' \
+  -H 'X-App-Secret: &lt;your app secret&gt;' \
+  -d '{"phone":"+8801XXXXXXXXX"}'
+
+# 2) Verify the code
+curl -sS -X POST "$API/v5/otp/verify" \
+  -H 'Content-Type: application/json' \
+  -H 'X-App-Id: &lt;your app id&gt;' \
+  -H 'X-App-Secret: &lt;your app secret&gt;' \
+  -d '{"phone":"+8801XXXXXXXXX","otp":"123456"}'
+
+# 3) Poll status
+curl -sS -G "$API/v5/otp/status" \
+  --data-urlencode 'phone=+8801XXXXXXXXX' \
+  -H 'X-App-Id: &lt;your app id&gt;' \
+  -H 'X-App-Secret: &lt;your app secret&gt;'</code></pre>
+    </section>
+
+    <section aria-labelledby="billing">
+      <h2 id="billing">Credits</h2>
+      <p class="muted">
+        Balance: <code>GET /v5/billing/credits</code> → both buckets plus their expiry.
+        Buying: <code>GET /v5/billing/packages</code> →
+        <code>POST /v5/billing/credits/request { "packageCode" }</code> returns the bKash
+        destination + amount → Send Money →
+        <code>POST /v5/billing/credits/submit-trx { "transactionId", "trxId" }</code> →
+        the operator approves and the balance updates. Track it all in
+        <code>GET /v5/billing/transactions</code>. TrxID reuse of a different pending
+        transaction answers <code>409 trx_id_exists</code>. See the
+        <a href="/payment/">payment guides</a>.
+      </p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>dP Relay — digital papyrus SMS platform</span>
+      <span><a href="/docs/">API docs</a> · <a href="/faq/">FAQ</a> · <a href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a></span>
+    </div>
+  </footer>
+</body>
+</html>

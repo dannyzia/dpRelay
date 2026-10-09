@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FAQ — dP Relay SMS API</title>
+  <meta name="description" content="Answers on payments, API keys, password resets, OTP pricing, and failed SMS delivery for the dP Relay SMS platform.">
+  <link rel="canonical" href="https://dprelay.digital-papyrus.com/faq/">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/">dP Relay</a>
+      <nav aria-label="Main">
+        <a href="/">Home</a>
+        <a href="/pricing/">Pricing</a>
+        <a href="/payment/">Payment</a>
+        <a href="/faq/" aria-current="page">FAQ</a>
+        <a href="/docs/">Docs</a>
+        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <h1>Frequently asked questions</h1>
+
+    <section class="card" aria-labelledby="faq-pay">
+      <h2 id="faq-pay">How do I pay?</h2>
+      <p class="muted">Open the <a href="/payment/">payment page</a>: you send money to the bKash number with TapTap Send, Remitly, Wise, Western Union, or WorldRemit, then submit the TrxID on the Buy credits screen.</p>
+    </section>
+
+    <section class="card" aria-labelledby="faq-keys">
+      <h2 id="faq-keys">How do I get API keys?</h2>
+      <p class="muted">Sign in with your email, then register an app on the Apps screen — the appId and appSecret are shown <strong>once</strong>; store them safely. If an operator issued you an app instead, use <strong>Link existing app</strong> with those credentials.</p>
+    </section>
+
+    <section class="card" aria-labelledby="faq-reset">
+      <h2 id="faq-reset">How do I reset my password?</h2>
+      <p class="muted">On the sign-in screen choose <strong>Forgot password?</strong> and enter your email — a reset link follows. If email is not yet enabled on this deployment, contact the operator and they can reset it for you.</p>
+    </section>
+
+    <section class="card" aria-labelledby="faq-cost">
+      <h2 id="faq-cost">What does an OTP cost?</h2>
+      <p class="muted">New apps get free trial credits. After that, each SMS is billed from your credit balance at the package prices shown on the <strong>Buy credits</strong> screen — both OTP and bulk credits are listed there.</p>
+    </section>
+
+    <section class="card" aria-labelledby="faq-missing">
+      <h2 id="faq-missing">Why hasn't my SMS arrived?</h2>
+      <p class="muted">Check that the recipient number is in strict E.164 format (e.g. +8801XXXXXXXXX) and that the recipient's device is switched on and reachable. Failed sends show in the <strong>History</strong> screen; repeated failures usually mean the receiving device is offline — contact the operator.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>dP Relay — digital papyrus SMS platform</span>
+      <span><a href="/docs/">API docs</a> · <a href="/faq/">FAQ</a> · <a href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a></span>
+    </div>
+  </footer>
+</body>
+</html>
