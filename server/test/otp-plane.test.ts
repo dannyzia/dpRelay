@@ -373,3 +373,84 @@ describe("OTP credit enforcement (Stage E)", () => {
     expect(otpCredits()).toBe(0);
   });
 });
+
+// ── ISSUE-78: otp_expires_at enforced at send (bulk parity, fail-closed) ───
+
+describe("OTP bucket expiry (ISSUE-78)", () => {
+  function setBucket(remaining: number, expiresAt: number | null): void {
+    app.db
+      .prepare(
+        "UPDATE app_credits SET otp_sms_remaining = ?, otp_expires_at = ? WHERE app_id = 'app-row-1'",
+      )
+      .run(remaining, expiresAt);
+  }
+
+  function otpCredits(): number {
+    return (
+      app.db.prepare("SELECT otp_sms_remaining AS n FROM app_credits WHERE app_id = 'app-row-1'").get() as {
+        n: number;
+      }
+    ).n;
+  }
+
+  async function send(phone = PHONE): Promise<Awaited<ReturnType<typeof app.inject>>> {
+    return app.inject({
+      method: "POST",
+      url: "/v5/otp/send",
+      headers: appHeaders(),
+      payload: { phone },
+    });
+  }
+
+  it("sends from an active bucket (expiry in the future) and deducts 1", async () => {
+    setBucket(50, Math.floor(Date.now() / 1000) + 3600);
+    const res = await send();
+    expect(res.statusCode).toBe(201);
+    expect(otpCredits()).toBe(49);
+  });
+
+  it("402s insufficient_credits when non-zero but expired: no deduction, no session, no SMS row", async () => {
+    setBucket(50, Math.floor(Date.now() / 1000) - 60);
+    const res = await send();
+    expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("insufficient_credits");
+    expect(res.json().error).toContain("expired");
+    // The AC's atomicity half: the check and the deduction are one step, so
+    // an expired bucket spends nothing and creates nothing.
+    expect(otpCredits()).toBe(50);
+    expect(pendingCount(app)).toBe(0);
+    const sms = app.db.prepare("SELECT COUNT(*) AS n FROM pending_sms").get() as { n: number };
+    expect(sms.n).toBe(0);
+  });
+
+  it("a 402 for an expired bucket does not arm the resend cooldown — top-up retry sends", async () => {
+    setBucket(50, Math.floor(Date.now() / 1000) - 60);
+    const denied = await send();
+    expect(denied.statusCode).toBe(402);
+    // Refresh the bucket (new purchase extends expiry) and retry immediately:
+    // the pre-check must 402 BEFORE the cooldown map is written, or this
+    // would answer resend_cooldown instead of sending.
+    setBucket(50, Math.floor(Date.now() / 1000) + 3600);
+    const retry = await send();
+    expect(retry.statusCode).toBe(201);
+    expect(otpCredits()).toBe(49);
+  });
+
+  it("boundary: exactly at the otp_expires_at second counts as expired (documented <= rule, bulk parity)", async () => {
+    // The handler's nowSec() can only be equal-or-later than this value, so
+    // the outcome is deterministic: 402 both within the same second and after.
+    const exactExpiry = Math.floor(Date.now() / 1000);
+    setBucket(50, exactExpiry);
+    const res = await send();
+    expect(res.statusCode).toBe(402);
+    expect(res.json().code).toBe("insufficient_credits");
+    expect(otpCredits()).toBe(50);
+  });
+
+  it("NULL otp_expires_at never expires (migrated and operator-granted rows keep working)", async () => {
+    setBucket(50, null);
+    const res = await send();
+    expect(res.statusCode).toBe(201);
+    expect(otpCredits()).toBe(49);
+  });
+});

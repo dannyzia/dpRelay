@@ -42,6 +42,21 @@ function nowSec(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+/**
+ * ISSUE-78: an OTP bucket past its expiry is spendable no more, even when the
+ * count is non-zero. NULL `otp_expires_at` = never expires (migrated rows and
+ * operator grants). The `<=` boundary — expired AT the exact expiry second —
+ * is bulk parity (services/bulk.ts reserveBulkCredits uses the same rule) and
+ * matches the lazy expiry of sessions (`expires_at <= now`).
+ *
+ * @param expiresAt epoch SECONDS of the bucket's expiry, or null for no expiry
+ * @param now current time in epoch SECONDS
+ * @returns true when the bucket may no longer be spent
+ */
+function otpCreditsExpired(expiresAt: number | null, now: number): boolean {
+  return expiresAt !== null && expiresAt <= now;
+}
+
 const otpRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Per-phone resend cooldown (M3 tail, ISSUE-23): last send time per (app,
@@ -144,18 +159,29 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
           .send({ ok: false, error: "Too many OTP requests for this number", code: "rate_limited" });
       }
 
-      // Fail-closed pre-check (Stage E order: 402 at zero). The authoritative
-      // check+deduct runs inside createSession below, atomic with the session
-      // insert — this early read only exists so a zero-balance send 402s
-      // BEFORE the resend cooldown is armed (otherwise topping up would still
-      // hit resend_cooldown on the immediate retry).
+      // Fail-closed pre-check (Stage E order: 402 at zero; ISSUE-78: also 402
+      // when the bucket is past otp_expires_at — matching bulk's expiry rule).
+      // The authoritative check+deduct runs inside createSession below,
+      // atomic with the session insert — this early read only exists so a
+      // zero-balance or expired send 402s BEFORE the resend cooldown is armed
+      // (otherwise topping up would still hit resend_cooldown on the
+      // immediate retry).
       const preCredit = app.db
-        .prepare("SELECT otp_sms_remaining FROM app_credits WHERE app_id = ?")
-        .get(appRow.id) as { otp_sms_remaining: number } | undefined;
+        .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
+        .get(appRow.id) as
+        | { otp_sms_remaining: number; otp_expires_at: number | null }
+        | undefined;
       if (!preCredit || preCredit.otp_sms_remaining < 1) {
         return reply.code(402).send({
           ok: false,
           error: "Insufficient OTP SMS credits — buy a package to keep sending",
+          code: "insufficient_credits",
+        });
+      }
+      if (otpCreditsExpired(preCredit.otp_expires_at, nowSec())) {
+        return reply.code(402).send({
+          ok: false,
+          error: "OTP credits expired — buy a package to refresh them",
           code: "insufficient_credits",
         });
       }
@@ -200,12 +226,18 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
       // + session creation are ONE atomic step — two concurrent sends cannot
       // both spend the last credit, and a mid-create failure rolls the
       // deduction back with everything else. Fail-closed: no app_credits row
-      // or remaining < 1 → insufficient_credits (Stage E order).
+      // or remaining < 1 → insufficient_credits (Stage E order); bucket past
+      // otp_expires_at → insufficient_credits with NO deduction (ISSUE-78,
+      // atomic with the check — the UPDATE below never runs for an expired
+      // bucket).
       const createSession = app.db.transaction((): "insufficient_credits" | null => {
         const credit = app.db
-          .prepare("SELECT otp_sms_remaining FROM app_credits WHERE app_id = ?")
-          .get(appRow.id) as { otp_sms_remaining: number } | undefined;
+          .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
+          .get(appRow.id) as
+          | { otp_sms_remaining: number; otp_expires_at: number | null }
+          | undefined;
         if (!credit || credit.otp_sms_remaining < 1) return "insufficient_credits";
+        if (otpCreditsExpired(credit.otp_expires_at, ts)) return "insufficient_credits";
         app.db
           .prepare(
             "UPDATE app_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE app_id = ?",
