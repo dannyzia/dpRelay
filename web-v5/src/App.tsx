@@ -70,6 +70,9 @@ export function App(): JSX.Element {
     TABS.some((tab) => tab.id === t);
   const isApps = section === "apps";
   const isLink = section === "link";
+  // STAGE F9 (ISSUE-88): buy-credits is a SESSION flow (wallet top-up) — it
+  // no longer requires connected app credentials.
+  const isBuy = section === "buy";
   // Signed-out-reachable screens (email links + public info pages).
   const isPublic =
     section === "docs" ||
@@ -105,7 +108,7 @@ export function App(): JSX.Element {
     }
     if (user === null) {
       window.location.hash = hrefFor(["login"]);
-    } else if (!connected && !isApps && !isLink) {
+    } else if (!connected && !isApps && !isLink && !isBuy) {
       window.location.hash = hrefFor(["apps"]);
     }
   }
@@ -147,7 +150,7 @@ export function App(): JSX.Element {
               href={hrefFor(["apps"])}
               className={isApps || isLink ? "nav-link active" : "nav-link"}
             >
-              Apps
+              Companies
             </a>
           )}
           <a
@@ -229,14 +232,14 @@ export function App(): JSX.Element {
               window.location.hash = hrefFor(["apps"]);
             }}
           />
+        ) : section === "buy" ? (
+          <BuyCredits />
         ) : !connected || section === "login" ? (
           <Login
             onSignedIn={(): void => {
               window.location.hash = hrefFor(["apps"]);
             }}
           />
-        ) : section === "buy" ? (
-          <BuyCredits />
         ) : section === "bulk" ? (
           <Bulk />
         ) : section === "history" ? (

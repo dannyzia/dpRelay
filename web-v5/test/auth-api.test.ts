@@ -6,18 +6,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  createCompany,
   createSelfServeApp,
+  disableCompany,
   forgotPassword,
   getCurrentUser,
   getMailStatus,
+  getWallet,
+  getWalletTransactions,
   linkOwnedApp,
+  listCompanies,
   listOwnedApps,
   loginAccount,
   logoutAccount,
   registerAccount,
+  renameCompany,
   request,
+  requestWalletCredits,
   resendVerification,
   resetPassword,
+  submitWalletTrx,
   verifyEmail,
 } from "../src/api";
 
@@ -148,6 +156,130 @@ describe("customer auth API (F3)", () => {
     expect(JSON.parse(fetchMock.mock.calls[4][1].body as string)).toEqual({
       token: "raw-token",
       password: "new-password-10",
+    });
+  });
+});
+
+describe("tenancy + wallet API (F9)", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("company CRUD hits the ordered session routes with the ordered bodies", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes(
+        {
+          ok: true,
+          company: { id: "co-1", name: "Shop", disabled: false, createdAt: 1 },
+          app: {
+            appId: "app_x",
+            appSecret: "raw-secret",
+            deviceEnrollmentSecret: "dev-secret",
+            name: "Shop",
+          },
+          trial: { otpSms: 7, bulkSms: 7, expiresAt: 123 },
+        },
+        201,
+      ),
+    );
+    const created = await createCompany("Shop");
+    expect(fetchMock.mock.calls[0][0]).toContain("/v5/auth/companies");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ name: "Shop" });
+    expect(created.app.appSecret).toBe("raw-secret");
+    expect(created.trial?.otpSms).toBe(7);
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        ok: true,
+        companies: [
+          {
+            id: "co-1",
+            name: "Shop",
+            disabled: false,
+            createdAt: 1,
+            gatewayNumber: "+8801711112233",
+            app: { appId: "app_x", name: "Shop", revoked: false },
+          },
+        ],
+      }),
+    );
+    const list = await listCompanies();
+    expect(fetchMock.mock.calls[1][0]).toContain("/v5/auth/companies");
+    expect(list[0]?.gatewayNumber).toBe("+8801711112233");
+
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true }));
+    await renameCompany("co-1", "Renamed");
+    expect(fetchMock.mock.calls[2][0]).toContain("/v5/auth/companies/co-1");
+    expect(fetchMock.mock.calls[2][1].method).toBe("PATCH");
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({ name: "Renamed" });
+
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true }));
+    await disableCompany("co-1");
+    expect(fetchMock.mock.calls[3][0]).toContain("/v5/auth/companies/co-1/disable");
+    expect(fetchMock.mock.calls[3][1].method).toBe("POST");
+  });
+
+  it("wallet reads and wallet purchases use the SESSION plane (no app headers)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        ok: true,
+        wallet: {
+          otpSmsRemaining: 7,
+          bulkSmsRemaining: 3,
+          otpExpiresAt: null,
+          bulkExpiresAt: null,
+          lastTransactionId: null,
+          purchasedAt: null,
+        },
+      }),
+    );
+    const wallet = await getWallet();
+    expect(fetchMock.mock.calls[0][0]).toContain("/v5/auth/wallet");
+    expect(wallet.otpSmsRemaining).toBe(7);
+    // Session plane: cookie only — no X-App-Id header may be attached.
+    expect(fetchMock.mock.calls[0][1].headers?.["X-App-Id"]).toBeUndefined();
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        ok: true,
+        transactions: [
+          {
+            transactionId: "trx-1",
+            packageCode: "otp-100",
+            smsQuota: 100,
+            amountBdt: 20,
+            packageType: "otp",
+            status: "approved",
+            trxId: null,
+            requestedAt: 1,
+            resolvedAt: 2,
+          },
+        ],
+      }),
+    );
+    const history = await getWalletTransactions();
+    expect(fetchMock.mock.calls[1][0]).toContain("/v5/auth/wallet/transactions");
+    expect(history[0]?.packageCode).toBe("otp-100");
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ ok: true, transactionId: "trx-2", bkashNumber: "+8801700000000", bkashNote: "Send Money", amountBdt: 20 }, 201),
+    );
+    const accepted = await requestWalletCredits("otp-100");
+    expect(fetchMock.mock.calls[2][0]).toContain("/v5/billing/credits/request");
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body as string)).toEqual({ packageCode: "otp-100" });
+    expect(accepted.transactionId).toBe("trx-2");
+
+    fetchMock.mockResolvedValueOnce(jsonRes({ ok: true, message: "TrxID submitted" }));
+    await submitWalletTrx("trx-2", "BK99");
+    expect(fetchMock.mock.calls[3][0]).toContain("/v5/billing/credits/submit-trx");
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body as string)).toEqual({
+      transactionId: "trx-2",
+      trxId: "BK99",
     });
   });
 });

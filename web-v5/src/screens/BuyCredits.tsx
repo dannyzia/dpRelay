@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import {
   describeError,
   listPackages,
-  requestCredits,
-  submitTrx,
+  requestWalletCredits,
+  submitWalletTrx,
   type CreditPackage,
   type CreditRequestAccepted,
 } from "../api";
@@ -20,6 +20,10 @@ export function PackageListView(props: {
       <h1>
         Buy credits <span className="muted">— pay with bKash</span>
       </h1>
+      <p className="muted">
+        Purchases top up your <strong>wallet</strong> — the one balance every company you own
+        sends from.
+      </p>
       <p className="muted">
         Sending money from abroad? See the <a href="#/payment">payment guide</a> (TapTap Send,
         Remitly, Wise, Western Union, WorldRemit).
@@ -107,10 +111,12 @@ export function BuyCredits(): JSX.Element {
       .catch((err: unknown) => setError(describeError(err)));
   }, []);
 
+  // STAGE F9 (ISSUE-88): the buy flow is SESSION-authenticated — the
+  // purchase lands on the user wallet, no connected app required.
   const buy = (pkg: CreditPackage): void => {
     setError(null);
     setNote(null);
-    requestCredits(pkg.packageCode)
+    requestWalletCredits(pkg.packageCode)
       .then((accepted) => setCheckout(accepted))
       .catch((err: unknown) => setError(describeError(err)));
   };
@@ -118,7 +124,7 @@ export function BuyCredits(): JSX.Element {
   const submitTrxId = (trxId: string): void => {
     if (checkout === null) return;
     setError(null);
-    submitTrx(checkout.transactionId, trxId)
+    submitWalletTrx(checkout.transactionId, trxId)
       .then((message) => setNote(message))
       .catch((err: unknown) => setError(describeError(err)));
   };

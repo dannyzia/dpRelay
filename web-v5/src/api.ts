@@ -187,9 +187,15 @@ export async function getCredits(): Promise<Credits> {
   return body.credits;
 }
 
-/** GET /v5/billing/packages — public catalog of active packages. */
+/**
+ * GET /v5/billing/packages — public catalog of active packages (the route is
+ * unauthenticated server-side; STAGE F9 moves the buy flow off the app
+ * plane, so this must also work without connected app credentials).
+ */
 export async function listPackages(): Promise<CreditPackage[]> {
-  const body = await appFetch<{ ok: true; packages: CreditPackage[] }>("/v5/billing/packages");
+  const body = await request<{ ok: true; packages: CreditPackage[] }>("/v5/billing/packages", {
+    method: "GET",
+  });
   return body.packages;
 }
 
@@ -329,6 +335,121 @@ export async function linkOwnedApp(
     method: "POST",
     body: JSON.stringify({ appId, appSecret }),
   });
+}
+
+// ── Tenancy + wallet (STAGE F9, ISSUE-88) ────────────────────────────────
+//
+// User -> many Companies (each 1:1 with one app + its F7 gateway number) and
+// a USER-level credit wallet: every company app draws from one balance.
+// These routes are session-cookie plane — no app credentials involved.
+
+export interface Company {
+  id: string;
+  name: string;
+  disabled: boolean;
+  createdAt: number;
+  /** F7 gateway number bound to the company's app; null = none bound yet. */
+  gatewayNumber: string | null;
+  app: { appId: string; name: string; revoked: boolean };
+}
+
+export interface CompanyCreated {
+  company: { id: string; name: string; disabled: boolean; createdAt: number };
+  /** Shown EXACTLY once — the server keeps only digests. */
+  app: { appId: string; appSecret: string; deviceEnrollmentSecret: string; name: string };
+  trial: { otpSms: number; bulkSms: number; expiresAt: number } | null;
+}
+
+export interface Wallet {
+  otpSmsRemaining: number;
+  bulkSmsRemaining: number;
+  otpExpiresAt: number | null;
+  bulkExpiresAt: number | null;
+  lastTransactionId: string | null;
+  purchasedAt: number | null;
+}
+
+export interface WalletTransaction {
+  transactionId: string;
+  packageCode: string;
+  smsQuota: number;
+  amountBdt: number;
+  packageType: string;
+  status: string;
+  trxId: string | null;
+  requestedAt: number;
+  resolvedAt: number | null;
+}
+
+/** GET /v5/auth/companies — the user's companies, each with its app summary + gateway number. */
+export async function listCompanies(): Promise<Company[]> {
+  const body = await request<{ ok: true; companies: Company[] }>("/v5/auth/companies", {
+    method: "GET",
+  });
+  return body.companies;
+}
+
+/**
+ * POST /v5/auth/companies — creates a company + its one app. The response is
+ * the ONLY place the secrets appear; the trial (first company only) lands in
+ * the user wallet.
+ */
+export async function createCompany(name: string): Promise<CompanyCreated> {
+  return request<CompanyCreated & { ok: true }>("/v5/auth/companies", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+/** PATCH /v5/auth/companies/:id — renames a company the user owns. */
+export async function renameCompany(companyId: string, name: string): Promise<void> {
+  await request<{ ok: true }>(`/v5/auth/companies/${encodeURIComponent(companyId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+/** POST /v5/auth/companies/:id/disable — withholds the company: its app stops sending. */
+export async function disableCompany(companyId: string): Promise<void> {
+  await request<{ ok: true }>(`/v5/auth/companies/${encodeURIComponent(companyId)}/disable`, {
+    method: "POST",
+  });
+}
+
+/** GET /v5/auth/wallet — the wallet balance every company app draws from. */
+export async function getWallet(): Promise<Wallet> {
+  const body = await request<{ ok: true; wallet: Wallet }>("/v5/auth/wallet", { method: "GET" });
+  return body.wallet;
+}
+
+/** GET /v5/auth/wallet/transactions — wallet purchase history across all companies. */
+export async function getWalletTransactions(): Promise<WalletTransaction[]> {
+  const body = await request<{ ok: true; transactions: WalletTransaction[] }>(
+    "/v5/auth/wallet/transactions",
+    { method: "GET" },
+  );
+  return body.transactions;
+}
+
+/**
+ * POST /v5/billing/credits/request (SESSION plane, F9): opens a pending
+ * WALLET purchase — no app credentials involved; approval tops up the user
+ * wallet that every company app draws from.
+ */
+export async function requestWalletCredits(packageCode: string): Promise<CreditRequestAccepted> {
+  return request<CreditRequestAccepted & { ok: true }>("/v5/billing/credits/request", {
+    method: "POST",
+    body: JSON.stringify({ packageCode }),
+  });
+}
+
+/** POST /v5/billing/credits/submit-trx (SESSION plane, F9): attaches the bKash TrxID to a wallet purchase. */
+export async function submitWalletTrx(transactionId: string, trxId: string): Promise<string> {
+  const body = await request<{ ok: true; message: string }>("/v5/billing/credits/submit-trx", {
+    method: "POST",
+    body: JSON.stringify({ transactionId, trxId }),
+  });
+  return body.message;
 }
 
 // ── Email features (F3 amendment: verification + self-service reset) ───────
