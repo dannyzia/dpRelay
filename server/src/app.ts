@@ -18,6 +18,10 @@ import messageTemplateRoutes from "./routes/message-templates.js";
 import adminAppRoutes from "./routes/admin-apps.js";
 import adminMailRoutes from "./routes/admin-mail.js";
 import adminDeviceRoutes from "./routes/admin-devices.js";
+import adminPaymentRoutes from "./routes/admin-payments.js";
+import adminConfigRoutes from "./routes/admin-config.js";
+import adminUserRoutes from "./routes/admin-users.js";
+import adminReportRoutes from "./routes/admin-reports.js";
 import { registerJobs, alertCanaryStatus, alertSinkStatus } from "./jobs.js";
 import { registerWakeGuard } from "./wake-guard.js";
 
@@ -183,6 +187,10 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   app.register(adminAppRoutes);
   app.register(adminMailRoutes);
   app.register(adminDeviceRoutes);
+  app.register(adminPaymentRoutes);
+  app.register(adminConfigRoutes);
+  app.register(adminUserRoutes);
+  app.register(adminReportRoutes);
 
   // Jobs (R3) + wake guard (R5). Decorators must exist before hooks run.
   registerJobs(app, config, startCron);

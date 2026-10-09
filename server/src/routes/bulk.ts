@@ -21,10 +21,14 @@ import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { asRecord, asString } from "../services/parse.js";
 import { newId, sha256Hex } from "../services/crypto.js";
 import {
+  BULK_PREVIEW_MAX_BYTES,
+  BULK_PREVIEW_MAX_ROWS,
   dailyUsageCount,
   deductBulkCredits,
   deduplicatePhones,
   isValidE164,
+  parseRecipientCsv,
+  previewChecksum,
   refundBulkCredits,
   reserveBulkCredits,
   validateBulkMessage,
@@ -82,12 +86,108 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
   const db = app.db;
 
   /**
-   * Create a campaign (v4 sendBulkSms + createBulkCampaign). sourceType=csv
-   * takes body.phones; sourceType=contactGroups takes sourceGroupIds (max 10,
-   * v4 parity) and materializes the groups' members as recipients at create
-   * time — later group edits never mutate a running campaign.
+   * Raw CSV uploads (Content-Type: text/csv) for the F5c preview step —
+   * Fastify ships parsers for json/form/text-plain only. Scoped to this
+   * plugin's encapsulation context, so no other route's body handling changes.
    */
-  app.post("/v5/bulk/campaigns", { preHandler: [app.requireApp] }, async (request, reply) => {
+  app.addContentTypeParser("text/csv", { parseAs: "string" }, (_request, body, done) => {
+    done(null, body);
+  });
+
+  /**
+   * Body cap for routes accepting an inline recipient file: the spec allows a
+   * 5 MB file; the extra MB absorbs the JSON envelope and any escaping.
+   */
+  const RECIPIENT_BODY_LIMIT = 6 * 1024 * 1024;
+
+  /**
+   * Step 1 of the F5c two-step submit: parse + validate a recipient file
+   * WITHOUT spending credits, returning the count, the first five numbers,
+   * line-numbered rejects, and a checksum the create route must reproduce.
+   * Accepts raw `text/csv` (native parser — no new dependency) or JSON
+   * { csv } / { phones }. Stateless: nothing is stored between preview and
+   * submit, the checksum itself is the binding, and M4 money rules are
+   * untouched because no credits move here.
+   */
+  app.post(
+    "/v5/bulk/campaigns/preview",
+    { preHandler: [app.requireApp], bodyLimit: RECIPIENT_BODY_LIMIT },
+    async (request, reply) => {
+      if (!app.config.bulkEnabled) {
+        return fail(reply, 403, "bulk_not_enabled", "Bulk campaigns are not enabled");
+      }
+      const contentType = request.headers["content-type"] ?? "";
+      let rawText: string | null = null;
+      let rows: string[] | null = null;
+      if (contentType.startsWith("text/csv")) {
+        if (typeof request.body !== "string") {
+          return fail(reply, 400, "invalid_file", "Send the CSV as the raw request body");
+        }
+        rawText = request.body;
+      } else {
+        const body = asRecord(request.body) ?? {};
+        if (typeof body.csv === "string") {
+          rawText = body.csv;
+        } else if (Array.isArray(body.phones)) {
+          rows = (body.phones as unknown[]).map((p) => (typeof p === "string" ? p : ""));
+        } else {
+          return fail(reply, 400, "invalid_file", "Send text/csv, JSON { csv }, or JSON { phones }");
+        }
+      }
+
+      let phones: string[] = [];
+      let invalidRows: { line: number; reason: string }[] = [];
+      let headerSkipped = false;
+      if (rawText !== null) {
+        if (Buffer.byteLength(rawText, "utf8") > BULK_PREVIEW_MAX_BYTES) {
+          return fail(reply, 413, "file_too_large", `Recipient file exceeds ${BULK_PREVIEW_MAX_BYTES} bytes`);
+        }
+        const rowCount = rawText.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
+        if (rowCount > BULK_PREVIEW_MAX_ROWS) {
+          return fail(reply, 400, "too_many_rows", `Recipient file exceeds ${BULK_PREVIEW_MAX_ROWS} rows`);
+        }
+        const parsed = parseRecipientCsv(rawText);
+        phones = parsed.phones;
+        invalidRows = parsed.invalidRows;
+        headerSkipped = parsed.headerSkipped;
+      } else if (rows !== null) {
+        if (rows.length > BULK_PREVIEW_MAX_ROWS) {
+          return fail(reply, 400, "too_many_rows", `Recipient list exceeds ${BULK_PREVIEW_MAX_ROWS} rows`);
+        }
+        rows.forEach((row, i) => {
+          if (isValidE164(row)) {
+            phones.push(row);
+          } else {
+            invalidRows.push({ line: i + 1, reason: "not a valid E.164 number (expected +<country><number>)" });
+          }
+        });
+      }
+
+      return {
+        ok: true,
+        total: phones.length,
+        sampleFirst5: phones.slice(0, 5),
+        invalidRows,
+        checksum: previewChecksum(phones),
+        // Additive beyond the spec's {total, sampleFirst5, invalidRows,
+        // checksum}: the panel shows the create cap so operators learn the
+        // limit before a 400, and the header flag explains a skipped first
+        // line instead of hiding it from the count.
+        headerSkipped,
+        perCampaignLimit: app.config.bulkPerCampaignLimit,
+      };
+    },
+  );
+
+  /**
+   * Create a campaign (v4 sendBulkSms + createBulkCampaign). sourceType=csv
+   * takes body.phones or an inline body.csv; sourceType=contactGroups takes
+   * sourceGroupIds (max 10, v4 parity) and materializes the groups' members
+   * as recipients at create time — later group edits never mutate a running
+   * campaign. The csv path is step 2 of the F5c two-step: it REQUIRES the
+   * preview checksum and refuses to spend when the list changed.
+   */
+  app.post("/v5/bulk/campaigns", { preHandler: [app.requireApp], bodyLimit: RECIPIENT_BODY_LIMIT }, async (request, reply) => {
     if (!app.config.bulkEnabled) {
       return fail(reply, 403, "bulk_not_enabled", "Bulk campaigns are not enabled");
     }
@@ -144,7 +244,9 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       resolvedPhones = [...phoneSet];
     }
 
-    const campaignName = asString(body.campaignName, CAMPAIGN_NAME_MAX);
+    // The F5c confirm payload names the field `name`; `campaignName` stays as
+    // the v4-parity alias so existing callers and tests keep working.
+    const campaignName = asString(body.campaignName ?? body.name, CAMPAIGN_NAME_MAX);
     if (campaignName === null) {
       return fail(reply, 400, "invalid_campaign_name", "campaignName is required (max 100 chars)");
     }
@@ -159,23 +261,65 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     let unique: string[];
     let duplicateCount = 0;
     if (sourceType === "csv") {
-      if (!Array.isArray(body.phones)) {
-        return fail(reply, 400, "invalid_phones", "phones must be an array of E.164 strings");
+      // F5c two-step: the submit must carry the preview checksum, so a list
+      // the operator never reviewed can never spend credits.
+      const checksum = asString(body.checksum, 128);
+      if (checksum === null) {
+        return fail(
+          reply,
+          400,
+          "checksum_required",
+          "Preview the recipient list first and submit its checksum",
+        );
       }
-      const phones = body.phones as unknown[];
-      if (phones.length < 1 || phones.length > app.config.bulkPerCampaignLimit) {
+      let submitted: string[];
+      if (typeof body.csv === "string") {
+        const parsed = parseRecipientCsv(body.csv);
+        if (parsed.invalidRows.length > 0) {
+          // Rejected with line numbers, never silently dropped (F5c).
+          return reply.code(400).send({
+            ok: false,
+            error: "One or more phone numbers are not valid E.164 format",
+            code: "invalid_phones",
+            invalidRows: parsed.invalidRows,
+          });
+        }
+        submitted = parsed.phones;
+      } else if (Array.isArray(body.phones)) {
+        const phones = body.phones as unknown[];
+        if (phones.length < 1 || phones.length > app.config.bulkPerCampaignLimit) {
+          return fail(
+            reply,
+            400,
+            "invalid_phones",
+            `phones must contain between 1 and ${app.config.bulkPerCampaignLimit} entries`,
+          );
+        }
+        const invalid = phones.filter((p) => !isValidE164(p));
+        if (invalid.length > 0) {
+          return fail(reply, 400, "invalid_phones", "One or more phone numbers are not valid E.164 format");
+        }
+        submitted = phones as string[];
+      } else {
+        return fail(reply, 400, "invalid_phones", "phones must be an array of E.164 strings or a csv string");
+      }
+      if (submitted.length < 1 || submitted.length > app.config.bulkPerCampaignLimit) {
         return fail(
           reply,
           400,
           "invalid_phones",
-          `phones must contain between 1 and ${app.config.bulkPerCampaignLimit} entries`,
+          `Recipient list must contain between 1 and ${app.config.bulkPerCampaignLimit} entries`,
         );
       }
-      const invalid = phones.filter((p) => !isValidE164(p));
-      if (invalid.length > 0) {
-        return fail(reply, 400, "invalid_phones", "One or more phone numbers are not valid E.164 format");
+      if (previewChecksum(submitted) !== checksum) {
+        return fail(
+          reply,
+          400,
+          "checksum_mismatch",
+          "Recipient list changed since preview — run preview again",
+        );
       }
-      const deduped = deduplicatePhones(phones as string[]);
+      const deduped = deduplicatePhones(submitted);
       unique = deduped.unique;
       duplicateCount = deduped.duplicateCount;
     } else {

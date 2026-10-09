@@ -565,3 +565,380 @@ export async function listOversightCampaigns(status?: string): Promise<{
   }>(`/v5/admin/campaigns${qs}`);
   return { campaigns: body.campaigns, nextCursor: body.nextCursor };
 }
+
+// ── STAGE F5 (ISSUE-83) → F5b (ISSUE-84 spec): admin operations ───────────
+
+/** Tunable payment-match parameters (server: admin_config rows, migration 014). */
+export interface MatchConfig {
+  windowMin: number;
+  windowSec: number;
+  toleranceBdt: number;
+  updatedAt?: number;
+}
+
+/** The two whitelisted config keys (server: routes/admin-config.ts). */
+export type AdminConfigKey = "payment_match_window_min" | "payment_match_tolerance_bdt";
+
+export interface AdminConfigValue {
+  key: string;
+  value: number;
+  updatedAt: number | null;
+}
+
+/** GET /v5/admin/config/:key — whitelist enforced server-side (404 otherwise). */
+export async function getAdminConfig(key: AdminConfigKey): Promise<AdminConfigValue> {
+  return operatorFetch<AdminConfigValue & { ok: true }>(`/v5/admin/config/${key}`);
+}
+
+/** PUT /v5/admin/config/:key — body { value } (per-key integer bounds server-side). */
+export async function putAdminConfig(key: AdminConfigKey, value: number): Promise<AdminConfigValue> {
+  return operatorFetch<AdminConfigValue & { ok: true }>(`/v5/admin/config/${key}`, {
+    method: "PUT",
+    body: JSON.stringify({ value }),
+  });
+}
+
+export interface PaymentCandidate {
+  transactionId: string;
+  appId: string;
+  packageCode: string;
+  amountBdt: number;
+  requestedAt: number;
+  deltaBdt: number;
+  timeDeltaSec: number;
+}export interface PaymentSmsItem {
+  id: string;
+  sender: string;
+  provider: string;
+  txnId: string;
+  amountBdt: number;
+  receivedAt: number;
+  createdAt: number;
+  /** Spec match state: unmatched | matched (proposed) | approved | rejected. */
+  status: "unmatched" | "matched" | "approved" | "rejected";
+  /** Stored reject reason (shown on the row), null unless rejected. */
+  reason: string | null;
+  matched: { transactionId: string; status: string; appId: string } | null;
+  candidates: PaymentCandidate[];
+  ambiguous: boolean;
+}
+
+/** GET /v5/admin/payments — spec filters: status + received-at window (from/to, epoch s). */
+export async function listPayments(opts: {
+  status?: "unmatched" | "matched" | "approved" | "rejected";
+  from?: number;
+  to?: number;
+} = {}): Promise<{ config: MatchConfig; payments: PaymentSmsItem[] }> {
+  const params = new URLSearchParams();
+  if (opts.status !== undefined) params.set("status", opts.status);
+  if (opts.from !== undefined) params.set("from", String(opts.from));
+  if (opts.to !== undefined) params.set("to", String(opts.to));
+  const qs = params.toString();
+  const body = await operatorFetch<{ ok: true; config: MatchConfig; payments: PaymentSmsItem[] }>(
+    `/v5/admin/payments${qs ? `?${qs}` : ""}`,
+  );
+  return { config: body.config, payments: body.payments };
+}
+
+/** Award outcome shared by approve/attach. */
+export interface PaymentAward {
+  transactionId: string;
+  status: string;
+  newOtpBalance: number;
+  newBulkBalance: number;
+}
+
+/** POST /v5/admin/payments/:id/approve — one click awards the proposed/attached transaction. */
+export async function approvePayment(paymentId: string): Promise<PaymentAward> {
+  return operatorFetch<PaymentAward & { ok: true }>(
+    `/v5/admin/payments/${encodeURIComponent(paymentId)}/approve`,
+    { method: "POST" },
+  );
+}
+
+/** POST /v5/admin/payments/:id/reject — reason required; stores it on the row. */
+export async function rejectPayment(
+  paymentId: string,
+  reason: string,
+): Promise<{ status: string; reason: string }> {
+  return operatorFetch<{ ok: true; status: string; reason: string }>(
+    `/v5/admin/payments/${encodeURIComponent(paymentId)}/reject`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
+
+/** POST /v5/admin/payments/:id/attach — explicit transactionId = the operator's ambiguity resolution. */
+export async function attachPayment(
+  paymentId: string,
+  transactionId: string,
+): Promise<PaymentAward> {
+  return operatorFetch<PaymentAward & { ok: true }>(`/v5/admin/payments/${encodeURIComponent(paymentId)}/attach`, {
+    method: "POST",
+    body: JSON.stringify({ transactionId }),
+  });
+}
+
+export interface AdminPackage {
+  packageCode: string;
+  name: string;
+  smsQuota: number;
+  priceBdt: number;
+  validityDays: number;
+  type: string;
+  isActive: boolean;
+  updatedAt?: number;
+}
+
+/** GET /v5/admin/billing/packages — full directory incl. retired rows (reactivable). */
+export async function listAdminPackages(): Promise<AdminPackage[]> {
+  const body = await operatorFetch<{ ok: true; packages: AdminPackage[] }>(
+    "/v5/admin/billing/packages",
+  );
+  return body.packages;
+}
+
+/** POST /v5/admin/billing/packages — create-or-update keyed by packageCode (all fields required). */
+export async function upsertAdminPackage(pkg: {
+  packageCode: string;
+  name: string;
+  smsQuota: number;
+  priceBdt: number;
+  validityDays: number;
+  type: string;
+  isActive?: boolean;
+}): Promise<void> {
+  await operatorFetch("/v5/admin/billing/packages", { method: "POST", body: JSON.stringify(pkg) });
+}
+
+/** PATCH /v5/admin/billing/packages/:code — partial edit of whitelisted fields. */
+export async function patchAdminPackage(
+  packageCode: string,
+  patch: Partial<Pick<AdminPackage, "name" | "smsQuota" | "priceBdt" | "validityDays" | "type" | "isActive">>,
+): Promise<void> {
+  await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+/** POST /v5/admin/billing/packages/:code/retire — spec endpoint (soft, idempotent; hard-delete is forbidden). */
+export async function retireAdminPackage(packageCode: string): Promise<void> {
+  await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}/retire`, {
+    method: "POST",
+  });
+}
+
+export interface AdminUserItem {
+  id: string;
+  email: string;
+  disabled: boolean;
+  /** Stored withhold reason (spec: badge + tooltip on the withheld row). */
+  disabledReason: string | null;
+  disabledAt: number | null;
+  createdAt: number;
+  appCount: number;
+  apps: { id: string; appId: string; name: string; revoked: boolean }[];
+}
+
+/** GET /v5/admin/users — customer directory with withhold state + owned apps. */
+export async function listAdminUsers(): Promise<AdminUserItem[]> {
+  const body = await operatorFetch<{ ok: true; users: AdminUserItem[] }>("/v5/admin/users");
+  return body.users;
+}
+
+/**
+ * POST /v5/admin/users/:id/disable | /enable — the withhold toggle (credits
+ * untouched). The reason is REQUIRED when disabling (spec): the server 400s
+ * without it, sessions are revoked eagerly, and the action is audited.
+ */
+export async function setAdminUserDisabled(
+  userId: string,
+  disabled: boolean,
+  reason?: string,
+): Promise<void> {
+  await operatorFetch(
+    `/v5/admin/users/${encodeURIComponent(userId)}/${disabled ? "disable" : "enable"}`,
+    {
+      method: "POST",
+      ...(disabled ? { body: JSON.stringify({ reason: reason ?? "" }) } : {}),
+    },
+  );
+}
+
+/** One ledger row (spec columns + additive identity fields for the screen). */
+export interface LedgerRow {
+  /** Stable row identity (purchase id | trial:<app> | <app>:<kind>:<day>) — the React key. */
+  id: string;
+  timestamp: number;
+  appId: string;
+  appName: string | null;
+  ownerEmail: string | null;
+  kind: string; // purchase | trial | spend-otp | spend-bulk
+  packageCode: string;
+  qty: number;
+  amountBdt: number;
+  trxId: string | null;
+}
+
+export interface LedgerReport {
+  from: number;
+  to: number;
+  rows: LedgerRow[];
+  nextCursor: string | null;
+  totals: { packageType: string; status: string; count: number; amountBdt: number; grantedSms: number }[];
+}
+
+/** One send-log row (spec: timestamp | app | kind | recipient | ref | status | campaign-name). */
+export interface SendLogRow {
+  timestamp: number;
+  messageId: string;
+  appId: string | null;
+  appName: string | null;
+  kind: string; // otp | bulk | other (other = legacy unlinked)
+  recipient: string;
+  ref: string | null; // sessionId | campaignId
+  status: string; // sent | verified | expired | failed | pending (in-flight)
+  campaignName: string | null;
+  error: string | null;
+  resultAt: number | null;
+}
+
+/** GET /v5/admin/reports/ledger — cursor-paginated (max 100/page); CSV via downloadOperatorCsv. */
+export async function getLedgerReport(params: {
+  appId?: string;
+  from?: number;
+  to?: number;
+  cursor?: string;
+} = {}): Promise<LedgerReport> {
+  const qs = new URLSearchParams();
+  if (params.appId !== undefined && params.appId !== "") qs.set("appId", params.appId);
+  if (params.from !== undefined) qs.set("from", String(params.from));
+  if (params.to !== undefined) qs.set("to", String(params.to));
+  if (params.cursor !== undefined && params.cursor !== "") qs.set("cursor", params.cursor);
+  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
+  const body = await operatorFetch<LedgerReport & { ok: true }>(`/v5/admin/reports/ledger${suffix}`);
+  return { from: body.from, to: body.to, rows: body.rows, nextCursor: body.nextCursor, totals: body.totals };
+}
+
+/** GET /v5/admin/reports/sends (spec path) — cursor-paginated; recipient numbers are PII: operator-only. */
+export async function getSendLog(params: {
+  appId?: string;
+  from?: number;
+  to?: number;
+  cursor?: string;
+} = {}): Promise<{ rows: SendLogRow[]; nextCursor: string | null }> {
+  const qs = new URLSearchParams();
+  if (params.appId !== undefined && params.appId !== "") qs.set("appId", params.appId);
+  if (params.from !== undefined) qs.set("from", String(params.from));
+  if (params.to !== undefined) qs.set("to", String(params.to));
+  if (params.cursor !== undefined && params.cursor !== "") qs.set("cursor", params.cursor);
+  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
+  const body = await operatorFetch<{ ok: true; rows: SendLogRow[]; nextCursor: string | null }>(
+    `/v5/admin/reports/sends${suffix}`,
+  );
+  return { rows: body.rows, nextCursor: body.nextCursor };
+}
+
+/**
+ * Raw-text operator request — CSV exports are not JSON, so they cannot ride
+ * `request`. Same contract: Bearer secret, 401 clears + notifies the shell.
+ */
+async function operatorText(path: string): Promise<string> {
+  const secret = getOperatorSecret();
+  if (secret === null) {
+    throw new ApiError(401, "operator_not_configured", "Enter the operator secret first");
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+  } catch {
+    throw new ApiError(0, "network_error", "Network error — the API is unreachable");
+  }
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearOperatorSecret();
+      onOperatorRejected?.();
+    }
+    throw new ApiError(res.status, `http_${res.status}`, `HTTP ${res.status}`);
+  }
+  return res.text();
+}
+
+/**
+ * Downloads an operator report as CSV — the ONLY export form (PII policy:
+ * recipient numbers never leave through any other channel). Fetches with the
+ * operator secret, then hands the text to a transient object URL.
+ */
+export async function downloadOperatorCsv(path: string, filename: string): Promise<void> {
+  const text = await operatorText(path);
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ── Bulk recipient upload (F5c: preview → checksum-bound confirm) ─────────
+
+/** One rejected recipient row: 1-based file line + why it failed. */
+export interface BulkInvalidRow {
+  line: number;
+  reason: string;
+}
+
+export interface BulkPreview {
+  total: number;
+  sampleFirst5: string[];
+  invalidRows: BulkInvalidRow[];
+  /** SHA-256 the create route must reproduce — binds submit to this preview. */
+  checksum: string;
+  headerSkipped?: boolean;
+  perCampaignLimit?: number;
+}
+
+export interface BulkCreateResult {
+  ok: true;
+  campaignId: string;
+  totalRecipients: number;
+  creditsReserved: number;
+  charset: string;
+  status: string;
+  duplicateCount?: number;
+}
+
+/**
+ * Step 1 — POST /v5/bulk/campaigns/preview with the RAW csv text
+ * (Content-Type: text/csv; the server parses natively, no library here).
+ * Pure validation: spends nothing, stores nothing.
+ */
+export async function previewBulkCsv(csvText: string): Promise<BulkPreview> {
+  return appFetch<BulkPreview & { ok: true }>("/v5/bulk/campaigns/preview", {
+    method: "POST",
+    headers: { "Content-Type": "text/csv" },
+    body: csvText,
+  });
+}
+
+/**
+ * Step 2 — POST /v5/bulk/campaigns carrying the preview checksum. The server
+ * recomputes it over the submitted csv and answers `checksum_mismatch` when
+ * the list changed, so a list the operator never reviewed cannot spend
+ * credits. The confirm payload names the field `name` (F5c AC).
+ */
+export async function createBulkCampaign(input: {
+  checksum: string;
+  name: string;
+  message: string;
+  csv: string;
+}): Promise<BulkCreateResult> {
+  return appFetch<BulkCreateResult>("/v5/bulk/campaigns", {
+    method: "POST",
+    body: JSON.stringify({ ...input, sourceType: "csv" }),
+  });
+}

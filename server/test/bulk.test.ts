@@ -125,11 +125,37 @@ async function createCampaign(
   creds: Record<string, string>,
   payload: Record<string, unknown>,
 ): Promise<{ statusCode: number; body: Record<string, unknown> }> {
+  // F5c two-step: csv creates must carry the preview checksum. Preview the
+  // SAME phones this test is about to submit (contactGroups takes no
+  // checksum). Preview failures (feature flag off) fall back to a dummy —
+  // gating runs before body validation anyway, so the create still fails
+  // with the code the test asserts.
+  let checksum: string | undefined;
+  if (payload.sourceType !== "contactGroups") {
+    const phones = Array.isArray(payload.phones) ? (payload.phones as string[]) : PHONES;
+    const prev = await app.inject({
+      method: "POST",
+      url: "/v5/bulk/campaigns/preview",
+      headers: creds,
+      payload: { phones },
+    });
+    const prevBody = prev.json() as { ok?: boolean; checksum?: string };
+    checksum =
+      prev.statusCode === 200 && prevBody.ok === true && typeof prevBody.checksum === "string"
+        ? prevBody.checksum
+        : "preview-unavailable";
+  }
   const res = await app.inject({
     method: "POST",
     url: "/v5/bulk/campaigns",
     headers: creds,
-    payload: { campaignName: "Test campaign", message: "Hello from dP Relay", phones: PHONES, ...payload },
+    payload: {
+      campaignName: "Test campaign",
+      message: "Hello from dP Relay",
+      phones: PHONES,
+      ...payload,
+      ...(checksum !== undefined ? { checksum } : {}),
+    },
   });
   return { statusCode: res.statusCode, body: res.json() as Record<string, unknown> };
 }
@@ -622,13 +648,8 @@ describe("list + status + scoping", () => {
     seedCredits(appRowId, 100);
     const creds = CREDS("bulk_app", SECRET_A);
     for (const name of ["one", "two", "three"]) {
-      const r = await app.inject({
-        method: "POST",
-        url: "/v5/bulk/campaigns",
-        headers: creds,
-        payload: { campaignName: name, message: "m", phones: [PHONES[0]] },
-      });
-      expect(r.statusCode).toBe(201);
+      const created = await createCampaign(creds, { campaignName: name, phones: [PHONES[0]] });
+      expect(created.statusCode).toBe(201);
     }
 
     const page1 = await app.inject({ method: "GET", url: "/v5/bulk/campaigns?limit=2", headers: creds });

@@ -1,12 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
-import type { AdminApp, AdminMetrics, OversightCampaign, PendingTransaction } from "../src/api";
+import type {
+  AdminApp,
+  AdminMetrics,
+  AdminPackage,
+  AdminUserItem,
+  LedgerReport,
+  OversightCampaign,
+  PaymentSmsItem,
+  PendingTransaction,
+  SendLogRow,
+} from "../src/api";
 import {
   AppsView,
   BillingQueueView,
   CampaignsView,
   MetricsView,
+  PackagesView,
+  PaymentsView,
+  ReportsView,
+  SettingsView,
   UnlockView,
+  UsersView,
 } from "../src/screens/Operator";
 
 /** Strip React's `<!-- -->` text separators (see screens.test.tsx). */
@@ -176,5 +191,373 @@ describe("CampaignsView", () => {
   it("renders the empty-state message", () => {
     const html = renderToString(<CampaignsView campaigns={[]} />);
     expect(html).toContain("No campaigns.");
+  });
+});
+
+describe("PaymentsView (F5b spec)", () => {
+  const pendingQueue: PendingTransaction[] = [
+    {
+      transactionId: "txn-c",
+      appId: "app_1",
+      packageCode: "otp100",
+      smsQuota: 100,
+      amountBdt: 200,
+      packageType: "otp",
+      trxId: "TRXSEARCH1",
+      requestedAt: 1791400000,
+    },
+  ];
+  const candidate = (transactionId: string) => ({
+    transactionId,
+    appId: "app_1",
+    packageCode: "otp100",
+    amountBdt: 200,
+    requestedAt: 1791400000,
+    deltaBdt: 0,
+    timeDeltaSec: 10,
+  });
+  const approved: PaymentSmsItem = {
+    id: "p1",
+    sender: "+8801613000000",
+    provider: "bkash",
+    txnId: "TRXPAID0001",
+    amountBdt: 200,
+    receivedAt: 1791400000,
+    createdAt: 1791400000,
+    status: "approved",
+    reason: null,
+    matched: { transactionId: "txn-1", status: "approved", appId: "app_1" },
+    candidates: [],
+    ambiguous: false,
+  };
+  const ambiguous: PaymentSmsItem = {
+    ...approved,
+    id: "p2",
+    txnId: "TRXAMB00002",
+    status: "unmatched",
+    matched: null,
+    candidates: [candidate("txn-a"), candidate("txn-b")],
+    ambiguous: true,
+  };
+  const single: PaymentSmsItem = {
+    ...approved,
+    id: "p3",
+    txnId: "TRXSING0003",
+    status: "matched",
+    matched: null,
+    candidates: [candidate("txn-c")],
+    ambiguous: false,
+  };
+  const rejected: PaymentSmsItem = {
+    ...approved,
+    id: "p4",
+    txnId: "TRXREJ00004",
+    status: "rejected",
+    reason: "duplicate ingestion",
+    matched: null,
+    candidates: [],
+    ambiguous: false,
+  };
+  const base = {
+    pending: pendingQueue,
+    filters: { status: "all", from: "", to: "" },
+    error: null,
+    note: null,
+    busy: false,
+  };
+  const noop = {
+    onFilter: (): void => undefined,
+    onApprove: (): void => undefined,
+    onReject: (): void => undefined,
+    onAttach: (): void => undefined,
+  };
+
+  it("renders the spec filters (status + received window) and the empty state", () => {
+    const html = renderToString(<PaymentsView payments={[]} {...base} {...noop} />);
+    expect(html).toContain('id="payStatus"');
+    expect(html).toContain('value="matched"');
+    expect(html).toContain("Matched (proposed)");
+    expect(html).toContain('id="payFrom"');
+    expect(html).toContain('id="payTo"');
+    expect(html).toContain("Apply");
+    expect(html).toContain("No payment SMS ingested yet.");
+    // The match-parameter editor moved to the Settings tab.
+    expect(html).toContain("Settings");
+    expect(html).not.toContain("Save parameters");
+  });
+
+  it("shows spec match states, stored reasons, and per-status actions", () => {
+    const html = renderToString(
+      <PaymentsView payments={[approved, ambiguous, single, rejected]} {...base} {...noop} />,
+    );
+    // matched (proposed) → one-click Approve + Reject; unmatched → Reject + attach picker.
+    expect(html).toContain('data-testid="pay-approve-p3"');
+    expect(html).toContain('data-testid="pay-reject-p3"');
+    expect(html).toContain('data-testid="pay-reject-p2"');
+    // Terminal rows (approved/rejected) carry no actions.
+    expect(html).not.toContain('data-testid="pay-approve-p1"');
+    expect(html).not.toContain('data-testid="pay-reject-p4"');
+    // The stored reject reason is shown on the row (spec).
+    expect(html).toContain("duplicate ingestion");
+    expect(html).toContain("Matched (proposed)");
+    expect(html).toContain("candidates, choose explicitly");
+    expect(html).toContain("TRXPAID0001");
+    expect(html).toContain("+8801613000000");
+    // Attach picker: search by TrxID + candidate list, no implicit pick.
+    expect(html).toContain('aria-label="search-trx-TRXAMB00002"');
+    expect(html).toContain("Choose…");
+    expect(html).toContain("txn-a");
+    expect(html).toContain("txn-b");
+    expect(html).toContain("Confirm");
+  });
+
+  it("renders an error banner and disables actions while busy", () => {
+    const html = renderToString(
+      <PaymentsView payments={[single]} {...base} error="payment_rejected" busy {...noop} />,
+    );
+    expect(html).toContain("payment_rejected");
+    expect(html).toContain("disabled");
+  });
+});
+
+describe("SettingsView (F5b spec)", () => {
+  it("renders the two whitelisted keys with their current values", () => {
+    const html = renderToString(
+      <SettingsView
+        values={{ windowMin: 30, toleranceBdt: 0 }}
+        error={null}
+        note={null}
+        busy={false}
+        onSave={(): void => undefined}
+      />,
+    );
+    expect(html).toContain("Payment matching");
+    expect(html).toContain('id="setWindow"');
+    expect(html).toContain('value="30"');
+    expect(html).toContain('id="setTolerance"');
+    expect(html).toContain("payment_match_window_min");
+    expect(html).toContain("payment_match_tolerance_bdt");
+    expect(html).toContain("Save settings");
+  });
+
+  it("keeps save disabled until the keys have loaded", () => {
+    const html = renderToString(
+      <SettingsView
+        values={{ windowMin: null, toleranceBdt: null }}
+        error={null}
+        note={null}
+        busy={false}
+        onSave={(): void => undefined}
+      />,
+    );
+    expect(html).toContain("disabled");
+  });
+});
+
+describe("PackagesView (F5)", () => {
+  const packages: AdminPackage[] = [
+    { packageCode: "otp100", name: "OTP 100", smsQuota: 100, priceBdt: 200, validityDays: 30, type: "otp", isActive: true },
+    { packageCode: "old50", name: "Old 50", smsQuota: 50, priceBdt: 100, validityDays: 30, type: "bulk", isActive: false },
+  ];
+  const noop = {
+    onCreate: (): void => undefined,
+    onPatch: (): void => undefined,
+    onToggleActive: (): void => undefined,
+  };
+
+  it("lists active and retired rows with edit fields and both lifecycle buttons", () => {
+    const html = renderToString(
+      <PackagesView packages={packages} error={null} note={null} busy={false} {...noop} />,
+    );
+    expect(html).toContain("Create package");
+    expect(html).toContain("otp100");
+    expect(html).toContain("old50");
+    expect(html).toContain("Retired");
+    expect(html).toContain("Active");
+    expect(html).toContain("Retire");
+    expect(html).toContain("Reactivate");
+    expect(html).toContain('aria-label="price-old50"');
+    expect(html).toContain('name="packageCode"');
+  });
+
+  it("shows the empty state", () => {
+    const html = renderToString(
+      <PackagesView packages={[]} error={null} note={null} busy={false} {...noop} />,
+    );
+    expect(html).toContain("No packages yet.");
+  });
+});
+
+describe("UsersView (F5 withhold)", () => {
+  const users: AdminUserItem[] = [
+    {
+      id: "u1",
+      email: "held@example.test",
+      disabled: true,
+      disabledReason: "chargeback investigation",
+      disabledAt: 1791400100,
+      createdAt: 1791400000,
+      appCount: 1,
+      apps: [{ id: "app-row", appId: "app_1", name: "My app", revoked: false }],
+    },
+    {
+      id: "u2",
+      email: "fine@example.test",
+      disabled: false,
+      disabledReason: null,
+      disabledAt: null,
+      createdAt: 1791400500,
+      appCount: 0,
+      apps: [],
+    },
+  ];
+  const noop = { onToggle: (): void => undefined };
+
+  it("shows withhold state with the stored reason, owned apps, and the distinct send code note", () => {
+    const html = renderToString(<UsersView users={users} error={null} note={null} busy={false} {...noop} />);
+    expect(html).toContain("held@example.test");
+    expect(html).toContain("fine@example.test");
+    expect(html).toContain("Withheld");
+    expect(html).toContain("Active");
+    expect(html).toContain("account_withheld");
+    expect(html).toContain("Credits are never touched");
+    expect(html).toContain("My app");
+    // Spec: badge + reason tooltip/text on the withheld row.
+    expect(html).toContain("chargeback investigation");
+    expect(html).toContain('title="chargeback investigation"');
+    // Withheld row gets Enable; active row gets Withhold.
+    expect(html).toContain(">Enable<");
+    expect(html).toContain(">Withhold<");
+  });
+
+  it("shows the empty state", () => {
+    const html = renderToString(<UsersView users={[]} error={null} note={null} busy={false} {...noop} />);
+    expect(html).toContain("No users yet.");
+  });
+});
+
+describe("ReportsView (F5b spec)", () => {
+  const ledger: LedgerReport = {
+    from: 1791000000,
+    to: 1791500000,
+    rows: [
+      {
+        id: "row-1",
+        timestamp: 1791400000,
+        appId: "app_owned",
+        appName: "App One",
+        ownerEmail: "cust@example.test",
+        kind: "purchase",
+        packageCode: "otp100",
+        qty: 100,
+        amountBdt: 200,
+        trxId: "TRXLEDGER1",
+      },
+      {
+        id: "app_owned:spend-otp:1791300000",
+        timestamp: 1791300000,
+        appId: "app_owned",
+        appName: "App One",
+        ownerEmail: null,
+        kind: "spend-otp",
+        packageCode: "",
+        qty: 3,
+        amountBdt: 0.6000000000000001,
+        trxId: null,
+      },
+    ],
+    nextCursor: "1791300000:row-1",
+    totals: [{ packageType: "otp", status: "approved", count: 1, amountBdt: 200, grantedSms: 100 }],
+  };
+  const sendRows: SendLogRow[] = [
+    {
+      timestamp: 1791400000,
+      messageId: "m1",
+      appId: "app_owned",
+      appName: "App One",
+      kind: "otp",
+      recipient: "+8801711111111",
+      ref: "s1",
+      status: "sent",
+      campaignName: null,
+      error: null,
+      resultAt: 1791400050,
+    },
+    {
+      timestamp: 1791390000,
+      messageId: "m2",
+      appId: "app_owned",
+      appName: "App One",
+      kind: "bulk",
+      recipient: "+8801712222222",
+      ref: "c9",
+      status: "failed",
+      campaignName: "October blast",
+      error: "carrier_rejected",
+      resultAt: null,
+    },
+  ];
+  const noop = {
+    onLedgerLoad: (): void => undefined,
+    onLedgerMore: (): void => undefined,
+    onSendLoad: (): void => undefined,
+    onSendMore: (): void => undefined,
+    onLedgerCsv: (): void => undefined,
+    onSendCsv: (): void => undefined,
+  };
+
+  it("renders the ledger with spec columns (kind/qty), totals, cursor paging, and the CSV action", () => {
+    const html = renderToString(
+      <ReportsView ledger={ledger} sendRows={null} sendNextCursor={null} error={null} {...noop} />,
+    );
+    expect(html).toContain("Per-customer ledger");
+    // Customer identity rides the app-cell tooltip (spec columns stay exact).
+    expect(html).toContain("cust@example.test");
+    expect(html).toContain("TRXLEDGER1");
+    expect(html).toContain("purchase");
+    expect(html).toContain("spend-otp");
+    expect(html).toContain("otp/approved: 1");
+    expect(html).toContain("Download CSV");
+    // Spec filter: appId alongside the date range.
+    expect(html).toContain('id="ledgerApp"');
+    // nextCursor present → Load more (cursor pagination, max 100/page server-side).
+    expect(html).toContain("Load more");
+  });
+
+  it("hides Load more when the report is exhausted", () => {
+    const html = renderToString(
+      <ReportsView
+        ledger={{ ...ledger, nextCursor: null }}
+        sendRows={null}
+        sendNextCursor={null}
+        error={null}
+        {...noop}
+      />,
+    );
+    expect(html).not.toContain("Load more");
+  });
+
+  it("renders the send log with spec columns (kind/ref/campaign), PII note, and status chip", () => {
+    const html = renderToString(
+      <ReportsView ledger={null} sendRows={sendRows} sendNextCursor="1791390000:m2" error={null} {...noop} />,
+    );
+    expect(html).toContain("Item-wise send log");
+    expect(html).toContain("Recipient numbers are PII");
+    expect(html).toContain("CSV is the only export");
+    expect(html).toContain("+8801711111111");
+    expect(html).toContain("October blast");
+    expect(html).toContain("c9");
+    // formatStatus capitalizes — assert the exact chip rendering.
+    expect(html).toContain('<span class="chip approved">Sent</span>');
+    // Failed row surfaces its error as the chip tooltip (column set is the spec's).
+    expect(html).toContain('title="carrier_rejected"');
+    expect(html).toContain("Load more");
+  });
+
+  it("offers both CSV downloads", () => {
+    const html = renderToString(
+      <ReportsView ledger={ledger} sendRows={sendRows} sendNextCursor={null} error={null} {...noop} />,
+    );
+    expect(html.match(/Download CSV/g)).toHaveLength(2);
   });
 });

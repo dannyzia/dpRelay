@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dP Relay — Bulk &amp; OTP SMS API for Bangladesh</title>
+  <meta name="description" content="Send OTP and bulk SMS in Bangladesh at ৳0.20 per SMS. Simple REST API, instant app credentials, bKash payments. New apps start with free trial credits.">
+  <link rel="canonical" href="https://dprelay.digital-papyrus.com/">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/">dP Relay</a>
+      <nav aria-label="Main">
+        <a href="/" aria-current="page">Home</a>
+        <a href="/pricing/">Pricing</a>
+        <a href="/payment/">Payment</a>
+        <a href="/faq/">FAQ</a>
+        <a href="/docs/">Docs</a>
+        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>OTP &amp; bulk SMS for Bangladesh, one simple API</h1>
+      <p class="price">৳0.20 BDT / SMS</p>
+      <p class="muted">Verification codes and bulk campaigns over a REST API you can integrate in minutes. Pay with bKash, top up from the dashboard, start with free trial credits.</p>
+      <p class="actions">
+        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Create an account</a>
+        <a class="button secondary" href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+      </p>
+    </section>
+
+    <section aria-labelledby="how-it-works">
+      <h2 id="how-it-works">How it works</h2>
+      <ol class="steps">
+        <li>
+          <strong>Create your account</strong>
+          <p class="muted">Sign up with your email, verify it, and land in the dashboard — new apps receive free trial credits.</p>
+        </li>
+        <li>
+          <strong>Register an app</strong>
+          <p class="muted">The dashboard issues your <code>appId</code> and <code>appSecret</code> once. They are the only credentials every API call needs.</p>
+        </li>
+        <li>
+          <strong>Send messages</strong>
+          <p class="muted">Call <code>POST /v5/otp/send</code> for verification codes or launch a bulk campaign from the dashboard. Balance updates as credits are used.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section aria-labelledby="why">
+      <h2 id="why">Built for developers</h2>
+      <div class="card">
+        <ul class="guide-steps">
+          <li>Plain REST with JSON bodies and predictable <code>{ ok, error, code }</code> failures.</li>
+          <li>Strict E.164 numbers, clear error codes, and per-number rate limits that protect deliverability.</li>
+          <li>Signed webhooks (<code>X-DP-Signature</code>) so your backend can trust delivery events.</li>
+          <li>Transparent pricing at ৳0.20 per SMS with package top-ups via bKash — see <a href="/pricing/">pricing</a>.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>dP Relay — digital papyrus SMS platform</span>
+      <span><a href="/docs/">API docs</a> · <a href="/faq/">FAQ</a> · <a href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a></span>
+    </div>
+  </footer>
+</body>
+</html>
