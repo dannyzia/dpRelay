@@ -9,36 +9,58 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import {
+  attachPayment,
   clearOperatorSecret,
   describeError,
+  downloadOperatorCsv,
   getAdminMetrics,
+  getLedgerReport,
   getMailConfig,
   getOperatorSecret,
+  getSendLog,
   listAdminApps,
+  listAdminPackages,
+  listAdminUsers,
   listOversightCampaigns,
+  listPayments,
   listPendingTransactions,
+  patchAdminPackage,
   request,
+  retireAdminPackage,
   revokeAdminApp,
   resolveTransaction,
+  setAdminUserDisabled,
   setOperatorRejectedHandler,
   setOperatorSecret,
   testMailConfig,
   unrevokeAdminApp,
   updateMailConfig,
+  updateMatchConfig,
+  upsertAdminPackage,
   type AdminApp,
   type AdminMetrics,
+  type AdminPackage,
+  type AdminUserItem,
+  type LedgerReport,
   type MailConfigView,
+  type MatchConfig,
   type OversightCampaign,
+  type PaymentSmsItem,
   type PendingTransaction,
+  type SendLogRow,
 } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { formatBdt, formatEpochUtc, formatStatus } from "../format";
 import { hrefFor } from "../router";
 
-type OperatorTab = "billing" | "apps" | "metrics" | "campaigns" | "mail";
+type OperatorTab = "billing" | "apps" | "metrics" | "campaigns" | "mail" | "payments" | "packages" | "users" | "reports";
 
 const TABS: { id: OperatorTab; label: string }[] = [
   { id: "billing", label: "Billing queue" },
+  { id: "payments", label: "Payments" },
+  { id: "packages", label: "Packages" },
+  { id: "users", label: "Users" },
+  { id: "reports", label: "Reports" },
   { id: "apps", label: "Apps" },
   { id: "metrics", label: "Metrics" },
   { id: "campaigns", label: "Campaigns" },
@@ -581,6 +603,765 @@ export function MailSettings(): JSX.Element {
   return <MailSettingsView config={config} error={error} note={note} busy={busy} onSave={save} onTest={test} />;
 }
 
+// ── STAGE F5 (ISSUE-83): admin operations panels ───────────────────────────
+
+/**
+ * Pure payments view: ingested payment SMS with match state, candidate
+ * selection + one-click confirm, and the operator-tunable match parameters.
+ * Ambiguity is rendered as an explicit unselected choice — the Confirm form
+ * cannot submit a transaction the operator did not pick. Exported for tests.
+ */
+export function PaymentsView(props: {
+  config: MatchConfig | null;
+  payments: PaymentSmsItem[];
+  error: string | null;
+  note: string | null;
+  busy: boolean;
+  onConfigSave: (cfg: { toleranceBdt: number; windowSec: number }) => void;
+  onAttach: (paymentId: string, transactionId: string) => void;
+}): JSX.Element {
+  return (
+    <>
+      {props.error !== null && <ErrorBanner message={props.error} />}
+      {props.note !== null && <p className="ok-note">{props.note}</p>}
+      <section className="card">
+        <h2>Match parameters</h2>
+        <p className="muted">
+          Operator-tunable — candidate matching reads these live; nothing about matching is
+          hardcoded on the server.
+        </p>
+        <form
+          className="inline-actions"
+          onSubmit={(e): void => {
+            e.preventDefault();
+            const data = new FormData(e.currentTarget);
+            props.onConfigSave({
+              toleranceBdt: Number(data.get("toleranceBdt") ?? 0),
+              windowSec: Number(data.get("windowSec") ?? 0),
+            });
+          }}
+        >
+          <label htmlFor="payTolerance">Amount tolerance (BDT)</label>
+          <input
+            id="payTolerance"
+            name="toleranceBdt"
+            type="number"
+            min={0}
+            required
+            defaultValue={props.config?.toleranceBdt ?? 0}
+          />
+          <label htmlFor="payWindow">Time window (seconds)</label>
+          <input
+            id="payWindow"
+            name="windowSec"
+            type="number"
+            min={0}
+            required
+            defaultValue={props.config?.windowSec ?? 0}
+          />
+          <button type="submit" disabled={props.config === null}>
+            Save parameters
+          </button>
+        </form>
+      </section>
+      <section className="card">
+        <h2>Ingested payment SMS</h2>
+        {props.payments.length === 0 ? (
+          <p className="muted">No payment SMS ingested yet.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Received</th>
+                <th>Sender</th>
+                <th>Provider</th>
+                <th>TrxID</th>
+                <th>Amount</th>
+                <th>State</th>
+                <th>Confirm</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.payments.map((p) => (
+                <tr key={p.id}>
+                  <td>{formatEpochUtc(p.receivedAt)}</td>
+                  <td className="mono">{p.sender}</td>
+                  <td>{p.provider}</td>
+                  <td className="mono">{p.txnId}</td>
+                  <td className="num">{formatBdt(p.amountBdt)}</td>
+                  <td>
+                    {p.matched !== null ? (
+                      <span className="chip approved">Matched → {p.matched.status}</span>
+                    ) : p.ambiguous ? (
+                      <span className="chip">Ambiguous — {p.candidates.length} candidates</span>
+                    ) : p.candidates.length === 1 ? (
+                      <span className="chip">1 candidate</span>
+                    ) : (
+                      <span className="chip rejected">No match</span>
+                    )}
+                  </td>
+                  <td>
+                    {p.matched !== null ? (
+                      <span className="muted">—</span>
+                    ) : p.candidates.length > 0 ? (
+                      <form
+                        className="inline-actions"
+                        onSubmit={(e): void => {
+                          e.preventDefault();
+                          props.onAttach(p.id, String(new FormData(e.currentTarget).get("tx") ?? ""));
+                        }}
+                      >
+                        <select
+                          name="tx"
+                          aria-label={`candidate-${p.txnId}`}
+                          defaultValue={p.candidates.length === 1 ? p.candidates[0].transactionId : ""}
+                        >
+                          <option value="" disabled>
+                            Choose…
+                          </option>
+                          {p.candidates.map((c) => (
+                            <option key={c.transactionId} value={c.transactionId}>
+                              {c.packageCode} · {formatBdt(c.amountBdt)} · {c.appId}
+                            </option>
+                          ))}
+                        </select>
+                        <button type="submit" disabled={props.busy}>
+                          Confirm
+                        </button>
+                      </form>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
+/** Container: load payments + config, save tunable parameters, confirm attaches. */
+export function PaymentsPanel(): JSX.Element {
+  const [config, setConfig] = useState<MatchConfig | null>(null);
+  const [payments, setPayments] = useState<PaymentSmsItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+
+  const reload = useCallback((): void => {
+    listPayments()
+      .then((res) => {
+        setConfig(res.config);
+        setPayments(res.payments);
+      })
+      .catch((err: unknown) => setError(describeError(err)));
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const saveConfig = (cfg: { toleranceBdt: number; windowSec: number }): void => {
+    setError(null);
+    setNote(null);
+    updateMatchConfig(cfg)
+      .then((next) => {
+        setConfig(next);
+        setNote("Match parameters saved — new candidate calculations use them immediately.");
+        reload();
+      })
+      .catch((err: unknown) => setError(describeError(err)));
+  };
+
+  const attach = (paymentId: string, transactionId: string): void => {
+    if (transactionId === "") {
+      setError("Choose which transaction this payment funds — ambiguity never resolves itself.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    attachPayment(paymentId, transactionId)
+      .then((res) => {
+        setBusy(false);
+        setNote(`Attached — credits awarded (OTP balance now ${res.newOtpBalance}).`);
+        reload();
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  return (
+    <PaymentsView
+      config={config}
+      payments={payments}
+      error={error}
+      note={note}
+      busy={busy}
+      onConfigSave={saveConfig}
+      onAttach={attach}
+    />
+  );
+}
+
+/**
+ * Pure packages view: full directory (retired rows visible + reactivate),
+ * inline per-row edit form, retire button, and the create form. Exported for
+ * tests.
+ */
+export function PackagesView(props: {
+  packages: AdminPackage[];
+  error: string | null;
+  note: string | null;
+  busy: boolean;
+  onCreate: (pkg: {
+    packageCode: string;
+    name: string;
+    smsQuota: number;
+    priceBdt: number;
+    validityDays: number;
+    type: string;
+  }) => void;
+  onPatch: (
+    packageCode: string,
+    patch: { name: string; smsQuota: number; priceBdt: number; validityDays: number; type: string },
+  ) => void;
+  onToggleActive: (pkg: AdminPackage) => void;
+}): JSX.Element {
+  return (
+    <>
+      {props.error !== null && <ErrorBanner message={props.error} />}
+      {props.note !== null && <p className="ok-note">{props.note}</p>}
+      <section className="card">
+        <h2>Create package</h2>
+        <form
+          onSubmit={(e): void => {
+            e.preventDefault();
+            const data = new FormData(e.currentTarget);
+            props.onCreate({
+              packageCode: String(data.get("packageCode") ?? "").trim(),
+              name: String(data.get("name") ?? "").trim(),
+              smsQuota: Number(data.get("smsQuota") ?? 0),
+              priceBdt: Number(data.get("priceBdt") ?? 0),
+              validityDays: Number(data.get("validityDays") ?? 0),
+              type: String(data.get("type") ?? "otp"),
+            });
+            e.currentTarget.reset();
+          }}
+        >
+          <label htmlFor="pkgCode">Package code</label>
+          <input id="pkgCode" name="packageCode" required spellCheck={false} pattern="[A-Za-z0-9_-]{2,64}" />
+          <label htmlFor="pkgName">Name</label>
+          <input id="pkgName" name="name" required maxLength={128} />
+          <label htmlFor="pkgQuota">SMS quota</label>
+          <input id="pkgQuota" name="smsQuota" type="number" min={1} required />
+          <label htmlFor="pkgPrice">Price (BDT)</label>
+          <input id="pkgPrice" name="priceBdt" type="number" min={0} required />
+          <label htmlFor="pkgValidity">Validity (days)</label>
+          <input id="pkgValidity" name="validityDays" type="number" min={1} required />
+          <label htmlFor="pkgType">Type</label>
+          <select id="pkgType" name="type" defaultValue="otp">
+            <option value="otp">otp</option>
+            <option value="bulk">bulk</option>
+            <option value="both">both</option>
+          </select>
+          <button type="submit" disabled={props.busy}>
+            {props.busy ? "Saving…" : "Create package"}
+          </button>
+        </form>
+      </section>
+      <section className="card">
+        <h2>Packages</h2>
+        {props.packages.length === 0 ? (
+          <p className="muted">No packages yet.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Name</th>
+                <th>Quota</th>
+                <th>Price</th>
+                <th>Days</th>
+                <th>Type</th>
+                <th>State</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.packages.map((p) => (
+                <tr key={p.packageCode}>
+                  <td colSpan={8}>
+                    <form
+                      className="inline-actions"
+                      onSubmit={(e): void => {
+                        e.preventDefault();
+                        const data = new FormData(e.currentTarget);
+                        props.onPatch(p.packageCode, {
+                          name: String(data.get("name") ?? "").trim(),
+                          smsQuota: Number(data.get("smsQuota") ?? 0),
+                          priceBdt: Number(data.get("priceBdt") ?? 0),
+                          validityDays: Number(data.get("validityDays") ?? 0),
+                          type: String(data.get("type") ?? p.type),
+                        });
+                      }}
+                    >
+                      <span className="mono">{p.packageCode}</span>
+                      <input name="name" defaultValue={p.name} required maxLength={128} aria-label={`name-${p.packageCode}`} />
+                      <input name="smsQuota" type="number" min={1} defaultValue={p.smsQuota} aria-label={`quota-${p.packageCode}`} />
+                      <input name="priceBdt" type="number" min={0} defaultValue={p.priceBdt} aria-label={`price-${p.packageCode}`} />
+                      <input name="validityDays" type="number" min={1} defaultValue={p.validityDays} aria-label={`days-${p.packageCode}`} />
+                      <select name="type" defaultValue={p.type} aria-label={`type-${p.packageCode}`}>
+                        <option value="otp">otp</option>
+                        <option value="bulk">bulk</option>
+                        <option value="both">both</option>
+                      </select>
+                      <span className={`chip ${p.isActive ? "approved" : "rejected"}`}>
+                        {p.isActive ? "Active" : "Retired"}
+                      </span>
+                      <button type="submit" disabled={props.busy}>
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className={p.isActive ? "danger" : "secondary"}
+                        onClick={(): void => props.onToggleActive(p)}
+                        disabled={props.busy}
+                      >
+                        {p.isActive ? "Retire" : "Reactivate"}
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
+/** Container: load the full directory; create (upsert), edit (PATCH), retire/reactivate. */
+export function PackagesPanel(): JSX.Element {
+  const [packages, setPackages] = useState<AdminPackage[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+
+  const reload = useCallback((): void => {
+    listAdminPackages()
+      .then(setPackages)
+      .catch((err: unknown) => setError(describeError(err)));
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const create = (pkg: {
+    packageCode: string;
+    name: string;
+    smsQuota: number;
+    priceBdt: number;
+    validityDays: number;
+    type: string;
+  }): void => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    upsertAdminPackage(pkg)
+      .then(() => {
+        setBusy(false);
+        setNote(`Package ${pkg.packageCode} saved.`);
+        reload();
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  const patch = (
+    packageCode: string,
+    fields: { name: string; smsQuota: number; priceBdt: number; validityDays: number; type: string },
+  ): void => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    patchAdminPackage(packageCode, fields)
+      .then(() => {
+        setBusy(false);
+        setNote(`Package ${packageCode} updated.`);
+        reload();
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  const toggleActive = (pkg: AdminPackage): void => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    // DELETE always retires (hard-delete is forbidden); reactivate is a PATCH.
+    const action = pkg.isActive ? retireAdminPackage(pkg.packageCode) : patchAdminPackage(pkg.packageCode, { isActive: true });
+    action
+      .then(() => {
+        setBusy(false);
+        setNote(pkg.isActive ? `Package ${pkg.packageCode} retired (row kept for history).` : `Package ${pkg.packageCode} reactivated.`);
+        reload();
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  return (
+    <PackagesView
+      packages={packages}
+      error={error}
+      note={note}
+      busy={busy}
+      onCreate={create}
+      onPatch={patch}
+      onToggleActive={toggleActive}
+    />
+  );
+}
+
+/** Pure users (withhold) view — exported for render tests. */
+export function UsersView(props: {
+  users: AdminUserItem[];
+  error: string | null;
+  note: string | null;
+  busy: boolean;
+  onToggle: (user: AdminUserItem) => void;
+}): JSX.Element {
+  return (
+    <>
+      {props.error !== null && <ErrorBanner message={props.error} />}
+      {props.note !== null && <p className="ok-note">{props.note}</p>}
+      <section className="card">
+        <h2>Customers</h2>
+        <p className="muted">
+          Withholding blocks the customer&apos;s login and freezes their apps' sends
+          (<code>account_withheld</code>). Credits are never touched.
+        </p>
+        {props.users.length === 0 ? (
+          <p className="muted">No users yet.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>State</th>
+                <th>Owned apps</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.users.map((u) => (
+                <tr key={u.id}>
+                  <td>{u.email}</td>
+                  <td>
+                    <span className={`chip ${u.disabled ? "rejected" : "approved"}`}>
+                      {u.disabled ? "Withheld" : "Active"}
+                    </span>
+                  </td>
+                  <td>
+                    {u.apps.length === 0 ? (
+                      <span className="muted">None</span>
+                    ) : (
+                      u.apps.map((a) => (
+                        <span key={a.id} className="muted">
+                          {a.name} {a.revoked ? "(revoked)" : ""} ·{" "}
+                        </span>
+                      ))
+                    )}
+                  </td>
+                  <td>{formatEpochUtc(u.createdAt)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className={u.disabled ? "secondary" : "danger"}
+                      onClick={(): void => props.onToggle(u)}
+                      disabled={props.busy}
+                    >
+                      {u.disabled ? "Enable" : "Withhold"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
+/** Container: user directory + withhold toggles. */
+export function UsersPanel(): JSX.Element {
+  const [users, setUsers] = useState<AdminUserItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
+
+  const reload = useCallback((): void => {
+    listAdminUsers()
+      .then(setUsers)
+      .catch((err: unknown) => setError(describeError(err)));
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const toggle = (user: AdminUserItem): void => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    setAdminUserDisabled(user.id, !user.disabled)
+      .then(() => {
+        setBusy(false);
+        setNote(user.disabled ? `${user.email} enabled.` : `${user.email} withheld.`);
+        reload();
+      })
+      .catch((err: unknown) => {
+        setBusy(false);
+        setError(describeError(err));
+      });
+  };
+
+  return <UsersView users={users} error={error} note={note} busy={busy} onToggle={toggle} />;
+}
+
+/** Pure reports view: ledger + send log with CSV download actions — exported for tests. */
+export function ReportsView(props: {
+  ledger: LedgerReport | null;
+  sendRows: SendLogRow[] | null;
+  error: string | null;
+  onLedgerLoad: (from: string, to: string) => void;
+  onSendLoad: (from: string, to: string, appId: string) => void;
+  onLedgerCsv: (from: string, to: string) => void;
+  onSendCsv: (from: string, to: string, appId: string) => void;
+}): JSX.Element {
+  return (
+    <>
+      {props.error !== null && <ErrorBanner message={props.error} />}
+      <section className="card">
+        <h2>Per-customer ledger</h2>
+        <form
+          id="ledgerForm"
+          className="inline-actions"
+          onSubmit={(e): void => {
+            e.preventDefault();
+            const data = new FormData(e.currentTarget);
+            props.onLedgerLoad(String(data.get("from") ?? ""), String(data.get("to") ?? ""));
+          }}
+        >
+          <label htmlFor="ledgerFrom">From</label>
+          <input id="ledgerFrom" name="from" type="date" />
+          <label htmlFor="ledgerTo">To</label>
+          <input id="ledgerTo" name="to" type="date" />
+          <button type="submit">Load ledger</button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={(): void => {
+              const form = document.getElementById("ledgerForm") as HTMLFormElement | null;
+              const data = form !== null ? new FormData(form) : null;
+              props.onLedgerCsv(String(data?.get("from") ?? ""), String(data?.get("to") ?? ""));
+            }}
+          >
+            Download CSV
+          </button>
+        </form>
+        {props.ledger !== null && (
+          <>
+            <p className="muted">
+              {props.ledger.rows.length} transaction(s) — {props.ledger.totals
+                .map((t) => `${t.packageType}/${t.status}: ${t.count} (৳${String(t.amountBdt)}, ${String(t.grantedSms)} SMS granted)`)
+                .join(" · ")}
+            </p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Requested</th>
+                  <th>App</th>
+                  <th>Customer</th>
+                  <th>Package</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>TrxID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {props.ledger.rows.map((r) => (
+                  <tr key={r.transactionId}>
+                    <td>{formatEpochUtc(r.requestedAt)}</td>
+                    <td className="mono">{r.appId}</td>
+                    <td>{r.ownerEmail ?? "—"}</td>
+                    <td>{r.packageCode}</td>
+                    <td className="num">{formatBdt(r.amountBdt)}</td>
+                    <td>
+                      <span className={`chip ${r.status === "approved" ? "approved" : r.status === "rejected" ? "rejected" : ""}`}>
+                        {formatStatus(r.status)}
+                      </span>
+                    </td>
+                    <td className="mono">{r.trxId ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </section>
+      <section className="card">
+        <h2>Item-wise send log</h2>
+        <p className="muted">Recipient numbers are PII — operator-only, CSV is the only export.</p>
+        <form
+          id="sendLogForm"
+          className="inline-actions"
+          onSubmit={(e): void => {
+            e.preventDefault();
+            const data = new FormData(e.currentTarget);
+            props.onSendLoad(
+              String(data.get("from") ?? ""),
+              String(data.get("to") ?? ""),
+              String(data.get("appId") ?? "").trim(),
+            );
+          }}
+        >
+          <label htmlFor="sendFrom">From</label>
+          <input id="sendFrom" name="from" type="date" />
+          <label htmlFor="sendTo">To</label>
+          <input id="sendTo" name="to" type="date" />
+          <label htmlFor="sendApp">App ID</label>
+          <input id="sendApp" name="appId" spellCheck={false} />
+          <button type="submit">Load send log</button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={(): void => {
+              const form = document.getElementById("sendLogForm") as HTMLFormElement | null;
+              const data = form !== null ? new FormData(form) : null;
+              props.onSendCsv(
+                String(data?.get("from") ?? ""),
+                String(data?.get("to") ?? ""),
+                String(data?.get("appId") ?? "").trim(),
+              );
+            }}
+          >
+            Download CSV
+          </button>
+        </form>
+        {props.sendRows !== null && (
+          <table>
+            <thead>
+              <tr>
+                <th>Sent</th>
+                <th>App</th>
+                <th>Recipient</th>
+                <th>Source</th>
+                <th>Status</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.sendRows.map((r) => (
+                <tr key={r.messageId}>
+                  <td>{formatEpochUtc(r.createdAt)}</td>
+                  <td className="mono">{r.appId ?? "—"}</td>
+                  <td className="mono">{r.recipient}</td>
+                  <td>{r.source}{r.sourceId !== null ? ` (${r.sourceId})` : ""}</td>
+                  <td>
+                    <span className={`chip ${r.status === "sent" ? "approved" : r.status === "failed" ? "rejected" : ""}`}>
+                      {formatStatus(r.status)}
+                    </span>
+                  </td>
+                  <td>{r.error ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
+/** Container: ledger + send-log loads and CSV-only downloads. */
+export function ReportsPanel(): JSX.Element {
+  const [ledger, setLedger] = useState<LedgerReport | null>(null);
+  const [sendRows, setSendRows] = useState<SendLogRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  /** Date input value (YYYY-MM-DD) → epoch seconds; empty/invalid → undefined. */
+  const dayToEpoch = (value: string): number | undefined =>
+    value === "" ? undefined : Math.floor(Date.parse(`${value}T00:00:00Z`) / 1000);
+
+  const loadLedger = (from: string, to: string): void => {
+    setError(null);
+    getLedgerReport({ from: dayToEpoch(from), to: dayToEpoch(to) })
+      .then(setLedger)
+      .catch((err: unknown) => setError(describeError(err)));
+  };
+
+  const loadSend = (from: string, to: string, appId: string): void => {
+    setError(null);
+    getSendLog({ from: dayToEpoch(from), to: dayToEpoch(to), appId })
+      .then(setSendRows)
+      .catch((err: unknown) => setError(describeError(err)));
+  };
+
+  const ledgerCsv = (from: string, to: string): void => {
+    setError(null);
+    const fromE = dayToEpoch(from);
+    const toE = dayToEpoch(to);
+    const qs = new URLSearchParams({ format: "csv" });
+    if (fromE !== undefined) qs.set("from", String(fromE));
+    if (toE !== undefined) qs.set("to", String(toE));
+    downloadOperatorCsv(`/v5/admin/reports/ledger?${qs.toString()}`, "ledger.csv").catch((err: unknown) =>
+      setError(describeError(err)),
+    );
+  };
+
+  const sendCsv = (from: string, to: string, appId: string): void => {
+    setError(null);
+    const fromE = dayToEpoch(from);
+    const toE = dayToEpoch(to);
+    const qs = new URLSearchParams({ format: "csv" });
+    if (fromE !== undefined) qs.set("from", String(fromE));
+    if (toE !== undefined) qs.set("to", String(toE));
+    if (appId !== "") qs.set("appId", appId);
+    downloadOperatorCsv(`/v5/admin/reports/send-log?${qs.toString()}`, "send-log.csv").catch((err: unknown) =>
+      setError(describeError(err)),
+    );
+  };
+
+  return (
+    <ReportsView
+      ledger={ledger}
+      sendRows={sendRows}
+      error={error}
+      onLedgerLoad={loadLedger}
+      onSendLoad={loadSend}
+      onLedgerCsv={ledgerCsv}
+      onSendCsv={sendCsv}
+    />
+  );
+}
+
 /**
  * Operator shell: unlock gate → sub-tab content. `route` is the full hash
  * route so the active tab is URL-driven (`#/operator/billing`, deep-linkable).
@@ -661,6 +1442,14 @@ export function Operator({ route }: { route: string[] }): JSX.Element {
         <CampaignsPanel />
       ) : tab === "mail" ? (
         <MailSettings />
+      ) : tab === "payments" ? (
+        <PaymentsPanel />
+      ) : tab === "packages" ? (
+        <PackagesPanel />
+      ) : tab === "users" ? (
+        <UsersPanel />
+      ) : tab === "reports" ? (
+        <ReportsPanel />
       ) : (
         <BillingQueue note={setNote} />
       )}

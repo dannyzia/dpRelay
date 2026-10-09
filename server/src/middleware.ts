@@ -163,8 +163,10 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
     }
     const row = app.db
       .prepare(
-        "SELECT id, app_id, app_secret_hash, name, webhook_url, webhook_secret_hash, " +
-          "rate_max_per_phone, rate_window_sec, revoked_at FROM apps WHERE app_id = ?",
+        "SELECT a.id, a.app_id, a.app_secret_hash, a.name, a.webhook_url, a.webhook_secret_hash, " +
+          "a.rate_max_per_phone, a.rate_window_sec, a.revoked_at, a.owner_user_id, " +
+          "u.disabled AS owner_disabled " +
+          "FROM apps a LEFT JOIN users u ON u.id = a.owner_user_id WHERE a.app_id = ?",
       )
       .get(appId) as
       | {
@@ -177,6 +179,8 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
           rate_max_per_phone: number;
           rate_window_sec: number;
           revoked_at: number | null;
+          owner_user_id: string | null;
+          owner_disabled: number | null;
         }
       | undefined;
     if (!row) {
@@ -192,6 +196,20 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
     }
     if (row.revoked_at !== null) {
       await unauthorized(reply, "app_revoked", "This app has been revoked");
+      return;
+    }
+    // STAGE F5 (ISSUE-83): a withheld owner freezes their entire app plane —
+    // sends above all — with a DISTINCT code so customers can tell "withheld"
+    // from "revoked"/"bad credentials" (hub event 1213). Checked after the
+    // constant-time secret compare so the code never leaks app state to a
+    // caller holding bad credentials. Operator-provisioned apps
+    // (owner_user_id NULL) are never affected; balances are never touched.
+    if (row.owner_user_id !== null && row.owner_disabled === 1) {
+      await reply.code(403).send({
+        ok: false,
+        error: "This account is withheld. Contact the operator.",
+        code: "account_withheld",
+      });
       return;
     }
     request.appRow = {

@@ -565,3 +565,251 @@ export async function listOversightCampaigns(status?: string): Promise<{
   }>(`/v5/admin/campaigns${qs}`);
   return { campaigns: body.campaigns, nextCursor: body.nextCursor };
 }
+
+// ── STAGE F5 (ISSUE-83): admin operations — payments, packages, users, reports ──
+
+/** Tunable payment-match parameters (server: payment_match_config, migration 014). */
+export interface MatchConfig {
+  toleranceBdt: number;
+  windowSec: number;
+  updatedAt?: number;
+}
+
+export interface PaymentCandidate {
+  transactionId: string;
+  appId: string;
+  packageCode: string;
+  amountBdt: number;
+  requestedAt: number;
+  deltaBdt: number;
+  timeDeltaSec: number;
+}
+
+export interface PaymentSmsItem {
+  id: string;
+  sender: string;
+  provider: string;
+  txnId: string;
+  amountBdt: number;
+  receivedAt: number;
+  createdAt: number;
+  matched: { transactionId: string; status: string; appId: string } | null;
+  candidates: PaymentCandidate[];
+  ambiguous: boolean;
+}
+
+/** GET /v5/admin/payments — ingested payment SMS + candidates under the current config. */
+export async function listPayments(): Promise<{ config: MatchConfig; payments: PaymentSmsItem[] }> {
+  const body = await operatorFetch<{ ok: true; config: MatchConfig; payments: PaymentSmsItem[] }>(
+    "/v5/admin/payments",
+  );
+  return { config: body.config, payments: body.payments };
+}
+
+/** PUT /v5/admin/payments/config — operator-tunable tolerance/window (at least one field). */
+export async function updateMatchConfig(cfg: {
+  toleranceBdt?: number;
+  windowSec?: number;
+}): Promise<MatchConfig> {
+  const body = await operatorFetch<MatchConfig & { ok: true }>("/v5/admin/payments/config", {
+    method: "PUT",
+    body: JSON.stringify(cfg),
+  });
+  return { toleranceBdt: body.toleranceBdt, windowSec: body.windowSec, updatedAt: body.updatedAt };
+}
+
+/** POST /v5/admin/payments/:id/attach — one-click confirm; transactionId is the operator's explicit choice. */
+export async function attachPayment(
+  paymentId: string,
+  transactionId: string,
+): Promise<{ transactionId: string; status: string; newOtpBalance: number; newBulkBalance: number }> {
+  return operatorFetch<{
+    ok: true;
+    transactionId: string;
+    status: string;
+    newOtpBalance: number;
+    newBulkBalance: number;
+  }>(`/v5/admin/payments/${encodeURIComponent(paymentId)}/attach`, {
+    method: "POST",
+    body: JSON.stringify({ transactionId }),
+  });
+}
+
+export interface AdminPackage {
+  packageCode: string;
+  name: string;
+  smsQuota: number;
+  priceBdt: number;
+  validityDays: number;
+  type: string;
+  isActive: boolean;
+  updatedAt?: number;
+}
+
+/** GET /v5/admin/billing/packages — full directory incl. retired rows (reactivable). */
+export async function listAdminPackages(): Promise<AdminPackage[]> {
+  const body = await operatorFetch<{ ok: true; packages: AdminPackage[] }>(
+    "/v5/admin/billing/packages",
+  );
+  return body.packages;
+}
+
+/** POST /v5/admin/billing/packages — create-or-update keyed by packageCode (all fields required). */
+export async function upsertAdminPackage(pkg: {
+  packageCode: string;
+  name: string;
+  smsQuota: number;
+  priceBdt: number;
+  validityDays: number;
+  type: string;
+  isActive?: boolean;
+}): Promise<void> {
+  await operatorFetch("/v5/admin/billing/packages", { method: "POST", body: JSON.stringify(pkg) });
+}
+
+/** PATCH /v5/admin/billing/packages/:code — partial edit of whitelisted fields. */
+export async function patchAdminPackage(
+  packageCode: string,
+  patch: Partial<Pick<AdminPackage, "name" | "smsQuota" | "priceBdt" | "validityDays" | "type" | "isActive">>,
+): Promise<void> {
+  await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+/** DELETE /v5/admin/billing/packages/:code — retires (soft, idempotent; hard-delete is forbidden). */
+export async function retireAdminPackage(packageCode: string): Promise<void> {
+  await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}`, {
+    method: "DELETE",
+  });
+}
+
+export interface AdminUserItem {
+  id: string;
+  email: string;
+  disabled: boolean;
+  createdAt: number;
+  appCount: number;
+  apps: { id: string; appId: string; name: string; revoked: boolean }[];
+}
+
+/** GET /v5/admin/users — customer directory with withhold state + owned apps. */
+export async function listAdminUsers(): Promise<AdminUserItem[]> {
+  const body = await operatorFetch<{ ok: true; users: AdminUserItem[] }>("/v5/admin/users");
+  return body.users;
+}
+
+/** POST /v5/admin/users/:id/disable | /enable — the withhold toggle (credits untouched). */
+export async function setAdminUserDisabled(userId: string, disabled: boolean): Promise<void> {
+  await operatorFetch(
+    `/v5/admin/users/${encodeURIComponent(userId)}/${disabled ? "disable" : "enable"}`,
+    { method: "POST" },
+  );
+}
+
+export interface LedgerRow {
+  transactionId: string;
+  appId: string;
+  appName: string;
+  ownerEmail: string | null;
+  packageCode: string;
+  packageType: string;
+  smsQuota: number;
+  amountBdt: number;
+  status: string;
+  trxId: string | null;
+  requestedAt: number;
+  resolvedAt: number | null;
+  resolvedBy: string | null;
+}
+
+export interface LedgerReport {
+  from: number;
+  to: number;
+  rows: LedgerRow[];
+  totals: { packageType: string; status: string; count: number; amountBdt: number; grantedSms: number }[];
+}
+
+export interface SendLogRow {
+  messageId: string;
+  appId: string | null;
+  appName: string | null;
+  recipient: string;
+  status: string;
+  error: string | null;
+  createdAt: number;
+  resultAt: number | null;
+  source: string;
+  sourceId: string | null;
+}
+
+/** GET /v5/admin/reports/ledger — on-screen JSON (CSV is the only EXPORT, see downloadOperatorCsv). */
+export async function getLedgerReport(params: { from?: number; to?: number } = {}): Promise<LedgerReport> {
+  const qs = new URLSearchParams();
+  if (params.from !== undefined) qs.set("from", String(params.from));
+  if (params.to !== undefined) qs.set("to", String(params.to));
+  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
+  const body = await operatorFetch<LedgerReport & { ok: true }>(`/v5/admin/reports/ledger${suffix}`);
+  return { from: body.from, to: body.to, rows: body.rows, totals: body.totals };
+}
+
+/** GET /v5/admin/reports/send-log — recipient numbers are PII: operator-only, no customer route. */
+export async function getSendLog(params: {
+  from?: number;
+  to?: number;
+  appId?: string;
+} = {}): Promise<SendLogRow[]> {
+  const qs = new URLSearchParams();
+  if (params.from !== undefined) qs.set("from", String(params.from));
+  if (params.to !== undefined) qs.set("to", String(params.to));
+  if (params.appId !== undefined && params.appId !== "") qs.set("appId", params.appId);
+  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
+  const body = await operatorFetch<{ ok: true; rows: SendLogRow[] }>(`/v5/admin/reports/send-log${suffix}`);
+  return body.rows;
+}
+
+/**
+ * Raw-text operator request — CSV exports are not JSON, so they cannot ride
+ * `request`. Same contract: Bearer secret, 401 clears + notifies the shell.
+ */
+async function operatorText(path: string): Promise<string> {
+  const secret = getOperatorSecret();
+  if (secret === null) {
+    throw new ApiError(401, "operator_not_configured", "Enter the operator secret first");
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+  } catch {
+    throw new ApiError(0, "network_error", "Network error — the API is unreachable");
+  }
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearOperatorSecret();
+      onOperatorRejected?.();
+    }
+    throw new ApiError(res.status, `http_${res.status}`, `HTTP ${res.status}`);
+  }
+  return res.text();
+}
+
+/**
+ * Downloads an operator report as CSV — the ONLY export form (PII policy:
+ * recipient numbers never leave through any other channel). Fetches with the
+ * operator secret, then hands the text to a transient object URL.
+ */
+export async function downloadOperatorCsv(path: string, filename: string): Promise<void> {
+  const text = await operatorText(path);
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

@@ -23,6 +23,7 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { asRecord, asString } from "../services/parse.js";
 import { newId } from "../services/crypto.js";
+import { awardPendingTransaction } from "../services/credits.js";
 
 /** Parses an ISO-8601 date/datetime query value into epoch SECONDS (null if absent/invalid). */
 function parseDateBound(value: unknown): number | null {
@@ -478,6 +479,143 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
+   * STAGE F5 (ISSUE-83): partial package edit keyed by :code. Only whitelisted
+   * fields are updatable (packageCode itself never — it is the stable public
+   * identifier). Past transactions are unaffected either way: they carry their
+   * own request-time snapshot columns (migration 006 note 1).
+   */
+  app.patch("/v5/admin/billing/packages/:code", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const packageCode = asString(params.code, 64);
+    if (packageCode === null || !PACKAGE_CODE_PATTERN.test(packageCode)) {
+      return reply.code(400).send({
+        ok: false,
+        error: "package code must be 2-64 chars of [A-Za-z0-9_-]",
+        code: "invalid_package_code",
+      });
+    }
+    const body = (asRecord(request.body) ?? {}) as UpsertPackageBody;
+
+    // Each branch validates before appending — `sets` can only ever contain
+    // literal column names, so the dynamic SET clause stays injection-free.
+    const sets: string[] = [];
+    const values: (string | number)[] = [];
+    if (body.name !== undefined) {
+      const name = asString(body.name, 128);
+      if (name === null) return reject400(reply, "invalid_package", "name must be 1-128 chars");
+      sets.push("name = ?");
+      values.push(name);
+    }
+    if (body.smsQuota !== undefined) {
+      const q = body.smsQuota;
+      if (typeof q !== "number" || !Number.isInteger(q) || q < 1) return reject400(reply, "invalid_package", "smsQuota must be an integer >= 1");
+      sets.push("sms_quota = ?");
+      values.push(q);
+    }
+    if (body.priceBdt !== undefined) {
+      const p = body.priceBdt;
+      if (typeof p !== "number" || !Number.isInteger(p) || p < 0) return reject400(reply, "invalid_package", "priceBdt must be an integer >= 0");
+      sets.push("price_bdt = ?");
+      values.push(p);
+    }
+    if (body.validityDays !== undefined) {
+      const v = body.validityDays;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 1) return reject400(reply, "invalid_package", "validityDays must be an integer >= 1");
+      sets.push("validity_days = ?");
+      values.push(v);
+    }
+    if (body.type !== undefined) {
+      if (body.type !== "otp" && body.type !== "bulk" && body.type !== "both") {
+        return reject400(reply, "invalid_package", "type must be otp|bulk|both");
+      }
+      sets.push("type = ?");
+      values.push(body.type);
+    }
+    if (body.isActive !== undefined) {
+      if (typeof body.isActive !== "boolean") return reject400(reply, "invalid_package", "isActive must be a boolean");
+      sets.push("is_active = ?");
+      values.push(body.isActive ? 1 : 0);
+    }
+    if (sets.length === 0) {
+      return reject400(reply, "invalid_package", "at least one of name, smsQuota, priceBdt, validityDays, type, isActive is required");
+    }
+    const exists = db.prepare("SELECT 1 FROM packages WHERE package_code = ?").get(packageCode);
+    if (!exists) {
+      return reply.code(404).send({ ok: false, error: "Package not found", code: "package_not_found" });
+    }
+    sets.push("updated_at = unixepoch()");
+    db.prepare(`UPDATE packages SET ${sets.join(", ")} WHERE package_code = ?`).run(...values, packageCode);
+    app.log.info({ packageCode }, "package updated");
+    return { ok: true, packageCode };
+  });
+
+  /**
+   * STAGE F5 (ISSUE-83): retire a package. Hard-delete is FORBIDDEN — every
+   * credit_transactions row references its package forever (audit history),
+   * so DELETE always soft-retires (is_active = 0) regardless of references,
+   * per the strictest reading of the acceptance criterion. A second retire is
+   * an idempotent no-op; reactivation goes through PATCH/upsert (isActive).
+   */
+  app.delete("/v5/admin/billing/packages/:code", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const packageCode = asString(params.code, 64);
+    if (packageCode === null || !PACKAGE_CODE_PATTERN.test(packageCode)) {
+      return reply.code(400).send({
+        ok: false,
+        error: "package code must be 2-64 chars of [A-Za-z0-9_-]",
+        code: "invalid_package_code",
+      });
+    }
+    const row = db
+      .prepare("SELECT is_active FROM packages WHERE package_code = ?")
+      .get(packageCode) as { is_active: number } | undefined;
+    if (!row) {
+      return reply.code(404).send({ ok: false, error: "Package not found", code: "package_not_found" });
+    }
+    db.prepare(
+      "UPDATE packages SET is_active = 0, updated_at = unixepoch() WHERE package_code = ? AND is_active != 0",
+    ).run(packageCode);
+    app.log.info({ packageCode }, "package retired");
+    return { ok: true, packageCode, isActive: false };
+  });
+
+  /**
+   * STAGE F5 (ISSUE-83): full package directory for the panel — unlike the
+   * public catalog it includes RETIRED rows (is_active = 0), otherwise the
+   * panel could never show or reactivate what DELETE retired.
+   */
+  app.get("/v5/admin/billing/packages", { preHandler: [app.requireOperator] }, async () => {
+    const rows = db
+      .prepare(
+        "SELECT package_code, name, sms_quota, price_bdt, validity_days, type, is_active, updated_at " +
+          "FROM packages ORDER BY package_code",
+      )
+      .all() as {
+      package_code: string;
+      name: string;
+      sms_quota: number;
+      price_bdt: number;
+      validity_days: number;
+      type: string;
+      is_active: number;
+      updated_at: number;
+    }[];
+    return {
+      ok: true,
+      packages: rows.map((r) => ({
+        packageCode: r.package_code,
+        name: r.name,
+        smsQuota: r.sms_quota,
+        priceBdt: r.price_bdt,
+        validityDays: r.validity_days,
+        type: r.type,
+        isActive: r.is_active === 1,
+        updatedAt: r.updated_at,
+      })),
+    };
+  });
+
+  /**
    * Pricing-conformance report (Stage E order): flags every package whose
    * price_bdt does not equal sms_quota × 0.20 — the owner's unit price
    * (decision Sep 27). REPORT ONLY: violations are surfaced, never silently
@@ -572,45 +710,12 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
       return { ok: true, status: "rejected" };
     }
 
-    // Approve + award atomically. Guard row: claiming the pending row is the
-    // linearization point; two concurrent approvals cannot both claim it.
-    const nowSec = Math.floor(Date.now() / 1000);
-    const validitySec = trx.validity_days * 24 * 60 * 60;
-    const newExpiry = nowSec + validitySec;
-
-    const award = db.transaction(() => {
-      const claimed = db
-        .prepare(
-          "UPDATE credit_transactions SET status = 'approved', resolved_by = 'operator', resolved_at = unixepoch() " +
-            "WHERE id = ? AND status = 'pending'",
-        )
-        .run(transactionId);
-      if (claimed.changes !== 1) return false;
-
-      if (trx.package_type === "otp" || trx.package_type === "both") {
-        db.prepare(
-          "INSERT INTO app_credits (app_id, otp_sms_remaining, otp_expires_at, last_transaction_id, purchased_at, updated_at) " +
-            "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
-            "ON CONFLICT(app_id) DO UPDATE SET " +
-            "otp_sms_remaining = otp_sms_remaining + excluded.otp_sms_remaining, " +
-            "otp_expires_at = MAX(COALESCE(otp_expires_at, 0), excluded.otp_expires_at), " +
-            "last_transaction_id = excluded.last_transaction_id, " +
-            "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
-        ).run(trx.app_id, trx.sms_quota, newExpiry, transactionId);
-      }
-      if (trx.package_type === "bulk" || trx.package_type === "both") {
-        db.prepare(
-          "INSERT INTO app_credits (app_id, bulk_sms_remaining, bulk_expires_at, last_transaction_id, purchased_at, updated_at) " +
-            "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
-            "ON CONFLICT(app_id) DO UPDATE SET " +
-            "bulk_sms_remaining = bulk_sms_remaining + excluded.bulk_sms_remaining, " +
-            "bulk_expires_at = MAX(COALESCE(bulk_expires_at, 0), excluded.bulk_expires_at), " +
-            "last_transaction_id = excluded.last_transaction_id, " +
-            "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
-        ).run(trx.app_id, trx.sms_quota, newExpiry, transactionId);
-      }
-      return true;
-    });
+    // Approve + award atomically through the shared award core (F5 ISSUE-83:
+    // the payment-attach path must mutate balances identically — two copies
+    // of money code is how they drift). Claiming the pending row inside the
+    // transaction is the linearization point; concurrent approvals race to a
+    // 409, never to a double award.
+    const award = db.transaction(() => awardPendingTransaction(db, trx));
 
     if (!award()) {
       return reply.code(409).send({
