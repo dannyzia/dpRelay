@@ -1,27 +1,30 @@
 /* dP Relay marketing site — plain CSS, no framework, no build step.
-   Dark glass theme. Colors live in this file only — pages never inline colors.
-   Contrast pairs are measured and documented in README.md. */
+   Theme: VoltAgent-inspired. Near-black canvas, a single electric-green
+   accent reserved for CTAs and live markers, hairline borders instead of
+   shadows. Colors live in this file only — pages never inline colors.
+   Contrast pairs are measured in README.md. */
 
 :root {
   /* surfaces */
-  --bg: #030712;
-  --surface: #0f172a;
-  --line: #1e293b;
+  --canvas: #101010;
+  --canvas-soft: #1a1a1a;
+  --hairline: #3d3a39;
   /* text */
-  --ink: #f8fafc;
-  --muted: #94a3b8;
-  /* accents */
-  --accent: #22d3ee;
-  --accent-strong: #06b6d4;
-  --accent-ink: #020617;
-  --ok: #34d399;
-  --ok-bg: #0c1424;
-  /* additive */
-  --bg-inset: #0a0d11;
-  --glass: rgba(15, 23, 42, 0.6);
-  --glass-line: rgba(148, 163, 184, 0.14);
-  --glow-cyan: rgba(34, 211, 238, 0.08);
-  --glow-emerald: rgba(52, 211, 153, 0.07);
+  --ink: #f2f2f2;
+  --ink-strong: #ffffff;
+  --body-text: #bdbdbd;
+  --mute: #8b949e;
+  /* the one accent */
+  --green: #00d992;
+  --green-soft: #2fd6a1;
+  --green-deep: #10b981;
+  --on-green: #101010;
+  /* the one ornament */
+  --line-dash: rgba(79, 93, 117, 0.4);
+  /* radii: 6px buttons/inputs, 8px cards, pill only for status tags */
+  --radius-btn: 6px;
+  --radius-card: 8px;
+  --glow: 0 0 15px rgba(92, 88, 85, 0.2);
 }
 
 * {
@@ -30,44 +33,49 @@
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
-  line-height: 1.6;
-  color: var(--ink);
-  background:
-    radial-gradient(ellipse 900px 480px at 15% -5%, var(--glow-cyan), transparent 55%),
-    radial-gradient(ellipse 800px 420px at 85% 8%, var(--glow-emerald), transparent 45%),
-    var(--bg);
-  background-attachment: fixed;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  line-height: 1.65;
+  color: var(--body-text);
+  background: var(--canvas);
   min-height: 100vh;
 }
 
 ::selection {
-  background: rgba(34, 211, 238, 0.3);
+  background: rgba(0, 217, 146, 0.25);
+}
+
+:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
 }
 
 a {
-  color: var(--accent);
+  color: var(--green-deep);
+}
+
+a:hover {
+  color: var(--green-soft);
 }
 
 code {
-  background: var(--ok-bg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  background: var(--canvas-soft);
+  color: var(--ink);
+  border-radius: 4px;
   padding: 0.05rem 0.35rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.92em;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
 }
 
 pre {
   margin: 0;
-  background: var(--bg-inset);
-  color: #e7edf6;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  background: var(--canvas-soft);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   padding: 1rem;
   overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.88rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
   line-height: 1.55;
 }
 
@@ -81,10 +89,8 @@ pre code {
 /* ── Header / nav / footer ─────────────────────────────── */
 
 .site-header {
-  background: rgba(3, 7, 18, 0.8);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--glass-line);
+  background: var(--canvas);
+  border-bottom: 1px solid var(--hairline);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -107,7 +113,7 @@ main.wrap {
 }
 
 .brand {
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -0.01em;
   font-size: 1.2rem;
   text-decoration: none;
@@ -121,8 +127,8 @@ main.wrap {
   height: 8px;
   margin-left: 0.4rem;
   border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 12px var(--ok);
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green);
 }
 
 nav[aria-label="Main"] {
@@ -133,31 +139,35 @@ nav[aria-label="Main"] {
 
 nav[aria-label="Main"] a {
   text-decoration: none;
-  color: var(--muted);
+  color: var(--body-text);
   font-size: 0.95rem;
 }
 
-nav[aria-label="Main"] a:hover,
+nav a:hover {
+  color: var(--ink-strong);
+}
+
 nav[aria-label="Main"] a[aria-current="page"] {
-  color: var(--accent);
+  color: var(--green-soft);
 }
 
 nav[aria-label="Main"] a.cta {
-  color: var(--accent-ink);
-  background: var(--accent-strong);
-  border-radius: 8px;
+  color: var(--on-green);
+  background: var(--green);
+  border-radius: var(--radius-btn);
   padding: 0.4rem 0.9rem;
   font-weight: 600;
 }
 
 nav[aria-label="Main"] a.cta:hover {
-  filter: brightness(1.1);
+  box-shadow: var(--glow);
+  color: var(--on-green);
 }
 
 .site-footer {
-  border-top: 1px solid var(--glass-line);
-  background: rgba(3, 7, 18, 0.7);
-  color: var(--muted);
+  border-top: 1px solid var(--hairline);
+  background: var(--canvas);
+  color: var(--mute);
   font-size: 0.9rem;
 }
 
@@ -173,56 +183,54 @@ nav[aria-label="Main"] a.cta:hover {
 /* ── Type ──────────────────────────────────────────────── */
 
 h1 {
-  font-size: clamp(2rem, 4.5vw, 2.9rem);
-  line-height: 1.15;
-  letter-spacing: -0.02em;
-  margin: 0 0 0.75rem;
+  font-size: clamp(2.1rem, 4.5vw, 3.4rem);
+  font-weight: 400;
+  line-height: 1.12;
+  letter-spacing: -0.022em;
+  color: var(--ink-strong);
+  margin: 0.4rem 0 0.75rem;
 }
 
 h2 {
-  font-size: 1.45rem;
+  font-size: 1.6rem;
+  font-weight: 400;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  color: var(--ink-strong);
   margin: 2.25rem 0 0.6rem;
-  letter-spacing: -0.01em;
 }
 
 h3 {
-  font-size: 1.08rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
   margin: 1.4rem 0 0.35rem;
 }
 
 .muted,
 .tagline {
-  color: var(--muted);
+  color: var(--mute);
 }
 
-/* ── Hero + track toggle (CSS-only, zero JS) ───────────── */
+.tagline {
+  font-size: 1.1rem;
+}
+
+/* Uppercase tracked eyebrow — the signature label style. */
+.eyebrow {
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--green-soft);
+  margin: 0 0 0.2rem;
+}
+
+/* ── Hero (flat band — no card chrome) ─────────────────── */
 
 .hero {
-  background: var(--glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--glass-line);
-  border-radius: 20px;
-  padding: 3rem 2rem 2.25rem;
+  padding: 3.25rem 1rem 2rem;
   text-align: center;
-  position: relative;
-  overflow: hidden;
-}
-
-.hero::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  opacity: 0.55;
-}
-
-.hero .price {
-  font-size: 2.4rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  margin: 0.5rem 0 0.25rem;
 }
 
 .track-toggle {
@@ -230,8 +238,8 @@ h3 {
   gap: 0.25rem;
   padding: 0.25rem;
   margin: 1.25rem auto 0.5rem;
-  background: var(--bg-inset);
-  border: 1px solid var(--line);
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
   border-radius: 999px;
 }
 
@@ -246,7 +254,7 @@ h3 {
   padding: 0.45rem 1.1rem;
   border-radius: 999px;
   cursor: pointer;
-  color: var(--muted);
+  color: var(--mute);
   font-weight: 600;
   font-size: 0.95rem;
   transition: background 0.18s ease, color 0.18s ease;
@@ -257,17 +265,16 @@ h3 {
 }
 
 .track-toggle input:focus-visible + label {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--green);
   outline-offset: 2px;
 }
 
 .track-toggle input:checked + label {
-  background: var(--accent-strong);
-  color: var(--accent-ink);
-  box-shadow: 0 0 18px rgba(6, 182, 212, 0.35);
+  background: var(--green);
+  color: var(--on-green);
 }
 
-/* ── Sections / cards / steps / tables ─────────────────── */
+/* ── Cards ─────────────────────────────────────────────── */
 
 main.wrap {
   padding-top: 2.5rem;
@@ -275,24 +282,24 @@ main.wrap {
 }
 
 .card {
-  background: var(--glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border: 1px solid var(--glass-line);
-  border-radius: 16px;
+  background: var(--canvas);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   padding: 1.5rem;
   margin-bottom: 1.5rem;
 }
 
 .card.nested {
   margin-top: 1rem;
-  border: 1px dashed var(--line);
-  background: var(--ok-bg);
+  border: 1px dashed var(--hairline);
+  background: var(--canvas-soft);
 }
 
 .card.nested h3:first-child {
   margin-top: 0;
 }
+
+/* ── Steps ─────────────────────────────────────────────── */
 
 .steps {
   counter-reset: step;
@@ -304,48 +311,37 @@ main.wrap {
 }
 
 .steps li {
-  background: var(--glass);
-  backdrop-filter: blur(14px);
-  border: 1px solid var(--glass-line);
-  border-radius: 16px;
+  background: var(--canvas);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   padding: 1.25rem;
 }
 
 .steps li::before {
   counter-increment: step;
   content: counter(step);
-  display: inline-block;
+  display: block;
   width: 2rem;
   height: 2rem;
   line-height: 2rem;
   text-align: center;
   border-radius: 50%;
-  background: var(--accent-strong);
-  color: var(--accent-ink);
+  border: 1px solid var(--hairline);
+  background: var(--canvas-soft);
+  color: var(--green-soft);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   font-weight: 700;
   margin-bottom: 0.5rem;
 }
 
-.guide-steps {
-  padding-left: 1.25rem;
-}
-
-.guide-steps li {
-  margin-bottom: 0.35rem;
-}
-
-.big-number {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 1.6rem;
-  font-weight: 700;
-}
+/* ── Tables ────────────────────────────────────────────── */
 
 table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  background: var(--canvas);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   overflow: hidden;
   font-size: 0.95rem;
 }
@@ -354,21 +350,25 @@ th,
 td {
   text-align: left;
   padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline);
   vertical-align: top;
 }
 
 th {
-  background: var(--ok-bg);
-  color: var(--ink);
+  background: var(--canvas-soft);
+  color: var(--mute);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
 }
 
 td {
-  color: var(--muted);
+  color: var(--body-text);
 }
 
 td code {
-  color: var(--accent);
+  color: var(--green-soft);
 }
 
 tr:last-child td {
@@ -385,10 +385,10 @@ tr:last-child td {
 
 .code-grid figure {
   margin: 0;
-  border: 1px solid var(--glass-line);
-  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   overflow: hidden;
-  background: var(--bg-inset);
+  background: var(--canvas-soft);
 }
 
 .code-grid figcaption {
@@ -396,23 +396,32 @@ tr:last-child td {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.85rem;
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--accent);
-  border-bottom: 1px solid var(--line);
-  background: var(--ok-bg);
+  color: var(--ink);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.code-grid figcaption::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
 }
 
 .code-grid pre {
   border: 0;
   border-radius: 0;
+  background: transparent;
   font-size: 0.82rem;
   padding: 0.9rem 0.85rem;
 }
 
-/* ── Buttons / actions ─────────────────────────────────── */
+/* ── Buttons ───────────────────────────────────────────── */
 
 .actions {
   display: flex;
@@ -424,33 +433,34 @@ tr:last-child td {
 
 .button {
   display: inline-block;
-  background: var(--accent-strong);
-  color: var(--accent-ink);
+  background: var(--green);
+  color: var(--on-green);
   text-decoration: none;
-  font-weight: 700;
-  border-radius: 10px;
+  font-weight: 600;
+  border-radius: var(--radius-btn);
   padding: 0.7rem 1.3rem;
-  border: 1px solid var(--accent-strong);
-  transition: filter 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  border: 1px solid var(--green);
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .button:hover {
-  filter: brightness(1.1);
+  box-shadow: var(--glow);
   transform: translateY(-1px);
-  box-shadow: 0 6px 24px rgba(6, 182, 212, 0.25);
+  color: var(--on-green);
 }
 
 .button.secondary {
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--accent);
+  background: var(--canvas);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
 }
 
 .button.secondary:hover {
-  background: var(--ok-bg);
-  box-shadow: none;
+  border-color: var(--green-soft);
+  color: var(--ink);
 }
-/* ── Feature chips ─────────────────────────────────────── */
+
+/* ── Feature chips (status pills) ──────────────────────── */
 
 .chip-row {
   display: flex;
@@ -463,16 +473,16 @@ tr:last-child td {
 .chip {
   display: inline-block;
   padding: 0.25rem 0.7rem;
-  border: 1px solid var(--glass-line);
-  background: var(--ok-bg);
+  border: 1px solid var(--hairline);
+  background: var(--canvas);
   border-radius: 999px;
-  color: var(--muted);
+  color: var(--body-text);
   font-size: 0.85rem;
   font-weight: 600;
 }
 
 .chip em {
-  color: var(--ok);
+  color: var(--green-soft);
   font-style: normal;
 }
 
@@ -480,9 +490,9 @@ tr:last-child td {
 
 .track-panels section {
   margin-top: 1.25rem;
-  border: 1px solid var(--glass-line);
-  border-radius: 16px;
-  background: var(--ok-bg);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--canvas);
   padding: 1.5rem;
   text-align: left;
 }
@@ -515,11 +525,22 @@ tr:last-child td {
   display: none;
 }
 
+/* ── Signature dashed divider between sections ─────────── */
+
+main.wrap > section + section {
+  border-top: 1px dashed var(--line-dash);
+  padding-top: 2.25rem;
+}
+
+main.wrap > section + section h2:first-child {
+  margin-top: 0;
+}
+
 /* ── Responsive ────────────────────────────────────────── */
 
 @media (max-width: 640px) {
   .hero {
-    padding: 2.25rem 1.25rem 1.75rem;
+    padding: 2.25rem 1rem 1.5rem;
   }
 
   nav[aria-label="Main"] {

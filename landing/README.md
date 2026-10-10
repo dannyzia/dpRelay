@@ -51,15 +51,17 @@ single h1, links). Contrast/keyboard are checked by hand:
 - [ ] Contrast ≥ 4.5:1. Measured pairs (WCAG AA — all pass):
   | Pair | Ratio |
   | --- | --- |
-  | `--ink #f8fafc` on `--bg #030712` | 19.24 |
-  | `--muted #94a3b8` on `--bg` / on `--surface #0f172a` / on `--ok-bg #0c1424` | 7.85 / 6.96 / 7.18 |
-  | `--accent-ink #020617` on `--accent-strong #06b6d4` (CTA fills) | 8.31 |
-  | `--accent #22d3ee` on `--bg` (links) | 11.14 |
-  | `--ok #34d399` on `--ok-bg` (chips) | 9.57 |
+  | `--ink #f2f2f2` on `--canvas #101010` | 17.00 |
+  | `--body-text #bdbdbd` on `--canvas` | 10.13 |
+  | `--mute #8b949e` on `--canvas` / on `--canvas-soft #1a1a1a` | 6.19 / 5.66 |
+  | `--on-green #101010` on `--green #00d992` (CTA fills) | 10.28 |
+  | `--green-deep #10b981` on `--canvas` (links) | 7.50 |
+  | `--green-soft #2fd6a1` on `--canvas` (chips/em + eyebrow) | 10.20 |
+  | code text `--ink` on `--canvas-soft` | 15.55 |
 
   Re-check if any token changes. *(The issue named a "Kalam-on-pastel" audit
   — `grep -r Kalam` finds no such font anywhere in the repo; the landing is
-  system-ui on the dark tokens above, and those are the pairs audited.)*
+  an Inter-first system stack on the tokens above, and those are the pairs audited.)*
 - [ ] Every page: keyboard-reachable nav and CTAs with a visible focus ring;
   headings run h1 → h2 in order; images (if any) have alt text.
 - [ ] 200% zoom: no clipped text or horizontal scrolling on `/` and

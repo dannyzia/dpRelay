@@ -12,7 +12,7 @@ pool, under one API and one credit balance.
 
 ### Added
 
-- **landing/** — dark-glass retheme (styles.css tokens, zero JS) and dual-track
+- **landing/** — VoltAgent-style retheme (near-black canvas, single green accent, hairline cards, zero JS) and dual-track
   copy: home tier toggle (Global ⇄ Bangladesh, CSS-only via `:has()`),
   country-wise coverage & rates matrix on pricing, BYOD pairing guide with the
   `POST /v5/device/enroll` contract and device-plane error codes on docs,
