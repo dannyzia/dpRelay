@@ -43,6 +43,43 @@ cd payment-reader
 
 Requires JDK 17 and an Android SDK (same as the gateway app).
 
+### Release signing (ISSUE-49) — fail-closed, keyring-backed
+
+Release builds are signed with the private **dP Relay** release keystore
+(PKCS12, RSA 4096, CN=dP Relay). The keystore file and its password live
+**only in the OS keyring** (ADR-016: never the repo, never chat, never
+BuildConfig); `assembleRelease` needs four env vars and **fails closed** if
+any are missing — it never falls back to debug-signed or unsigned output
+(the installed reader holds `PAYMENT_READER_SECRET`).
+
+| Env var | Source (keyring, `service dprelay`) |
+| --- | --- |
+| `READER_RELEASE_STORE_FILE` | `account release-keystore-b64` (base64 PKCS12), decoded to a 0600 temp file |
+| `READER_RELEASE_STORE_PASSWORD` | `account release-keystore-password` |
+| `READER_RELEASE_KEY_ALIAS` | `account release-keystore-alias` (`dprelay-release`) |
+| `READER_RELEASE_KEY_PASSWORD` | same value as the store password |
+
+Building a signed release APK from the keyring (no secret ever touches disk
+permanently or the shell history):
+
+```bash
+cd payment-reader
+umask 077
+KS=$(mktemp -d /tmp/dprelay-ks-XXXXXX)/release.p12
+secret-tool lookup service dprelay account release-keystore-b64 | base64 -d > "$KS"
+export READER_RELEASE_STORE_FILE="$KS"
+export READER_RELEASE_STORE_PASSWORD="$(secret-tool lookup service dprelay account release-keystore-password)"
+export READER_RELEASE_KEY_ALIAS="$(secret-tool lookup service dprelay account release-keystore-alias)"
+export READER_RELEASE_KEY_PASSWORD="$READER_RELEASE_STORE_PASSWORD"
+./gradlew assembleRelease   # -> app/build/outputs/apk/release/app-release.apk (SIGNED)
+shred -u "$KS"
+```
+
+The signing certificate's **SHA-1 must stay registered on the Firebase
+Android API key** (`androidKeyRestrictions`, alongside the debug-keystore
+SHA-1) — owner console step per ISSUE-49; rotate-then-register before
+changing keys.
+
 ## Server side
 
 - Route: `POST /v5/payments/ingest` (`server/src/routes/payments.ts`).
