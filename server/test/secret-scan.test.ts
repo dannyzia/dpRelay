@@ -22,10 +22,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 // fileURLToPath, not `.pathname`: the repo path contains a space, so the raw
 // pathname arrives percent-encoded and every fs call misses.
@@ -74,7 +74,7 @@ function scan(): { code: number; out: string } {
 }
 
 beforeAll(() => {
-  rig = mkdtempSync(join(tmpdir(), "dprelay-secret-scan-"));
+  rig = testTmpDir("dprelay-secret-scan-");
   mkdirSync(join(rig, "scripts"), { recursive: true });
   // Copy the live gate so these tests exercise the real scripts, not a copy
   // that can drift from them.

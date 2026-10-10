@@ -4,8 +4,6 @@
  * first request after an idle gap.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -19,11 +17,12 @@ import {
   type WatchdogAlert,
 } from "../src/jobs.js";
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-watch-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-watch-test-"), "test.db");
   return buildApp({
     dbPath,
     env: { JWT_SECRET: TEST_JWT_SECRET, ...extra },
@@ -195,7 +194,7 @@ describe("wake guard + boot sweep (R5)", () => {
   it("sweeps again on the first request after an idle gap ≥ threshold", async () => {
     // Shrink the idle threshold via the test hook: any request after 0s idle counts as a wake.
     const guardApp = buildApp({
-      dbPath: join(mkdtempSync(join(tmpdir(), "dprelay-watch-test-")), "t2.db"),
+      dbPath: join(testTmpDir("dprelay-watch-test-"), "t2.db"),
       env: { JWT_SECRET: TEST_JWT_SECRET },
       wakeIdleThresholdSec: 0,
     });

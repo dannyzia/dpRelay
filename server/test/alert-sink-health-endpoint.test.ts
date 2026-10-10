@@ -12,8 +12,6 @@
  * explicitly below, because it is the most tempting "simplification" available.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import {
@@ -24,6 +22,7 @@ import {
 } from "../src/jobs.js";
 import { loadConfig } from "../src/config.js";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 
@@ -37,7 +36,7 @@ const ALERT: WatchdogAlert = {
 };
 
 function makeApp(env: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-sinkhealth-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-sinkhealth-"), "test.db");
   return buildApp({ dbPath, env: { JWT_SECRET: TEST_JWT_SECRET, ...env } });
 }
 

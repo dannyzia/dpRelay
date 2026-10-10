@@ -11,11 +11,10 @@
  * spreadsheet-formula guarding.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "reports-test-jwt-0123456789abcdef0123456789abcdef";
 const OPERATOR = "reports-operator-secret-0123456789abcdef";
@@ -61,7 +60,7 @@ function op(method: "GET", url: string) {
 
 beforeEach(() => {
   app = buildApp({
-    dbPath: join(mkdtempSync(join(tmpdir(), "dprelay-reports-test-")), "test.db"),
+    dbPath: join(testTmpDir("dprelay-reports-test-"), "test.db"),
     env: { JWT_SECRET: TEST_JWT_SECRET, OPERATOR_SECRET: OPERATOR },
   });
 

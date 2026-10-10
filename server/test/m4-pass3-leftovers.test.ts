@@ -8,12 +8,11 @@
  * - GET /v5/admin/campaigns — cross-app campaign oversight listing.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "pass3-test-jwt-0123456789abcdef0123456789abcdef";
 const TEST_OPERATOR_SECRET = "pass3-op-secret-0123456789abcdef0123456789abcd";
@@ -25,7 +24,7 @@ const OP = { Authorization: `Bearer ${TEST_OPERATOR_SECRET}` };
 const PROV = { Authorization: `Bearer ${TEST_PROVISION_SECRET}` };
 
 function makeApp(extra: Record<string, string> = {}, omitOperator = false): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-pass3-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-pass3-test-"), "test.db");
   const env: Record<string, string> = {
     JWT_SECRET: TEST_JWT_SECRET,
     APP_PROVISIONING_SECRET: TEST_PROVISION_SECRET,

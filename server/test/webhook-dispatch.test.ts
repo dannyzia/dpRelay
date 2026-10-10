@@ -10,12 +10,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "webhook-test-jwt-0123456789abcdef0123456789abcdef";
 const TEST_ENROLLMENT_SECRET = "enroll-only-secret-0123456789abcdef0123456789ab";
@@ -26,7 +25,7 @@ const WEBHOOK_SECRET = "whsec-0123456789abcdef0123456789abcdef";
 const PHONE = "+8801712345678";
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-webhook-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-webhook-test-"), "test.db");
   return buildApp({
     dbPath,
     env: {

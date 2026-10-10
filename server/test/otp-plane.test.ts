@@ -6,12 +6,11 @@
  * succeed with the wake skipped.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "otp-test-jwt-secret-0123456789abcdef0123456789ab";
 const TEST_APP_ID = "app_test_1";
@@ -19,7 +18,7 @@ const TEST_APP_SECRET = "otp-test-app-secret-0123456789abcdef0123456789ab";
 const PHONE = "+8801712345678";
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-otp-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-otp-test-"), "test.db");
   return buildApp({
     dbPath,
     env: { JWT_SECRET: TEST_JWT_SECRET, ...extra },

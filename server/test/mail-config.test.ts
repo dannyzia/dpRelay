@@ -6,11 +6,10 @@
  * refused loopback port — no real network egress.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import type { FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const OPERATOR = "test-operator-secret-0123456789abcdef";
@@ -19,7 +18,7 @@ const SMTP_PASSWORD = "super-secret-smtp-password";
 let app: FastifyInstance;
 
 function makeApp(): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-mail-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-mail-test-"), "test.db");
   return buildApp({
     dbPath,
     env: { JWT_SECRET: TEST_JWT_SECRET, OPERATOR_SECRET: OPERATOR },

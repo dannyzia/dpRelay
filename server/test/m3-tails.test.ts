@@ -15,14 +15,14 @@
  * one per WEBHOOK_EXHAUSTION_DAMPING_SEC window; a success re-arms instantly.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "m3tails-jwt-0123456789abcdef0123456789abcdef";
 const TEST_APP_ID = "m3tails_app";
@@ -30,7 +30,7 @@ const TEST_APP_SECRET = "m3tails-app-secret-0123456789abcdef0123456789";
 const PHONE = "+8801712345678";
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-m3tails-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-m3tails-test-"), "test.db");
   return buildApp({ dbPath, env: { JWT_SECRET: TEST_JWT_SECRET, ...extra }, runBootSweep: false });
 }
 

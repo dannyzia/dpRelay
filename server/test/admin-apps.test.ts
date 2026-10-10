@@ -6,12 +6,11 @@
  * rotation (hash correctness + rotation stamp), and webhook URL updates.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "admin-test-jwt-0123456789abcdef0123456789abcdef";
 const TEST_OPERATOR_SECRET = "operator-test-secret-0123456789abcdef0123456789ab";
@@ -20,7 +19,7 @@ const SECRET_A = "admin-app-secret-a-0123456789abcdef0123456789ab";
 const OP = { Authorization: "Bearer " + TEST_OPERATOR_SECRET };
 
 function makeApp(extra: Record<string, string> = {}, omitOperator = false): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-admin-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-admin-test-"), "test.db");
   const env: Record<string, string> = { JWT_SECRET: TEST_JWT_SECRET, ...extra };
   if (!omitOperator) env.OPERATOR_SECRET = TEST_OPERATOR_SECRET;
   return buildApp({ dbPath, env });

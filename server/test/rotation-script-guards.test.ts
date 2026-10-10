@@ -33,11 +33,11 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import https from "node:https";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require_ = createRequire(import.meta.url);
@@ -70,7 +70,7 @@ function runCli(script: string, args: string[], extraEnv: Record<string, string>
 
 /** A key file the dry-run can read without touching Google or Render. */
 function writeFakeKey(): string {
-  const dir = mkdtempSync(join(tmpdir(), "dprelay-rotate-guard-"));
+  const dir = testTmpDir("dprelay-rotate-guard-");
   const file = join(dir, "service-account.json");
   writeFileSync(
     file,

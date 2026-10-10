@@ -6,11 +6,10 @@
  * Uses temp DBs, an injected env, and app.inject — no real network.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import type { FastifyInstance, InjectOptions } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 /** Deterministic test secret (32+ chars) — never a production value. */
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
@@ -19,7 +18,7 @@ const TEST_PROVISIONING_SECRET = "test-provisioning-secret-0123456789abcdef";
 let app: FastifyInstance;
 
 function makeApp(env: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-auth-session-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-auth-session-test-"), "test.db");
   return buildApp({
     dbPath,
     env: {

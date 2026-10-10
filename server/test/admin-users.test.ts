@@ -10,12 +10,11 @@
  * clears the reason.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "withhold-test-jwt-0123456789abcdef0123456789abcdef";
 const OPERATOR = "withhold-operator-secret-0123456789abcdef";
@@ -113,7 +112,7 @@ async function sendOtp(cred: Record<string, string>, phone: string) {
 
 beforeEach(async () => {
   app = buildApp({
-    dbPath: join(mkdtempSync(join(tmpdir(), "dprelay-withhold-test-")), "test.db"),
+    dbPath: join(testTmpDir("dprelay-withhold-test-"), "test.db"),
     env: { JWT_SECRET: TEST_JWT_SECRET, OPERATOR_SECRET: OPERATOR },
   });
 

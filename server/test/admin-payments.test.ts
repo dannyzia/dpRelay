@@ -15,12 +15,11 @@
  * - operator gate (requireOperator) on every route.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "payments-test-jwt-0123456789abcdef0123456789abcdef";
 const OPERATOR = "payments-operator-secret-0123456789abcdef";
@@ -103,7 +102,7 @@ function otpCredits(): number {
 
 beforeEach(() => {
   app = buildApp({
-    dbPath: join(mkdtempSync(join(tmpdir(), "dprelay-pay-test-")), "test.db"),
+    dbPath: join(testTmpDir("dprelay-pay-test-"), "test.db"),
     env: {
       JWT_SECRET: TEST_JWT_SECRET,
       OPERATOR_SECRET: OPERATOR,

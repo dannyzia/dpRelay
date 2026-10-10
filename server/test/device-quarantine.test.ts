@@ -12,13 +12,12 @@
  *   - a revoked device is never quarantined, and cannot be unquarantined.
  */
 import { describe, expect, it, beforeEach } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import { findStaleDevices, quarantineNeverSeenDevices, resetStaleAlertDedupe } from "../src/jobs.js";
 import { sha256Hex } from "../src/services/crypto.js";
 import type { FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const TEST_OPERATOR_SECRET = "operator-test-secret-0123456789abcdef0123456789ab";
@@ -26,7 +25,7 @@ const OP = { Authorization: "Bearer " + TEST_OPERATOR_SECRET };
 const DAY = 86_400;
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-quarantine-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-quarantine-"), "test.db");
   return buildApp({ dbPath, env: { JWT_SECRET: TEST_JWT_SECRET, OPERATOR_SECRET: TEST_OPERATOR_SECRET, ...extra } });
 }
 
