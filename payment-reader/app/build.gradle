@@ -28,11 +28,28 @@ android {
         buildConfig true
     }
 
+    // ISSUE-49: release builds are signed with the private dP Relay keystore.
+    // The keystore and its password live in the OS keyring (service `dprelay`,
+    // never this repo, never chat — ADR-016); a build wrapper materializes
+    // them into these four env vars. assembleRelease FAILS CLOSED when any is
+    // missing — no silent debug-signed or unsigned fallback — because the
+    // installed reader holds PAYMENT_READER_SECRET.
+    signingConfigs {
+        release {
+            def storePath = System.getenv("READER_RELEASE_STORE_FILE")
+            storeFile storePath ? file(storePath) : null
+            storePassword System.getenv("READER_RELEASE_STORE_PASSWORD") ?: null
+            keyAlias System.getenv("READER_RELEASE_KEY_ALIAS") ?: null
+            keyPassword System.getenv("READER_RELEASE_KEY_PASSWORD") ?: null
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             shrinkResources false
             debuggable false
+            signingConfig signingConfigs.release
         }
         debug {
             minifyEnabled false
@@ -56,6 +73,42 @@ android {
             // accidental framework calls from throwing).
             includeAndroidResources = true
             returnDefaultValues = true
+        }
+    }
+}
+
+// Fail-closed preflight (ISSUE-49): abort a release build early, naming the
+// missing VAR NAMES (never values) instead of failing deep inside AGP with a
+// cryptic signing error. Debug builds never hit this guard.
+tasks.configureEach { task ->
+    if (task.name == "assembleRelease" || task.name == "packageRelease") {
+        task.doFirst {
+            def required = [
+                "READER_RELEASE_STORE_FILE",
+                "READER_RELEASE_STORE_PASSWORD",
+                "READER_RELEASE_KEY_ALIAS",
+                "READER_RELEASE_KEY_PASSWORD",
+            ]
+            def missing = required.findAll { name ->
+                def value = System.getenv(name)
+                return value == null || value.isEmpty()
+            }
+            if (!missing.isEmpty()) {
+                throw new GradleException(
+                    "Release signing is fail-closed (ISSUE-49): missing env vars " +
+                        missing.join(", ") +
+                        ". Materialize them from the OS keyring (secret-tool, " +
+                        "service dprelay) per payment-reader/README.md — release " +
+                        "builds never fall back to debug or unsigned output."
+                )
+            }
+            if (!file(System.getenv("READER_RELEASE_STORE_FILE")).isFile()) {
+                throw new GradleException(
+                    "Release signing is fail-closed (ISSUE-49): " +
+                        "READER_RELEASE_STORE_FILE does not point at an existing " +
+                        "keystore file."
+                )
+            }
         }
     }
 }
