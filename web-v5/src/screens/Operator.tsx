@@ -1142,7 +1142,8 @@ export function PackagesView(props: {
         {props.packages.length === 0 ? (
           <p className="muted">No packages yet.</p>
         ) : (
-          <table>
+          <div className="table-scroll">
+            <table>
             <thead>
               <tr>
                 <th>Code</th>
@@ -1157,59 +1158,126 @@ export function PackagesView(props: {
               </tr>
             </thead>
             <tbody>
-              {props.packages.map((p) => (
-                <tr key={p.packageCode}>
-                  <td colSpan={9}>
-                    <form
-                      className="inline-actions"
-                      onSubmit={(e): void => {
-                        e.preventDefault();
-                        const data = new FormData(e.currentTarget);
-                        props.onPatch(p.packageCode, {
-                          name: String(data.get("name") ?? "").trim(),
-                          smsQuota: Number(data.get("smsQuota") ?? 0),
-                          priceBdt: Number(data.get("priceBdt") ?? 0),
-                          validityDays: Number(data.get("validityDays") ?? 0),
-                          type: String(data.get("type") ?? p.type),
-                          currency: String(data.get("currency") ?? p.currency),
-                        });
-                      }}
-                    >
-                      <span className="mono">{p.packageCode}</span>
-                      <input name="name" defaultValue={p.name} required maxLength={128} aria-label={`name-${p.packageCode}`} />
-                      <input name="smsQuota" type="number" min={1} defaultValue={p.smsQuota} aria-label={`quota-${p.packageCode}`} />
-                      <input name="priceBdt" type="number" min={0} defaultValue={p.priceBdt} aria-label={`price-${p.packageCode}`} />
-                      <select name="currency" defaultValue={p.currency} aria-label={`currency-${p.packageCode}`}>
+              {props.packages.map((p) => {
+                const formId = `pkg-edit-${p.packageCode}`;
+                return (
+                  <tr key={p.packageCode}>
+                    <td className="mono">{p.packageCode}</td>
+                    <td>
+                      <input
+                        form={formId}
+                        name="name"
+                        defaultValue={p.name}
+                        required
+                        maxLength={128}
+                        aria-label={`name-${p.packageCode}`}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        form={formId}
+                        name="smsQuota"
+                        type="number"
+                        min={1}
+                        defaultValue={p.smsQuota}
+                        aria-label={`quota-${p.packageCode}`}
+                        className="num-input"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        form={formId}
+                        name="priceBdt"
+                        type="number"
+                        min={0}
+                        defaultValue={p.priceBdt}
+                        aria-label={`price-${p.packageCode}`}
+                        className="num-input"
+                      />
+                    </td>
+                    <td>
+                      <select
+                        form={formId}
+                        name="currency"
+                        defaultValue={p.currency}
+                        aria-label={`currency-${p.packageCode}`}
+                      >
                         <option value="BDT">BDT</option>
                         <option value="USD">USD</option>
                         <option value="EUR">EUR</option>
                       </select>
-                      <input name="validityDays" type="number" min={1} defaultValue={p.validityDays} aria-label={`days-${p.packageCode}`} />
-                      <select name="type" defaultValue={p.type} aria-label={`type-${p.packageCode}`}>
+                    </td>
+                    <td>
+                      <input
+                        form={formId}
+                        name="validityDays"
+                        type="number"
+                        min={1}
+                        defaultValue={p.validityDays}
+                        aria-label={`days-${p.packageCode}`}
+                        className="num-input"
+                      />
+                    </td>
+                    <td>
+                      <select
+                        form={formId}
+                        name="type"
+                        defaultValue={p.type}
+                        aria-label={`type-${p.packageCode}`}
+                      >
                         <option value="otp">otp</option>
                         <option value="bulk">bulk</option>
                         <option value="both">both</option>
                       </select>
+                    </td>
+                    <td>
                       <span className={`chip ${p.isActive ? "approved" : "rejected"}`}>
                         {p.isActive ? "Active" : "Retired"}
                       </span>
-                      <button type="submit" disabled={props.busy}>
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className={p.isActive ? "danger" : "secondary"}
-                        onClick={(): void => props.onToggleActive(p)}
-                        disabled={props.busy}
+                    </td>
+                    <td>
+                      <form
+                        id={formId}
+                        className="inline-actions"
+                        onSubmit={(e): void => {
+                          e.preventDefault();
+                          const form = e.currentTarget;
+                          const data = new FormData(form);
+                          const getVal = (field: string): string => {
+                            const val = data.get(field);
+                            if (val !== null && val !== "") return String(val);
+                            const el = form.elements.namedItem(field) as HTMLInputElement | HTMLSelectElement | null;
+                            return el ? el.value : "";
+                          };
+                          props.onPatch(p.packageCode, {
+                            name: getVal("name").trim(),
+                            smsQuota: Number(getVal("smsQuota") || 0),
+                            priceBdt: Number(getVal("priceBdt") || 0),
+                            validityDays: Number(getVal("validityDays") || 0),
+                            type: getVal("type") || p.type,
+                            currency: getVal("currency") || p.currency,
+                          });
+                        }}
                       >
-                        {p.isActive ? "Retire" : "Reactivate"}
-                      </button>
-                    </form>
-                  </td>
-                </tr>
-              ))}
+                        <button type="submit" disabled={props.busy}>
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className={p.isActive ? "danger" : "secondary"}
+                          onClick={(): void => props.onToggleActive(p)}
+                          disabled={props.busy}
+                        >
+                          {p.isActive ? "Retire" : "Reactivate"}
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+          </div>
         )}
       </section>
     </>
