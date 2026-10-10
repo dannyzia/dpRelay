@@ -107,8 +107,9 @@ export function BulkView(props: BulkViewProps): JSX.Element {
           if (file !== undefined) props.onFileChosen(file);
         }}
       >
-        <label>
+        <label htmlFor="bulkFile">
           <input
+            id="bulkFile"
             type="file"
             accept=".csv,.xlsx,.xls,text/csv"
             data-testid="bulk-file-input"

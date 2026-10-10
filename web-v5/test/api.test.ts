@@ -5,7 +5,6 @@ import {
   connectApp,
   disconnectApp,
   getConnectedApp,
-  listPackages,
   request,
   setAppUnauthorizedHandler,
 } from "../src/api";
@@ -97,7 +96,10 @@ describe("appFetch (app plane)", () => {
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => jsonRes({ ok: true, packages: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await listPackages();
+    // STAGE F9: listPackages moved to the session plane (the catalog route is
+    // public server-side); appFetch itself is still the app-plane transport —
+    // exercise it directly.
+    await appFetch("/v5/billing/packages");
     const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
     expect(headers["X-App-Id"]).toBe("demo-app");
     expect(headers["X-App-Secret"]).toBe("demo-secret");

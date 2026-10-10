@@ -1,0 +1,26 @@
+// Top-level build file — STAGE F8 (ISSUE-90): the dedicated Payment Reader app.
+// Deliberately smaller than the gateway's: no Google Services / Firebase
+// classpath, because the reader has exactly one purpose (read bKash/Nagad
+// payment SMS and upload the parsed fields) — no FCM, no OTP, no crashlytics.
+buildscript {
+    ext.kotlin_version = '1.9.0'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

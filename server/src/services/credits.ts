@@ -29,7 +29,16 @@ export const UNIT_PRICE_BDT = 0.2;
 /** Snapshot row the award reads (fetched while the transaction was pending). */
 export interface AwardableTransaction {
   id: string;
-  app_id: string;
+  app_id: string | null;
+  /**
+   * STAGE F9 (ISSUE-88): user-wallet attribution. When set, the award lands
+   * in that user's user_credits wallet instead of app_credits — the
+   * session-authenticated purchase path attributes buys to the USER (and the
+   * app-auth path does the same for company-backed apps, whose spends already
+   * draw from the wallet). Exactly one of app_id / user_id is non-null — the
+   * XOR CHECK on credit_transactions makes that a database invariant.
+   */
+  user_id?: string | null;
   sms_quota: number;
   validity_days: number;
   package_type: string;
@@ -57,27 +66,56 @@ export function awardPendingTransaction(db: Db, trx: AwardableTransaction): bool
     .run(trx.id);
   if (claimed.changes !== 1) return false;
 
+  // STAGE F9 (ISSUE-88): target table is chosen by attribution — user_id set
+  // means the wallet (user_credits), otherwise the legacy app bucket. Same
+  // expiry-extension rule (MAX of current and new expiry) on both planes.
+  const wallet = typeof trx.user_id === "string" && trx.user_id.length > 0;
+  const keyVal = wallet ? trx.user_id : trx.app_id;
   if (trx.package_type === "otp" || trx.package_type === "both") {
-    db.prepare(
-      "INSERT INTO app_credits (app_id, otp_sms_remaining, otp_expires_at, last_transaction_id, purchased_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
-        "ON CONFLICT(app_id) DO UPDATE SET " +
-        "otp_sms_remaining = otp_sms_remaining + excluded.otp_sms_remaining, " +
-        "otp_expires_at = MAX(COALESCE(otp_expires_at, 0), excluded.otp_expires_at), " +
-        "last_transaction_id = excluded.last_transaction_id, " +
-        "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
-    ).run(trx.app_id, trx.sms_quota, newExpiry, trx.id);
+    if (wallet) {
+      db.prepare(
+        "INSERT INTO user_credits (user_id, otp_sms_remaining, otp_expires_at, last_transaction_id, purchased_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
+          "ON CONFLICT(user_id) DO UPDATE SET " +
+          "otp_sms_remaining = otp_sms_remaining + excluded.otp_sms_remaining, " +
+          "otp_expires_at = MAX(COALESCE(otp_expires_at, 0), excluded.otp_expires_at), " +
+          "last_transaction_id = excluded.last_transaction_id, " +
+          "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
+      ).run(keyVal, trx.sms_quota, newExpiry, trx.id);
+    } else {
+      db.prepare(
+        "INSERT INTO app_credits (app_id, otp_sms_remaining, otp_expires_at, last_transaction_id, purchased_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
+          "ON CONFLICT(app_id) DO UPDATE SET " +
+          "otp_sms_remaining = otp_sms_remaining + excluded.otp_sms_remaining, " +
+          "otp_expires_at = MAX(COALESCE(otp_expires_at, 0), excluded.otp_expires_at), " +
+          "last_transaction_id = excluded.last_transaction_id, " +
+          "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
+      ).run(keyVal, trx.sms_quota, newExpiry, trx.id);
+    }
   }
   if (trx.package_type === "bulk" || trx.package_type === "both") {
-    db.prepare(
-      "INSERT INTO app_credits (app_id, bulk_sms_remaining, bulk_expires_at, last_transaction_id, purchased_at, updated_at) " +
-        "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
-        "ON CONFLICT(app_id) DO UPDATE SET " +
-        "bulk_sms_remaining = bulk_sms_remaining + excluded.bulk_sms_remaining, " +
-        "bulk_expires_at = MAX(COALESCE(bulk_expires_at, 0), excluded.bulk_expires_at), " +
-        "last_transaction_id = excluded.last_transaction_id, " +
-        "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
-    ).run(trx.app_id, trx.sms_quota, newExpiry, trx.id);
+    if (wallet) {
+      db.prepare(
+        "INSERT INTO user_credits (user_id, bulk_sms_remaining, bulk_expires_at, last_transaction_id, purchased_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
+          "ON CONFLICT(user_id) DO UPDATE SET " +
+          "bulk_sms_remaining = bulk_sms_remaining + excluded.bulk_sms_remaining, " +
+          "bulk_expires_at = MAX(COALESCE(bulk_expires_at, 0), excluded.bulk_expires_at), " +
+          "last_transaction_id = excluded.last_transaction_id, " +
+          "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
+      ).run(keyVal, trx.sms_quota, newExpiry, trx.id);
+    } else {
+      db.prepare(
+        "INSERT INTO app_credits (app_id, bulk_sms_remaining, bulk_expires_at, last_transaction_id, purchased_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, unixepoch(), unixepoch()) " +
+          "ON CONFLICT(app_id) DO UPDATE SET " +
+          "bulk_sms_remaining = bulk_sms_remaining + excluded.bulk_sms_remaining, " +
+          "bulk_expires_at = MAX(COALESCE(bulk_expires_at, 0), excluded.bulk_expires_at), " +
+          "last_transaction_id = excluded.last_transaction_id, " +
+          "purchased_at = excluded.purchased_at, updated_at = excluded.updated_at",
+      ).run(keyVal, trx.sms_quota, newExpiry, trx.id);
+    }
   }
   return true;
 }

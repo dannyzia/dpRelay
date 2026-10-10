@@ -44,6 +44,8 @@ interface PaymentRow {
   id: string;
   sender: string;
   provider: string;
+  /** STAGE F8 (ISSUE-90): ingest path — 'gateway' (OTP phone) | 'reader' (Payment Reader APK). */
+  source: string;
   txn_id: string;
   amount_paisa: number;
   received_at: number;
@@ -60,6 +62,8 @@ interface PendingTxn {
   id: string;
   app_id: string;
   package_code: string;
+  /** F5 amendment (ISSUE-89): the package's price currency (join on package_id). */
+  currency: string;
   amount_bdt: number;
   requested_at: number;
   trx_id: string | null;
@@ -114,8 +118,16 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
    * committed elsewhere would 409 at attach time, so it is not actionable),
    * the amount is within tolerance (default 0 = exact), and the SMS arrived
    * within the window of the request.
+   *
+   * F5 amendment (ISSUE-89): CURRENCY-AWARE — only BDT-package transactions
+   * are auto-match candidates. USD/EUR packages are paid via the remittance
+   * rails as bKash BDT-equivalents, so amount/time arithmetic can never
+   * prove they bought THAT package: they are MANUAL operator approvals by
+   * design (approve with a remittance reference note) and must never be
+   * auto-matched or auto-attached.
    */
   function isCandidate(p: { txnId: string; amountPaisa: number; receivedAt: number }, t: PendingTxn, cfg: MatchConfig): boolean {
+    if (t.currency !== "BDT") return false;
     if (t.trx_id !== null) return false;
     if (Math.abs(t.amount_bdt * 100 - p.amountPaisa) > cfg.toleranceBdt * 100) return false;
     return Math.abs(p.receivedAt - t.requested_at) <= cfg.windowSec;
@@ -156,13 +168,14 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
     }
     const trx = db
       .prepare(
-        "SELECT id, app_id, sms_quota, validity_days, package_type, status, amount_bdt, requested_at, trx_id " +
+        "SELECT id, app_id, user_id, sms_quota, validity_days, package_type, status, amount_bdt, requested_at, trx_id " +
           "FROM credit_transactions WHERE id = ?",
       )
       .get(transactionId) as
       | {
           id: string;
-          app_id: string;
+          app_id: string | null;
+          user_id: string | null;
           sms_quota: number;
           validity_days: number;
           package_type: string;
@@ -212,9 +225,16 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
     db.prepare(
       "UPDATE payment_sms SET review_state = 'approved', review_reason = NULL, reviewed_at = unixepoch() WHERE id = ?",
     ).run(payment.id);
-    const credits = db
-      .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits WHERE app_id = ?")
-      .get(trx.app_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined;
+    // STAGE F9 (ISSUE-88): the reported balance must be the plane the award
+    // actually landed on — user wallet or app bucket, by attribution.
+    const credits =
+      trx.user_id !== null
+        ? (db
+            .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM user_credits WHERE user_id = ?")
+            .get(trx.user_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined)
+        : (db
+            .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM app_credits WHERE app_id = ?")
+            .get(trx.app_id) as { otp_sms_remaining: number; bulk_sms_remaining: number } | undefined);
     app.log.info({ paymentId: payment.id, transactionId, txnId: payment.txn_id }, "payment attached + credits awarded");
     return {
       ok: true,
@@ -284,7 +304,7 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
 
     const rows = db
       .prepare(
-        "SELECT ps.id, ps.sender, ps.provider, ps.txn_id, ps.amount_paisa, ps.received_at, ps.created_at, " +
+        "SELECT ps.id, ps.sender, ps.provider, ps.source, ps.txn_id, ps.amount_paisa, ps.received_at, ps.created_at, " +
           "ps.review_state, ps.review_reason, " +
           "ct.id AS matched_id, ct.status AS matched_status, ct.app_id AS matched_app_id, " +
           "ct.admin_notes AS matched_notes " +
@@ -296,8 +316,9 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
 
     const pending = db
       .prepare(
-        "SELECT id, app_id, package_code, amount_bdt, requested_at, trx_id FROM credit_transactions " +
-          "WHERE status = 'pending' ORDER BY requested_at ASC",
+        "SELECT t.id, t.app_id, t.package_code, p.currency, t.amount_bdt, t.requested_at, t.trx_id " +
+          "FROM credit_transactions t JOIN packages p ON p.id = t.package_id " +
+          "WHERE t.status = 'pending' ORDER BY t.requested_at ASC",
       )
       .all() as PendingTxn[];
 
@@ -313,6 +334,7 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
           id: r.id,
           sender: r.sender,
           provider: r.provider,
+          source: r.source,
           txnId: r.txn_id,
           amountBdt: r.amount_paisa / 100,
           receivedAt: r.received_at,
@@ -391,8 +413,9 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
     } else {
       const pending = db
         .prepare(
-          "SELECT id, app_id, package_code, amount_bdt, requested_at, trx_id FROM credit_transactions " +
-            "WHERE status = 'pending' ORDER BY requested_at ASC",
+          "SELECT t.id, t.app_id, t.package_code, p.currency, t.amount_bdt, t.requested_at, t.trx_id " +
+            "FROM credit_transactions t JOIN packages p ON p.id = t.package_id " +
+            "WHERE t.status = 'pending' ORDER BY t.requested_at ASC",
         )
         .all() as PendingTxn[];
       const base = { txnId: payment.txn_id, amountPaisa: payment.amount_paisa, receivedAt: payment.received_at };

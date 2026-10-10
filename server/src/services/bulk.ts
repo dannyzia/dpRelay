@@ -16,6 +16,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { newId, sha256Hex } from "./crypto.js";
+import { resolveWalletOwner } from "./wallet.js";
 
 /** GSM 03.38 basic charset — v4 parity (functions/src/bulk/bulkHelpers.js). */
 const GSM_7BIT_CHARSET = new Set([
@@ -175,17 +176,35 @@ export function reserveBulkCredits(
 ): CreditError | null {
   const nowSec = Math.floor(Date.now() / 1000);
   const reserve = app.db.transaction((): CreditError | null => {
-    const row = app.db
-      .prepare("SELECT bulk_sms_remaining, bulk_expires_at FROM app_credits WHERE app_id = ?")
-      .get(appRowId) as { bulk_sms_remaining: number; bulk_expires_at: number | null } | undefined;
+    // STAGE F9 (ISSUE-88) dual-path: resolution runs INSIDE the transaction —
+    // the same bucket is checked and deducted, so concurrent reservations
+    // cannot overspend either plane. Wallet apps hit user_credits; operator-
+    // legacy apps keep hitting app_credits exactly as before.
+    const owner = resolveWalletOwner(app.db, appRowId);
+    const row =
+      owner === null
+        ? (app.db
+            .prepare("SELECT bulk_sms_remaining, bulk_expires_at FROM app_credits WHERE app_id = ?")
+            .get(appRowId) as { bulk_sms_remaining: number; bulk_expires_at: number | null } | undefined)
+        : (app.db
+            .prepare("SELECT bulk_sms_remaining, bulk_expires_at FROM user_credits WHERE user_id = ?")
+            .get(owner) as { bulk_sms_remaining: number; bulk_expires_at: number | null } | undefined);
     if (!row) return "no_credits_row";
     if (row.bulk_expires_at !== null && row.bulk_expires_at <= nowSec) return "credits_expired";
     if (row.bulk_sms_remaining < count) return "insufficient_bulk_credits";
-    app.db
-      .prepare(
-        "UPDATE app_credits SET bulk_sms_remaining = bulk_sms_remaining - ?, updated_at = ? WHERE app_id = ?",
-      )
-      .run(count, nowSec, appRowId);
+    if (owner === null) {
+      app.db
+        .prepare(
+          "UPDATE app_credits SET bulk_sms_remaining = bulk_sms_remaining - ?, updated_at = ? WHERE app_id = ?",
+        )
+        .run(count, nowSec, appRowId);
+    } else {
+      app.db
+        .prepare(
+          "UPDATE user_credits SET bulk_sms_remaining = bulk_sms_remaining - ?, updated_at = ? WHERE user_id = ?",
+        )
+        .run(count, nowSec, owner);
+    }
     return null;
   });
   return reserve();
@@ -198,27 +217,57 @@ export function deductBulkCredits(
   count: number,
 ): CreditError | null {
   const deduct = app.db.transaction((): CreditError | null => {
-    const row = app.db
-      .prepare("SELECT bulk_sms_remaining FROM app_credits WHERE app_id = ?")
-      .get(appRowId) as { bulk_sms_remaining: number } | undefined;
+    // STAGE F9 (ISSUE-88): same dual-path rule as reserve — check and deduct
+    // inside one transaction, wallet first when the app resolves to an owner.
+    const owner = resolveWalletOwner(app.db, appRowId);
+    const row =
+      owner === null
+        ? (app.db.prepare("SELECT bulk_sms_remaining FROM app_credits WHERE app_id = ?").get(appRowId) as
+            | { bulk_sms_remaining: number }
+            | undefined)
+        : (app.db.prepare("SELECT bulk_sms_remaining FROM user_credits WHERE user_id = ?").get(owner) as
+            | { bulk_sms_remaining: number }
+            | undefined);
     if (!row || row.bulk_sms_remaining < count) return "insufficient_bulk_credits";
-    app.db
-      .prepare("UPDATE app_credits SET bulk_sms_remaining = bulk_sms_remaining - ?, updated_at = ? WHERE app_id = ?")
-      .run(count, Math.floor(Date.now() / 1000), appRowId);
+    if (owner === null) {
+      app.db
+        .prepare("UPDATE app_credits SET bulk_sms_remaining = bulk_sms_remaining - ?, updated_at = ? WHERE app_id = ?")
+        .run(count, Math.floor(Date.now() / 1000), appRowId);
+    } else {
+      app.db
+        .prepare("UPDATE user_credits SET bulk_sms_remaining = bulk_sms_remaining - ?, updated_at = ? WHERE user_id = ?")
+        .run(count, Math.floor(Date.now() / 1000), owner);
+    }
     return null;
   });
   return deduct();
 }
 
-/** Returns `count` bulk credits (cancellation refund). Creates the row if absent. */
+/**
+ * Returns `count` bulk credits (cancellation refund). Creates the row if
+ * absent. STAGE F9 (ISSUE-88): refunds land in the SAME wallet the deduct
+ * left — resolution is derived from the app row, so money never migrates
+ * planes mid-flight.
+ */
 export function refundBulkCredits(app: FastifyInstance, appRowId: string, count: number): void {
+  const owner = resolveWalletOwner(app.db, appRowId);
+  if (owner === null) {
+    app.db
+      .prepare(
+        "INSERT INTO app_credits (app_id, bulk_sms_remaining, updated_at) VALUES (?, ?, unixepoch()) " +
+          "ON CONFLICT(app_id) DO UPDATE SET " +
+          "bulk_sms_remaining = bulk_sms_remaining + excluded.bulk_sms_remaining, updated_at = excluded.updated_at",
+      )
+      .run(appRowId, count);
+    return;
+  }
   app.db
     .prepare(
-      "INSERT INTO app_credits (app_id, bulk_sms_remaining, updated_at) VALUES (?, ?, unixepoch()) " +
-        "ON CONFLICT(app_id) DO UPDATE SET " +
+      "INSERT INTO user_credits (user_id, bulk_sms_remaining, updated_at) VALUES (?, ?, unixepoch()) " +
+        "ON CONFLICT(user_id) DO UPDATE SET " +
         "bulk_sms_remaining = bulk_sms_remaining + excluded.bulk_sms_remaining, updated_at = excluded.updated_at",
     )
-    .run(appRowId, count);
+    .run(owner, count);
 }
 
 interface RecipientResolution {

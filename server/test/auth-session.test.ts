@@ -220,7 +220,7 @@ describe("POST /v5/auth/logout", () => {
 });
 
 describe("POST/GET /v5/auth/apps (self-serve registration)", () => {
-  it("mints owned app credentials, applies the trial grant atomically, never re-serves secrets", async () => {
+  it("mints company-backed credentials, applies the trial to the USER wallet once, never re-serves secrets", async () => {
     const cookie = await registerUser("app-owner@example.com");
     const res = await app.inject(
       authed(cookie, { method: "POST", url: "/v5/auth/apps", payload: { name: "My Shop" } }),
@@ -233,40 +233,69 @@ describe("POST/GET /v5/auth/apps (self-serve registration)", () => {
     expect(body.name).toBe("My Shop");
     expect(body.trial).toMatchObject({ otpSms: 7, bulkSms: 7 });
 
+    // STAGE F9 (ISSUE-88): the app is company-backed (1:1), owned, and the
+    // trial landed in the USER wallet — there is NO app_credits row for it.
     const row = app.db
       .prepare(
-        "SELECT a.owner_user_id, a.app_secret_hash, c.otp_sms_remaining, c.bulk_sms_remaining, " +
-          "c.otp_expires_at, c.bulk_expires_at FROM apps a JOIN app_credits c ON c.app_id = a.id " +
-          "WHERE a.app_id = ?",
+        "SELECT a.owner_user_id, a.app_secret_hash, a.company_id, (SELECT COUNT(*) FROM app_credits c WHERE c.app_id = a.id) AS app_credit_rows " +
+          "FROM apps a WHERE a.app_id = ?",
       )
       .get(body.appId) as {
       owner_user_id: string;
       app_secret_hash: string;
-      otp_sms_remaining: number;
-      bulk_sms_remaining: number;
-      otp_expires_at: number;
-      bulk_expires_at: number;
+      company_id: string;
+      app_credit_rows: number;
     };
     const user = app.db.prepare("SELECT id FROM users WHERE email = ?").get("app-owner@example.com") as {
       id: string;
     };
     expect(row.owner_user_id).toBe(user.id);
+    expect(row.company_id).toBeTruthy();
     expect(row.app_secret_hash).not.toContain(body.appSecret);
-    expect(row.otp_sms_remaining).toBe(7);
-    expect(row.bulk_sms_remaining).toBe(7);
+    expect(row.app_credit_rows).toBe(0);
+
+    const wallet = app.db
+      .prepare(
+        "SELECT otp_sms_remaining, bulk_sms_remaining, otp_expires_at, bulk_expires_at, " +
+          "trial_sms_granted, trial_granted_at FROM user_credits WHERE user_id = ?",
+      )
+      .get(user.id) as {
+      otp_sms_remaining: number;
+      bulk_sms_remaining: number;
+      otp_expires_at: number;
+      bulk_expires_at: number;
+      trial_sms_granted: number;
+      trial_granted_at: number;
+    };
+    expect(wallet.otp_sms_remaining).toBe(7);
+    expect(wallet.bulk_sms_remaining).toBe(7);
+    expect(wallet.trial_sms_granted).toBe(7);
+    expect(wallet.trial_granted_at).toBeGreaterThan(0);
     const expectedExpiry = Math.floor(Date.now() / 1000) + 14 * 24 * 60 * 60;
-    expect(Math.abs(row.otp_expires_at - expectedExpiry)).toBeLessThanOrEqual(5);
-    expect(row.bulk_expires_at).toBe(row.otp_expires_at);
+    expect(Math.abs(wallet.otp_expires_at - expectedExpiry)).toBeLessThanOrEqual(5);
+    expect(wallet.bulk_expires_at).toBe(wallet.otp_expires_at);
+
+    // STAGE F9: trial is once per USER — a second self-serve app must NOT
+    // re-grant (N companies must not yield N×trial free SMS).
+    const second = await app.inject(
+      authed(cookie, { method: "POST", url: "/v5/auth/apps", payload: { name: "Second Shop" } }),
+    );
+    expect(second.statusCode).toBe(201);
+    expect(second.json().trial).toBeNull();
+    const walletAfter = app.db
+      .prepare("SELECT otp_sms_remaining, bulk_sms_remaining FROM user_credits WHERE user_id = ?")
+      .get(user.id) as { otp_sms_remaining: number; bulk_sms_remaining: number };
+    expect(walletAfter.otp_sms_remaining).toBe(7);
+    expect(walletAfter.bulk_sms_remaining).toBe(7);
 
     // Secrets ONCE: the owned-apps list carries no credential material at all.
     const list = await app.inject(authed(cookie, { url: "/v5/auth/apps" }));
     expect(list.statusCode).toBe(200);
-    expect(list.json().apps).toEqual([
-      { appId: body.appId, name: "My Shop", revoked: false, createdAt: expect.any(Number) },
-    ]);
+    expect(list.json().apps).toHaveLength(2);
     expect(JSON.stringify(list.json())).not.toContain(body.appSecret);
 
-    // The minted credentials are LIVE on the app plane (requireApp accepts them).
+    // The minted credentials are LIVE on the app plane and report the WALLET
+    // (F9 dual-path: the balance this app's sends actually draw from).
     const credits = await app.inject({
       method: "GET",
       url: "/v5/billing/credits",
@@ -274,6 +303,11 @@ describe("POST/GET /v5/auth/apps (self-serve registration)", () => {
     });
     expect(credits.statusCode).toBe(200);
     expect(credits.json().credits.otpSmsRemaining).toBe(7);
+
+    // …and the session wallet endpoint reports the same single balance.
+    const walletView = await app.inject(authed(cookie, { url: "/v5/auth/wallet" }));
+    expect(walletView.statusCode).toBe(200);
+    expect(walletView.json().wallet).toMatchObject({ otpSmsRemaining: 7, bulkSmsRemaining: 7 });
   });
 
   it("requires a session", async () => {

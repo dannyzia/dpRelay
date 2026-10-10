@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  STAGE F8 (ISSUE-90): permissions are DELIBERATELY minimal — RECEIVE_SMS +
+  INTERNET only. No contacts, no location, no SEND_SMS, no FCM: the reader has
+  exactly one purpose (read bKash/Nagad payment SMS on the money phone and
+  upload the parsed fields to POST /v5/payments/ingest).
+
+  The SMS receiver is exported with BROADCAST_SMS protection — SMS_RECEIVED is
+  a protected system broadcast, so only the telephony stack can deliver it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- RECEIVE_SMS implies telephony hardware; declaring the feature
+         explicitly satisfies the PermissionImpliesUnsupportedChromeOsHardware
+         lint gate. required=false: a device without a radio still installs the
+         app, which then simply receives no SMS (graceful degradation). -->
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.PaymentReader">
+
+        <!-- Onboarding: server URL (pre-filled production) + PAYMENT_READER_SECRET. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".PaymentSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

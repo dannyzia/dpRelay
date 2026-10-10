@@ -1,0 +1,74 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jlleitschuh.gradle.ktlint' version '11.6.1'
+}
+
+apply from: '../ktlint.gradle'
+
+android {
+    namespace 'com.digitalpapyrus.dprelay.reader'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.digitalpapyrus.dprelay.reader"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+
+        // Non-secret default endpoint (docs/Plan/11-ENV-VARS.md public-client
+        // rules): the production server URL, so onboarding is pre-filled. The
+        // operator can re-point the app at staging from the onboarding screen
+        // without a recompile — the stored value always wins over this default.
+        buildConfigField "String", "DEFAULT_SERVER_URL", "\"https://dprelay-api-hug8.onrender.com\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            debuggable false
+        }
+        debug {
+            minifyEnabled false
+            debuggable true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    testOptions {
+        unitTests {
+            // Unit tests run on the JVM: pure-Kotlin parser/queue logic only,
+            // no Android framework mocking needed (returnDefaultValues keeps
+            // accidental framework calls from throwing).
+            includeAndroidResources = true
+            returnDefaultValues = true
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    // Offline queue with backoff (AC: unsent items persist locally and retry)
+    // — same artifact the gateway already ships.
+    implementation 'androidx.work:work-runtime-ktx:2.9.0'
+    // EncryptedSharedPreferences for PAYMENT_READER_SECRET (AC; same artifact
+    // the gateway uses for its secrets — ADR-016: never BuildConfig).
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+
+    testImplementation 'junit:junit:4.13.2'
+}

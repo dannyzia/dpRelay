@@ -70,6 +70,78 @@
         }
       }
     },
+    "/v5/auth/companies": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/auth/companies/{id}": {
+      "patch": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/auth/companies/{id}/disable": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/auth/wallet": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/auth/wallet/transactions": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/auth/apps/link": {
       "post": {
         "responses": {
@@ -1037,6 +1109,15 @@
         }
       }
     },
+    "/v5/payments/ingest": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/admin/config/{key}": {
       "get": {
         "parameters": [
@@ -1129,6 +1210,15 @@
         }
       }
     },
+    "/v5/admin/reports/packages": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/admin/reports/sends": {
       "get": {
         "responses": {
@@ -1179,6 +1269,10 @@
     {
       "name": "admin",
       "description": "Operator-gated management plane (OPERATOR_SECRET)"
+    },
+    {
+      "name": "payments",
+      "description": "Payment Reader APK ingest (PAYMENT_READER_SECRET)"
     }
   ]
 }

@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import {
   describeError,
   listPackages,
-  requestCredits,
-  submitTrx,
+  requestWalletCredits,
+  submitWalletTrx,
   type CreditPackage,
   type CreditRequestAccepted,
 } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
-import { formatBdt } from "../format";
+import { formatPrice } from "../lib/format";
 
 /** Pure package list — exported for render tests. */
 export function PackageListView(props: {
@@ -20,6 +20,10 @@ export function PackageListView(props: {
       <h1>
         Buy credits <span className="muted">— pay with bKash</span>
       </h1>
+      <p className="muted">
+        Purchases top up your <strong>wallet</strong> — the one balance every company you own
+        sends from.
+      </p>
       <p className="muted">
         Sending money from abroad? See the <a href="#/payment">payment guide</a> (TapTap Send,
         Remitly, Wise, Western Union, WorldRemit).
@@ -37,7 +41,7 @@ export function PackageListView(props: {
               </div>
             </div>
             <div className="inline-actions">
-              <span className="price">{formatBdt(pkg.priceBdt)}</span>
+              <span className="price">{formatPrice(pkg.priceBdt, pkg.currency)}</span>
               <button type="button" onClick={(): void => props.onBuy(pkg)}>
                 Buy
               </button>
@@ -57,6 +61,8 @@ export function CheckoutView(props: {
   request: CreditRequestAccepted;
   note: string | null;
   error: string | null;
+  /** ISSUE-89: selected package's price currency; defaults to BDT when unknown. */
+  currency?: string;
   onSubmitTrx: (trxId: string) => void;
   onBack: () => void;
 }): JSX.Element {
@@ -64,7 +70,7 @@ export function CheckoutView(props: {
     <div className="callout" data-testid="checkout">
       <h2>Pay with bKash</h2>
       <p>
-        Send <span className="big">{formatBdt(props.request.amountBdt)}</span> (
+        Send <span className="big">{formatPrice(props.request.amountBdt, props.currency ?? "BDT")}</span> (
         {props.request.bkashNote}) to{" "}
         <span className="big mono">{props.request.bkashNumber}</span>
       </p>
@@ -83,7 +89,7 @@ export function CheckoutView(props: {
       >
         <label htmlFor="trxId">bKash TrxID</label>
         <input id="trxId" name="trxId" required spellCheck={false} placeholder="e.g. 9F2K7QX1M" />
-        <div className="inline-actions" style={{ marginTop: 14 }}>
+        <div className="inline-actions mt-14">
           <button type="submit">Submit TrxID</button>
           <button type="button" className="secondary" onClick={props.onBack}>
             Back to packages
@@ -98,6 +104,9 @@ export function CheckoutView(props: {
 export function BuyCredits(): JSX.Element {
   const [packages, setPackages] = useState<CreditPackage[] | null>(null);
   const [checkout, setCheckout] = useState<CreditRequestAccepted | null>(null);
+  // ISSUE-89: the checkout amount only makes sense next to its currency —
+  // the request response does not carry one, so the selected package does.
+  const [checkoutCurrency, setCheckoutCurrency] = useState<string>("BDT");
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,10 +116,13 @@ export function BuyCredits(): JSX.Element {
       .catch((err: unknown) => setError(describeError(err)));
   }, []);
 
+  // STAGE F9 (ISSUE-88): the buy flow is SESSION-authenticated — the
+  // purchase lands on the user wallet, no connected app required.
   const buy = (pkg: CreditPackage): void => {
     setError(null);
     setNote(null);
-    requestCredits(pkg.packageCode)
+    setCheckoutCurrency(pkg.currency);
+    requestWalletCredits(pkg.packageCode)
       .then((accepted) => setCheckout(accepted))
       .catch((err: unknown) => setError(describeError(err)));
   };
@@ -118,7 +130,7 @@ export function BuyCredits(): JSX.Element {
   const submitTrxId = (trxId: string): void => {
     if (checkout === null) return;
     setError(null);
-    submitTrx(checkout.transactionId, trxId)
+    submitWalletTrx(checkout.transactionId, trxId)
       .then((message) => setNote(message))
       .catch((err: unknown) => setError(describeError(err)));
   };
@@ -134,6 +146,7 @@ export function BuyCredits(): JSX.Element {
           request={checkout}
           note={note}
           error={error}
+          currency={checkoutCurrency}
           onSubmitTrx={submitTrxId}
           onBack={(): void => {
             setCheckout(null);

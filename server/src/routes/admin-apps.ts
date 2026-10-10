@@ -41,6 +41,9 @@ interface AdminAppRow {
   rate_window_sec: number;
   created_at: number;
   revoked_at: number | null;
+  /** STAGE F9 (ISSUE-88): backing company (NULL = operator-provisioned legacy). */
+  company_id: string | null;
+  company_name: string | null;
 }
 
 function publicApp(row: AdminAppRow) {
@@ -53,6 +56,9 @@ function publicApp(row: AdminAppRow) {
     rateWindowSec: row.rate_window_sec,
     createdAt: row.created_at,
     revokedAt: row.revoked_at,
+    // STAGE F9: the operator apps list gains a company column — additive to
+    // the projection; legacy apps report null (no company).
+    company: row.company_id !== null ? { id: row.company_id, name: row.company_name } : null,
   };
 }
 
@@ -196,9 +202,11 @@ const adminAppRoutes: FastifyPluginAsync = async (app) => {
 
     const rows = db
       .prepare(
-        "SELECT id, app_id, name, webhook_url, rate_max_per_phone, rate_window_sec, created_at, revoked_at " +
-          "FROM apps WHERE (? IS NULL OR created_at < ? OR (created_at = ? AND id > ?)) " +
-          "ORDER BY created_at DESC, id ASC LIMIT ?",
+        "SELECT a.id, a.app_id, a.name, a.webhook_url, a.rate_max_per_phone, a.rate_window_sec, " +
+          "a.created_at, a.revoked_at, a.company_id, c.name AS company_name " +
+          "FROM apps a LEFT JOIN companies c ON c.id = a.company_id " +
+          "WHERE (? IS NULL OR a.created_at < ? OR (a.created_at = ? AND a.id > ?)) " +
+          "ORDER BY a.created_at DESC, a.id ASC LIMIT ?",
       )
       .all(cursorAt, cursorAt, cursorAt, cursorId, limit + 1) as AdminAppRow[];
     const hasMore = rows.length > limit;
@@ -217,8 +225,9 @@ const adminAppRoutes: FastifyPluginAsync = async (app) => {
     return (
       (db
         .prepare(
-          "SELECT id, app_id, name, webhook_url, rate_max_per_phone, rate_window_sec, created_at, revoked_at " +
-            "FROM apps WHERE id = ?",
+          "SELECT a.id, a.app_id, a.name, a.webhook_url, a.rate_max_per_phone, a.rate_window_sec, " +
+            "a.created_at, a.revoked_at, a.company_id, c.name AS company_name " +
+            "FROM apps a LEFT JOIN companies c ON c.id = a.company_id WHERE a.id = ?",
         )
         .get(appRowId) as AdminAppRow | undefined) ?? null
     );

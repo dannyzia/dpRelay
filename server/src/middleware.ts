@@ -30,6 +30,18 @@ export interface AuthenticatedApp {
   webhookSecretHash: string | null;
   rateMaxPerPhone: number;
   rateWindowSec: number;
+  /**
+   * STAGE F9 (ISSUE-88): internal companies.id backing this app, or null for
+   * an operator-provisioned legacy app (dual-path wallet rule).
+   */
+  companyId: string | null;
+  /**
+   * STAGE F9 (ISSUE-88): owning user resolved via app → company → owner —
+   * the wallet every send of this app draws from. Null = app_credits path.
+   * Pre-resolved here so every route sees ONE consistent resolution result
+   * per request instead of re-deriving it per query.
+   */
+  walletOwnerId: string | null;
 }
 
 declare module "fastify" {
@@ -173,8 +185,10 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
       .prepare(
         "SELECT a.id, a.app_id, a.app_secret_hash, a.name, a.webhook_url, a.webhook_secret_hash, " +
           "a.rate_max_per_phone, a.rate_window_sec, a.revoked_at, a.owner_user_id, " +
-          "u.disabled AS owner_disabled " +
-          "FROM apps a LEFT JOIN users u ON u.id = a.owner_user_id WHERE a.app_id = ?",
+          "u.disabled AS owner_disabled, " +
+          "c.id AS company_id, c.owner_user_id AS company_owner_id, c.disabled AS company_disabled " +
+          "FROM apps a LEFT JOIN users u ON u.id = a.owner_user_id " +
+          "LEFT JOIN companies c ON c.id = a.company_id WHERE a.app_id = ?",
       )
       .get(appId) as
       | {
@@ -189,6 +203,9 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
           revoked_at: number | null;
           owner_user_id: string | null;
           owner_disabled: number | null;
+          company_id: string | null;
+          company_owner_id: string | null;
+          company_disabled: number | null;
         }
       | undefined;
     if (!row) {
@@ -220,6 +237,19 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
       });
       return;
     }
+    // STAGE F9 (ISSUE-88): a WITHHELD COMPANY freezes its app's sends — its
+    // own distinct code so customers can tell company-level withhold from
+    // owner-level (account_withheld) and app revocation. Same ordering as the
+    // owner check: after the constant-time secret compare, so app state never
+    // leaks to a caller holding bad credentials.
+    if (row.company_id !== null && row.company_disabled === 1) {
+      await reply.code(403).send({
+        ok: false,
+        error: "This company is disabled. Contact the operator.",
+        code: "company_disabled",
+      });
+      return;
+    }
     request.appRow = {
       id: row.id,
       appId: row.app_id,
@@ -228,6 +258,8 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
       webhookSecretHash: row.webhook_secret_hash,
       rateMaxPerPhone: row.rate_max_per_phone,
       rateWindowSec: row.rate_window_sec,
+      companyId: row.company_id,
+      walletOwnerId: row.company_owner_id,
     };
   });
 };

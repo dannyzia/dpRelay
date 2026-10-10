@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { describeError, loginAccount, registerAccount } from "../api";
+import { ErrorBanner } from "../components/ErrorBanner";
 
 /**
  * STAGE F3 (ISSUE-81): email/password sign-in + signup — replaces the raw
@@ -31,7 +32,15 @@ export function LoginView(props: {
         }}
       >
         <label htmlFor="email">Email</label>
-        <input id="email" name="email" type="email" autoComplete="email" required spellCheck={false} />
+        <input
+          id="email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          required
+          spellCheck={false}
+          aria-describedby={props.error !== null ? "form-error" : undefined}
+        />
         <label htmlFor="password">Password</label>
         <input
           id="password"
@@ -41,13 +50,10 @@ export function LoginView(props: {
           minLength={signingUp ? 10 : undefined}
           required
           spellCheck={false}
+          aria-describedby={props.error !== null ? "form-error" : undefined}
         />
         {signingUp && <p className="muted">At least 10 characters.</p>}
-        {props.error !== null && (
-          <p className="error" role="alert">
-            {props.error}
-          </p>
-        )}
+        {props.error !== null && <ErrorBanner message={props.error} />}
         <button type="submit" disabled={props.busy}>
           {props.busy ? "Checking…" : signingUp ? "Create account" : "Sign in"}
         </button>

@@ -35,6 +35,7 @@ export function VerifyEmailView(props: {
   );
 }
 
+/** Container: exchanges the emailed token once on mount and tracks verification state. */
 export function VerifyEmail({ token }: { token: string }): JSX.Element {
   const [state, setState] = useState<"pending" | "verified" | "failed">("pending");
   const [error, setError] = useState<string | null>(null);

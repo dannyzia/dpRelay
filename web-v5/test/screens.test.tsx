@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
-import type { CreditPackage, Credits, OwnedApp, Transaction } from "../src/api";
+import type { Company, CreditPackage, Credits, Transaction, Wallet, WalletTransaction } from "../src/api";
 import { AppsView } from "../src/screens/Apps";
 import { CheckoutView, PackageListView } from "../src/screens/BuyCredits";
 import { CredentialsView } from "../src/screens/Credentials";
@@ -76,97 +76,140 @@ describe("LoginView (F3 email/password)", () => {
   });
 });
 
-describe("AppsView (F3 owned apps)", () => {
-  const OWNED: OwnedApp[] = [
-    { appId: "app_alpha", name: "My shop", revoked: false, createdAt: 1791500000 },
-    { appId: "app_dead", name: "Old shop", revoked: true, createdAt: 1791400000 },
+describe("AppsView (F9 wallet + companies)", () => {
+  const COMPANIES: Company[] = [
+    {
+      id: "co-1",
+      name: "My shop",
+      disabled: false,
+      createdAt: 1791500000,
+      gatewayNumber: "+8801711112233",
+      app: { appId: "app_alpha", name: "My shop", revoked: false },
+    },
+    {
+      id: "co-2",
+      name: "Old shop",
+      disabled: true,
+      createdAt: 1791400000,
+      gatewayNumber: null,
+      app: { appId: "app_dead", name: "Old shop", revoked: false },
+    },
   ];
+  const WALLET: Wallet = {
+    otpSmsRemaining: 20,
+    bulkSmsRemaining: 13,
+    otpExpiresAt: null,
+    bulkExpiresAt: null,
+    lastTransactionId: null,
+    purchasedAt: null,
+  };
+  const baseProps = {
+    wallet: WALLET,
+    walletHistory: null,
+    showHistory: false,
+    linkedApps: [],
+    emailVerified: true,
+    error: null,
+    busy: false,
+    freshSecret: null,
+    verifyBanner: "hidden" as const,
+    onResend: (): void => undefined,
+    onOpen: (): void => undefined,
+    onCreate: (): void => undefined,
+    onRename: (): void => undefined,
+    onDisable: (): void => undefined,
+    onAcknowledgeSecret: (): void => undefined,
+    onLinkExisting: (): void => undefined,
+    onToggleHistory: (): void => undefined,
+  };
 
-  it("lists owned apps with per-app actions and the revoked badge", () => {
-    const html = render(
-      <AppsView
-        apps={OWNED}
-        error={null}
-        busy={false}
-        freshSecret={null}
-        verifyBanner="hidden"
-        onResend={(): void => undefined}
-        onOpen={(): void => undefined}
-        onCreate={(): void => undefined}
-        onAcknowledgeSecret={(): void => undefined}
-        onLinkExisting={(): void => undefined}
-      />,
-    );
-    expect(html).toContain("My shop");
-    expect(html).toContain("app_alpha");
-    expect(html).toContain("revoked");
-    expect(html).toContain("Register a new app");
-    expect(html).toContain("Link existing app");
+  it("renders the wallet header balances shared by every company", () => {
+    const html = render(<AppsView {...baseProps} companies={[]} />);
+    expect(html).toContain("Your wallet");
+    expect(html).toContain("20");
+    expect(html).toContain("13");
+    expect(html).toContain("bulk SMS");
+    expect(html).toContain("Buy credits");
   });
 
-  it("shows the empty state and the one-time secret panel", () => {
-    const empty = render(
-      <AppsView
-        apps={[]}
-        error={null}
-        busy={false}
-        freshSecret={null}
-        verifyBanner="hidden"
-        onResend={(): void => undefined}
-        onOpen={(): void => undefined}
-        onCreate={(): void => undefined}
-        onAcknowledgeSecret={(): void => undefined}
-        onLinkExisting={(): void => undefined}
-      />,
-    );
-    expect(empty).toContain("No apps yet");
+  it("lists companies with app id, gateway number, verify chip and per-company actions", () => {
+    const html = render(<AppsView {...baseProps} companies={COMPANIES} />);
+    expect(html).toContain("My shop");
+    expect(html).toContain("app_alpha");
+    // F7 number placeholder: bound rows show the gateway number, unbound the hint.
+    expect(html).toContain("+8801711112233");
+    expect(html).toContain("no gateway bound");
+    expect(html).toContain("email verified");
+    // Withheld company chip + actions.
+    expect(html).toContain("disabled");
+    expect(html).toContain("Rename");
+    expect(html).toContain("Disable");
+    expect(html).toContain("Create a company");
+    expect(html).toContain("Link existing app");
+    expect(html).not.toContain("No companies yet");
+  });
+
+  it("shows the empty state and the one-time company secret panel with the wallet trial note", () => {
+    const empty = render(<AppsView {...baseProps} companies={[]} />);
+    expect(empty).toContain("No companies yet");
 
     const withSecret = render(
       <AppsView
-        apps={[]}
-        error={null}
-        busy={false}
+        {...baseProps}
+        companies={[]}
         freshSecret={{
+          companyId: "co-new",
           appId: "app_new1",
           appSecret: "s3cret-value",
           deviceEnrollmentSecret: "dev-enroll-value",
           trialSms: 20,
         }}
-        verifyBanner="hidden"
-        onResend={(): void => undefined}
-        onOpen={(): void => undefined}
-        onCreate={(): void => undefined}
-        onAcknowledgeSecret={(): void => undefined}
-        onLinkExisting={(): void => undefined}
       />,
     );
-    expect(withSecret).toContain("only time the server will show it");
+    expect(withSecret).toContain("only time the server will show them");
     expect(withSecret).toContain("app_new1");
     expect(withSecret).toContain("s3cret-value");
     // STAGE F7: the per-app device enrollment secret is shown once alongside it.
     expect(withSecret).toContain("dev-enroll-value");
     expect(withSecret).toContain("Device enrollment secret");
+    // STAGE F9: the trial lands in the WALLET, once per account.
     expect(withSecret).toContain("20 OTP + 20 bulk SMS");
+    expect(withSecret).toContain("added to your wallet");
+  });
+
+  it("renders the wallet purchase history when toggled on", () => {
+    const history: WalletTransaction[] = [
+      {
+        transactionId: "trx-1",
+        packageCode: "otp-100",
+        smsQuota: 100,
+        amountBdt: 20,
+        packageType: "otp",
+        currency: "USD",
+        status: "approved",
+        trxId: "BK1",
+        requestedAt: 1791500000,
+        resolvedAt: 1791500500,
+      },
+    ];
+    const html = render(
+      <AppsView {...baseProps} companies={[]} walletHistory={history} showHistory />,
+    );
+    expect(html).toContain("otp-100");
+    expect(html).toContain("approved");
+    // ISSUE-89: a USD purchase renders its unit — never the taka symbol.
+    expect(html).toContain("20 USD");
+    expect(html).not.toContain("৳20");
+    expect(html).toContain("Hide purchase history");
   });
 
   it("offers the verification banner only when unverified and mail is configured", () => {
-    const base = {
-      apps: OWNED,
-      error: null,
-      busy: false,
-      freshSecret: null,
-      onResend: (): void => undefined,
-      onOpen: (): void => undefined,
-      onCreate: (): void => undefined,
-      onAcknowledgeSecret: (): void => undefined,
-      onLinkExisting: (): void => undefined,
-    };
-    const offer = render(<AppsView {...base} verifyBanner="offer" />);
+    const offer = render(<AppsView {...baseProps} companies={[]} verifyBanner="offer" />);
     expect(offer).toContain("Confirm your email");
     expect(offer).toContain("Send verification email");
-    const sent = render(<AppsView {...base} verifyBanner="sent" />);
+    const sent = render(<AppsView {...baseProps} companies={[]} verifyBanner="sent" />);
     expect(sent).toContain("Verification email sent");
-    const hidden = render(<AppsView {...base} verifyBanner="hidden" />);
+    const hidden = render(<AppsView {...baseProps} companies={[]} verifyBanner="hidden" />);
     expect(hidden).not.toContain("Confirm your email");
   });
 });
@@ -331,6 +374,7 @@ describe("PackageListView", () => {
       priceBdt: 50,
       validityDays: 30,
       type: "otp",
+      currency: "BDT",
     },
     {
       packageCode: "BULK-100",
@@ -339,6 +383,16 @@ describe("PackageListView", () => {
       priceBdt: 0.2,
       validityDays: 30,
       type: "both",
+      currency: "BDT",
+    },
+    {
+      packageCode: "OTP-USD",
+      name: "USD Pack",
+      smsQuota: 50,
+      priceBdt: 20,
+      validityDays: 30,
+      type: "otp",
+      currency: "USD",
     },
   ];
 
@@ -351,6 +405,15 @@ describe("PackageListView", () => {
     expect(html).toContain("Bulk Pack");
     expect(html).toContain("৳0.20");
     expect(html).toContain("100 SMS · valid 30 days · code BULK-100");
+  });
+
+  it("prices non-BDT packages in their own currency (ISSUE-89)", () => {
+    const html = renderToString(
+      <PackageListView packages={packages} onBuy={(): void => undefined} />,
+    );
+    expect(html).toContain("20 USD");
+    // The taka symbol must never adorn a USD price.
+    expect(html).not.toContain("৳20");
   });
 
   it("renders the empty-catalog message", () => {
@@ -410,6 +473,7 @@ describe("HistoryView", () => {
       validityDays: 30,
       amountBdt: 50,
       packageType: "otp",
+      currency: "BDT",
       trxId: "TRX123",
       status: "approved",
       adminNotes: null,
@@ -423,6 +487,7 @@ describe("HistoryView", () => {
       validityDays: 30,
       amountBdt: 0.2,
       packageType: "both",
+      currency: "BDT",
       trxId: null,
       status: "pending",
       adminNotes: null,
@@ -444,6 +509,28 @@ describe("HistoryView", () => {
   it("renders the empty-state message", () => {
     const html = render(<HistoryView transactions={[]} />);
     expect(html).toContain("No transactions yet.");
+  });
+
+  it("prices each row in its package's currency (ISSUE-89)", () => {
+    const usdRows: Transaction[] = [
+      {
+        transactionId: "txn-usd",
+        packageCode: "OTP-USD",
+        smsQuota: 50,
+        validityDays: 30,
+        amountBdt: 20,
+        packageType: "otp",
+        currency: "USD",
+        trxId: "TRXUSD",
+        status: "approved",
+        adminNotes: null,
+        requestedAt: 1791400000,
+        resolvedAt: 1791405000,
+      },
+    ];
+    const html = render(<HistoryView transactions={usdRows} />);
+    expect(html).toContain("20 USD");
+    expect(html).not.toContain("৳20");
   });
 });
 

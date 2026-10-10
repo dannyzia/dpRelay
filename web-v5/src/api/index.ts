@@ -40,6 +40,7 @@ export interface AppCredentials {
   appSecret: string;
 }
 
+/** Reads this tab's connected app credentials from sessionStorage (null when none). */
 export function getConnectedApp(): AppCredentials | null {
   const appId = sessionStorage.getItem(APP_ID_KEY);
   const appSecret = sessionStorage.getItem(APP_SECRET_KEY);
@@ -47,11 +48,13 @@ export function getConnectedApp(): AppCredentials | null {
   return { appId, appSecret };
 }
 
+/** Stores the app credentials for this tab (sessionStorage — never persisted). */
 export function connectApp(appId: string, appSecret: string): void {
   sessionStorage.setItem(APP_ID_KEY, appId);
   sessionStorage.setItem(APP_SECRET_KEY, appSecret);
 }
 
+/** Drops this tab's app credentials (sign-out / company switch). */
 export function disconnectApp(): void {
   sessionStorage.removeItem(APP_ID_KEY);
   sessionStorage.removeItem(APP_SECRET_KEY);
@@ -60,6 +63,7 @@ export function disconnectApp(): void {
 /** Registered once by App; drops back to the sign-in screen on a 401. */
 let onAppUnauthorized: (() => void) | null = null;
 
+/** Registers the app-plane 401 callback (null unregisters). */
 export function setAppUnauthorizedHandler(handler: (() => void) | null): void {
   onAppUnauthorized = handler;
 }
@@ -158,6 +162,8 @@ export interface CreditPackage {
   priceBdt: number;
   validityDays: number;
   type: string;
+  /** ISSUE-89: price currency (BDT | USD | EUR) — priceBdt is in this unit. */
+  currency: string;
 }
 
 export interface CreditRequestAccepted {
@@ -174,6 +180,8 @@ export interface Transaction {
   validityDays: number;
   amountBdt: number;
   packageType: string;
+  /** ISSUE-89: amountBdt is in this unit — render with formatPrice, never bare ৳. */
+  currency: string;
   trxId: string | null;
   status: string;
   adminNotes: string | null;
@@ -187,9 +195,15 @@ export async function getCredits(): Promise<Credits> {
   return body.credits;
 }
 
-/** GET /v5/billing/packages — public catalog of active packages. */
+/**
+ * GET /v5/billing/packages — public catalog of active packages (the route is
+ * unauthenticated server-side; STAGE F9 moves the buy flow off the app
+ * plane, so this must also work without connected app credentials).
+ */
 export async function listPackages(): Promise<CreditPackage[]> {
-  const body = await appFetch<{ ok: true; packages: CreditPackage[] }>("/v5/billing/packages");
+  const body = await request<{ ok: true; packages: CreditPackage[] }>("/v5/billing/packages", {
+    method: "GET",
+  });
   return body.packages;
 }
 
@@ -331,6 +345,123 @@ export async function linkOwnedApp(
   });
 }
 
+// ── Tenancy + wallet (STAGE F9, ISSUE-88) ────────────────────────────────
+//
+// User -> many Companies (each 1:1 with one app + its F7 gateway number) and
+// a USER-level credit wallet: every company app draws from one balance.
+// These routes are session-cookie plane — no app credentials involved.
+
+export interface Company {
+  id: string;
+  name: string;
+  disabled: boolean;
+  createdAt: number;
+  /** F7 gateway number bound to the company's app; null = none bound yet. */
+  gatewayNumber: string | null;
+  app: { appId: string; name: string; revoked: boolean };
+}
+
+export interface CompanyCreated {
+  company: { id: string; name: string; disabled: boolean; createdAt: number };
+  /** Shown EXACTLY once — the server keeps only digests. */
+  app: { appId: string; appSecret: string; deviceEnrollmentSecret: string; name: string };
+  trial: { otpSms: number; bulkSms: number; expiresAt: number } | null;
+}
+
+export interface Wallet {
+  otpSmsRemaining: number;
+  bulkSmsRemaining: number;
+  otpExpiresAt: number | null;
+  bulkExpiresAt: number | null;
+  lastTransactionId: string | null;
+  purchasedAt: number | null;
+}
+
+export interface WalletTransaction {
+  transactionId: string;
+  packageCode: string;
+  smsQuota: number;
+  amountBdt: number;
+  packageType: string;
+  /** ISSUE-89: the price unit (BDT | USD | EUR). */
+  currency: string;
+  status: string;
+  trxId: string | null;
+  requestedAt: number;
+  resolvedAt: number | null;
+}
+
+/** GET /v5/auth/companies — the user's companies, each with its app summary + gateway number. */
+export async function listCompanies(): Promise<Company[]> {
+  const body = await request<{ ok: true; companies: Company[] }>("/v5/auth/companies", {
+    method: "GET",
+  });
+  return body.companies;
+}
+
+/**
+ * POST /v5/auth/companies — creates a company + its one app. The response is
+ * the ONLY place the secrets appear; the trial (first company only) lands in
+ * the user wallet.
+ */
+export async function createCompany(name: string): Promise<CompanyCreated> {
+  return request<CompanyCreated & { ok: true }>("/v5/auth/companies", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+/** PATCH /v5/auth/companies/:id — renames a company the user owns. */
+export async function renameCompany(companyId: string, name: string): Promise<void> {
+  await request<{ ok: true }>(`/v5/auth/companies/${encodeURIComponent(companyId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+/** POST /v5/auth/companies/:id/disable — withholds the company: its app stops sending. */
+export async function disableCompany(companyId: string): Promise<void> {
+  await request<{ ok: true }>(`/v5/auth/companies/${encodeURIComponent(companyId)}/disable`, {
+    method: "POST",
+  });
+}
+
+/** GET /v5/auth/wallet — the wallet balance every company app draws from. */
+export async function getWallet(): Promise<Wallet> {
+  const body = await request<{ ok: true; wallet: Wallet }>("/v5/auth/wallet", { method: "GET" });
+  return body.wallet;
+}
+
+/** GET /v5/auth/wallet/transactions — wallet purchase history across all companies. */
+export async function getWalletTransactions(): Promise<WalletTransaction[]> {
+  const body = await request<{ ok: true; transactions: WalletTransaction[] }>(
+    "/v5/auth/wallet/transactions",
+    { method: "GET" },
+  );
+  return body.transactions;
+}
+
+/**
+ * POST /v5/billing/credits/request (SESSION plane, F9): opens a pending
+ * WALLET purchase — no app credentials involved; approval tops up the user
+ * wallet that every company app draws from.
+ */
+export async function requestWalletCredits(packageCode: string): Promise<CreditRequestAccepted> {
+  return request<CreditRequestAccepted & { ok: true }>("/v5/billing/credits/request", {
+    method: "POST",
+    body: JSON.stringify({ packageCode }),
+  });
+}
+
+/** POST /v5/billing/credits/submit-trx (SESSION plane, F9): attaches the bKash TrxID to a wallet purchase. */
+export async function submitWalletTrx(transactionId: string, trxId: string): Promise<string> {
+  const body = await request<{ ok: true; message: string }>("/v5/billing/credits/submit-trx", {
+    method: "POST",
+    body: JSON.stringify({ transactionId, trxId }),
+  });
+  return body.message;
+}
+
 // ── Email features (F3 amendment: verification + self-service reset) ───────
 
 /** GET /v5/auth/mail-status — public: is SMTP configured on this deployment. */
@@ -374,14 +505,17 @@ export async function resetPassword(token: string, password: string): Promise<vo
 
 const OPERATOR_KEY = "webv5.operatorSecret";
 
+/** Reads the operator secret from sessionStorage (null = not unlocked). */
 export function getOperatorSecret(): string | null {
   return sessionStorage.getItem(OPERATOR_KEY);
 }
 
+/** Stores the operator secret for this tab after a successful unlock. */
 export function setOperatorSecret(secret: string): void {
   sessionStorage.setItem(OPERATOR_KEY, secret);
 }
 
+/** Clears the stored operator secret (401 or explicit lock). */
 export function clearOperatorSecret(): void {
   sessionStorage.removeItem(OPERATOR_KEY);
 }
@@ -389,10 +523,18 @@ export function clearOperatorSecret(): void {
 /** Registered once by the operator shell; returns to the unlock form on 401. */
 let onOperatorRejected: (() => void) | null = null;
 
+/** Registers the operator-plane 401 callback (null unregisters). */
 export function setOperatorRejectedHandler(handler: (() => void) | null): void {
   onOperatorRejected = handler;
 }
 
+/**
+ * Fetches an operator route with `Authorization: Bearer <secret>`; on a 401 it
+ * clears the stored secret and notifies the registered rejection handler.
+ *
+ * @param path route path (starts with `/v5/`).
+ * @param init fetch init — headers are merged with the Authorization header.
+ */
 export async function operatorFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const secret = getOperatorSecret();
   if (secret === null) {
@@ -445,6 +587,8 @@ export interface PendingTransaction {
   smsQuota: number;
   amountBdt: number;
   packageType: string;
+  /** ISSUE-89: USD/EUR pendings are approved manually — show their unit. */
+  currency: string;
   trxId: string | null;
   requestedAt: number;
 }
@@ -584,15 +728,30 @@ export async function listPendingTransactions(): Promise<PendingTransaction[]> {
   return body.pending;
 }
 
-/** POST /v5/admin/billing/approve — approve:false is the reject path (rejectReason travels with it). */
+/**
+ * POST /v5/admin/billing/approve — approve:false is the reject path
+ * (rejectReason travels with it). ISSUE-89: `notes` is the optional
+ * remittance-reference paper trail stored on the pending row in the SAME
+ * transaction as the award (required reading for manual USD/EUR approvals).
+ * Undefined fields are omitted from the body, never sent as null.
+ */
 export async function resolveTransaction(
   transactionId: string,
   approve: boolean,
   rejectReason?: string,
+  notes?: string,
 ): Promise<{ status: string; newOtpBalance?: number; newBulkBalance?: number }> {
   return operatorFetch<{ ok: true; status: string; newOtpBalance?: number; newBulkBalance?: number }>(
     "/v5/admin/billing/approve",
-    { method: "POST", body: JSON.stringify({ transactionId, approve, rejectReason }) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        transactionId,
+        approve,
+        ...(rejectReason !== undefined ? { rejectReason } : {}),
+        ...(notes !== undefined && notes !== "" ? { notes } : {}),
+      }),
+    },
   );
 }
 
@@ -669,6 +828,8 @@ export interface PaymentCandidate {
   id: string;
   sender: string;
   provider: string;
+  /** STAGE F8 (ISSUE-90): ingest path — 'gateway' (OTP phone) | 'reader' (Payment Reader APK). */
+  source: "gateway" | "reader";
   txnId: string;
   amountBdt: number;
   receivedAt: number;
@@ -745,6 +906,8 @@ export interface AdminPackage {
   validityDays: number;
   type: string;
   isActive: boolean;
+  /** ISSUE-89: price currency — BDT | USD | EUR (server-enforced enum). */
+  currency: string;
   updatedAt?: number;
 }
 
@@ -765,6 +928,8 @@ export async function upsertAdminPackage(pkg: {
   validityDays: number;
   type: string;
   isActive?: boolean;
+  /** ISSUE-89: required here so the create form always states the unit. */
+  currency: string;
 }): Promise<void> {
   await operatorFetch("/v5/admin/billing/packages", { method: "POST", body: JSON.stringify(pkg) });
 }
@@ -772,7 +937,7 @@ export async function upsertAdminPackage(pkg: {
 /** PATCH /v5/admin/billing/packages/:code — partial edit of whitelisted fields. */
 export async function patchAdminPackage(
   packageCode: string,
-  patch: Partial<Pick<AdminPackage, "name" | "smsQuota" | "priceBdt" | "validityDays" | "type" | "isActive">>,
+  patch: Partial<Pick<AdminPackage, "name" | "smsQuota" | "priceBdt" | "validityDays" | "type" | "isActive" | "currency">>,
 ): Promise<void> {
   await operatorFetch(`/v5/admin/billing/packages/${encodeURIComponent(packageCode)}`, {
     method: "PATCH",
@@ -836,6 +1001,8 @@ export interface LedgerRow {
   packageCode: string;
   qty: number;
   amountBdt: number;
+  /** ISSUE-89: purchases carry the package currency; trial/spend rows are BDT. */
+  currency: string;
   trxId: string | null;
 }
 
@@ -844,7 +1011,7 @@ export interface LedgerReport {
   to: number;
   rows: LedgerRow[];
   nextCursor: string | null;
-  totals: { packageType: string; status: string; count: number; amountBdt: number; grantedSms: number }[];
+  totals: { packageType: string; status: string; currency: string; count: number; amountBdt: number; grantedSms: number }[];
 }
 
 /** One send-log row (spec: timestamp | app | kind | recipient | ref | status | campaign-name). */
@@ -877,6 +1044,37 @@ export async function getLedgerReport(params: {
   const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
   const body = await operatorFetch<LedgerReport & { ok: true }>(`/v5/admin/reports/ledger${suffix}`);
   return { from: body.from, to: body.to, rows: body.rows, nextCursor: body.nextCursor, totals: body.totals };
+}
+
+/** One row of GET /v5/admin/reports/packages — approved sales aggregated per package. */
+export interface PackageReportRow {
+  packageCode: string;
+  name: string;
+  /** ISSUE-89: the package's price currency — totalAmount is in this unit. */
+  currency: string;
+  countSold: number;
+  totalAmount: number;
+  smsSold: number;
+  firstSoldAt: number | null;
+  lastSoldAt: number | null;
+}
+
+export interface PackageReport {
+  from: number;
+  to: number;
+  rows: PackageReportRow[];
+  /** One bucket per currency — sums stay unit-consistent, never crossed. */
+  totalsByCurrency: { currency: string; countSold: number; totalAmount: number }[];
+}
+
+/** GET /v5/admin/reports/packages — window is `?from=&to=` epoch s (server defaults to last 30 days). */
+export async function getPackageReport(params: { from?: number; to?: number } = {}): Promise<PackageReport> {
+  const qs = new URLSearchParams();
+  if (params.from !== undefined) qs.set("from", String(params.from));
+  if (params.to !== undefined) qs.set("to", String(params.to));
+  const suffix = qs.toString() !== "" ? `?${qs.toString()}` : "";
+  const body = await operatorFetch<PackageReport & { ok: true }>(`/v5/admin/reports/packages${suffix}`);
+  return { from: body.from, to: body.to, rows: body.rows, totalsByCurrency: body.totalsByCurrency };
 }
 
 /** GET /v5/admin/reports/sends (spec path) — cursor-paginated; recipient numbers are PII: operator-only. */

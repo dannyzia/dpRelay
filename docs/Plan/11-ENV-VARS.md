@@ -62,6 +62,7 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | ALERTING_REQUIRED | no | `true` | Boot guard (ISSUE-41): when `true`, the server **refuses to start** unless a complete alert sink is configured (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID, or ALERT_WEBHOOK_URL). Kills the “alerting silently log-only” failure class. `false` = explicit dev opt-out. | — |
 | WAKE_IDLE_THRESHOLD_SEC | no | 900 | Idle seconds before the next request counts as a wake (R5 catch-up sweep). | — |
 | DEVICE_ENROLLMENT_SECRET | for M2 | — (empty = enrollment disabled) | Enrollment secret for `POST /v5/device/enroll` (ADR-016 exchange → device API key). Compared in constant time. | `openssl rand -base64 32` |
+| PAYMENT_READER_SECRET | for F8 | — (empty = ingest disabled) | Bearer secret for the dedicated Payment Reader APK's `POST /v5/payments/ingest` (ISSUE-90). Compared in constant time; the route 403s while unset (fail-closed). Operator-only: never expose to clients. | `openssl rand -base64 32` |
 | OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |
 | ENROLL_RATE_MAX_PER_HOUR | no | 10 | Max `/v5/device/enroll` attempts per client IP inside the sliding window (brute-force guard; counts failures too). | server |
 | ENROLL_RATE_WINDOW_SEC | no | 3600 | Sliding window for the enrollment rate limiter, in seconds. | server |

@@ -8,6 +8,7 @@ import {
   getAdminConfig,
   getLedgerReport,
   getOperatorSecret,
+  getPackageReport,
   getSendLog,
   listAdminDevices,
   listAdminPackages,
@@ -163,6 +164,30 @@ describe("operator endpoints", () => {
       approve: true,
     });
   });
+
+  it("resolveTransaction carries the optional approve note (ISSUE-89 paper trail)", async () => {
+    setOperatorSecret("op-secret");
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({ ok: true, status: "approved", newOtpBalance: 70, newBulkBalance: 50 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await resolveTransaction("txn-9", true, undefined, "Wise ref XYZ987");
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      transactionId: "txn-9",
+      approve: true,
+      notes: "Wise ref XYZ987",
+    });
+
+    // An empty note is no note — it never rides along as an empty string.
+    await resolveTransaction("txn-9", true, undefined, "");
+    const init2 = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(JSON.parse(init2.body as string)).toEqual({
+      transactionId: "txn-9",
+      approve: true,
+    });
+  });
 });
 
 describe("F5 admin endpoints", () => {
@@ -302,6 +327,40 @@ describe("F5 admin endpoints", () => {
     await setAdminUserDisabled("user-1", false);
     expect(fetchMock.mock.calls[2][0]).toBe("/v5/admin/users/user-1/enable");
     expect((fetchMock.mock.calls[2][1] as RequestInit).body).toBeUndefined();
+  });
+
+  it("getPackageReport hits /reports/packages with the window and keeps totals per currency (ISSUE-89)", async () => {
+    setOperatorSecret("op-secret");
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) =>
+      jsonRes({
+        ok: true,
+        from: 100,
+        to: 200,
+        rows: [
+          {
+            packageCode: "usd-pack",
+            name: "USD Pack",
+            currency: "USD",
+            countSold: 1,
+            totalAmount: 20,
+            smsSold: 50,
+            firstSoldAt: 150,
+            lastSoldAt: 150,
+          },
+        ],
+        totalsByCurrency: [{ currency: "USD", countSold: 1, totalAmount: 20 }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await getPackageReport({ from: 100, to: 200 });
+    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/reports/packages?from=100&to=200");
+    expect(res.rows[0]).toMatchObject({ packageCode: "usd-pack", currency: "USD", totalAmount: 20 });
+    expect(res.totalsByCurrency).toEqual([{ currency: "USD", countSold: 1, totalAmount: 20 }]);
+
+    // No window → bare path (server applies its default 30-day window).
+    await getPackageReport();
+    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/reports/packages");
   });
 
   it("getSendLog hits the spec /sends path with filters and parses rows + cursor", async () => {

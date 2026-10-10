@@ -2,6 +2,12 @@
    no CSS framework in the dependency tree (see the F1 stage report flag). */
 
 :root {
+  /* ISSUE-91 utility spacing — replaces ad-hoc inline marginTop styles.
+     Static values live here (the standard allows inline style= only for
+     COMPUTED values). */
+  --mt-6: 6px;
+  --mt-14: 14px;
+  --mt-18: 18px;
   --bg: #0e1116;
   --bg-raised: #161b23;
   --bg-inset: #0a0d11;
@@ -182,8 +188,26 @@ textarea {
   font-family: inherit;
 }
 
-input:focus,
-select:focus {
+/* ISSUE-91 utility spacing classes (the only margin knobs screens use). */
+.mt-6 {
+  margin-top: var(--mt-6);
+}
+
+.mt-14 {
+  margin-top: var(--mt-14);
+}
+
+.mt-18 {
+  margin-top: var(--mt-18);
+}
+
+/* ISSUE-91 (a11y): visible keyboard focus. :focus-visible lights up on
+   keyboard navigation without painting rings on mouse clicks; text inputs
+   match it on click too, so nothing regresses. */
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible {
   outline: 2px solid var(--accent-strong);
   outline-offset: 1px;
 }

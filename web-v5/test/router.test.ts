@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hrefFor, parseHash } from "../src/router";
+import { hrefFor, parseHash } from "../src/lib/router";
 
 describe("parseHash", () => {
   it("parses a plain hash route into segments", () => {

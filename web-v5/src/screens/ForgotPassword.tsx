@@ -58,6 +58,7 @@ export function ForgotPasswordView(props: {
   );
 }
 
+/** Container: probes mail config, submits the reset request, tracks sent/error/busy. */
 export function ForgotPassword(): JSX.Element {
   const [sent, setSent] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);

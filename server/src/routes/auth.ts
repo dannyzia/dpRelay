@@ -33,15 +33,18 @@ import {
   sendMail,
   verificationEmailBody,
 } from "../services/mailer.js";
+import {
+  readSessionCookie,
+  requireSession as requireSessionGuard,
+  SESSION_COOKIE,
+  type SessionUser,
+} from "../services/session.js";
 
 /** RFC 5322-lite email shape: local@domain.tld, no spaces. Full validation is deliverability, not syntax. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** F3 (ISSUE-81): minimum raised 8 → 10 by owner order; cap at 128 to bound KDF work per request. */
 const PASSWORD_MIN = 10;
 const PASSWORD_MAX = 128;
-
-/** Dashboard session cookie. HttpOnly + Secure + SameSite=Lax set on every write. */
-const SESSION_COOKIE = "dp_session";
 
 /**
  * Format-valid scrypt hash of an unguessable value, burned on the login path
@@ -79,29 +82,6 @@ function isNonEmptyString(v: unknown): v is string {
 /** Current unixepoch seconds (session expiry comparisons). */
 function nowSec(): number {
   return Math.floor(Date.now() / 1000);
-}
-
-/**
- * Extracts the session cookie value from the raw Cookie header. A single
- * cookie is all we need, so this stays dependency-free (no @fastify/cookie).
- */
-function readSessionCookie(request: FastifyRequest): string | null {
-  const header = request.headers.cookie;
-  if (typeof header !== "string") return null;
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === SESSION_COOKIE) {
-      const value = part.slice(eq + 1).trim();
-      return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
-    }
-  }
-  return null;
-}
-
-interface SessionUser {
-  sessionId: string;
-  user: { id: string; email: string };
 }
 
 const authRoutes: FastifyPluginAsync = async (app) => {
@@ -162,39 +142,13 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   }
 
   /**
-   * Resolves the cookie to a live session. Expired rows and sessions of
-   * disabled users are deleted lazily (logout already deletes eagerly), so a
-   * dead token is never honored twice.
-   */
-  function resolveSession(request: FastifyRequest): SessionUser | null {
-    const raw = readSessionCookie(request);
-    if (raw === null) return null;
-    const row = app.db
-      .prepare(
-        "SELECT s.id AS session_id, s.expires_at, u.id AS user_id, u.email, u.disabled " +
-          "FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
-      )
-      .get(sha256Hex(raw)) as
-      | { session_id: string; expires_at: number; user_id: string; email: string; disabled: number }
-      | undefined;
-    if (!row) return null;
-    if (row.expires_at <= nowSec() || row.disabled !== 0) {
-      app.db.prepare("DELETE FROM user_sessions WHERE id = ?").run(row.session_id);
-      return null;
-    }
-    return { sessionId: row.session_id, user: { id: row.user_id, email: row.email } };
-  }
-
-  /**
-   * Session guard for the F3 routes: sends the 401 envelope itself (the route
-   * then returns `reply` untouched) or yields the live session.
+   * Session guard for the F3/F9 routes: delegates to the shared service
+   * (STAGE F9 — billing's wallet-buy path resolves sessions identically)
+   * and keeps the send-401-then-return-null contract every route here is
+   * written against.
    */
   function requireSession(request: FastifyRequest, reply: FastifyReply): SessionUser | null {
-    const session = resolveSession(request);
-    if (session === null) {
-      reply.code(401).send({ ok: false, error: "Sign in required", code: "auth_required" });
-    }
-    return session;
+    return requireSessionGuard(app.db, request, reply);
   }
 
   app.post("/v5/auth/register", async (request, reply) => {
@@ -382,13 +336,105 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * F3 (ISSUE-81): self-serve app registration. Any signed-in customer mints
-   * their own appId+appSecret — the SAME entropy policy as the operator route's
-   * credential handling (32 random bytes, SHA-256-at-rest) — and owns the row
-   * via apps.owner_user_id. The trial grant is applied in the SAME transaction
-   * as the app row (ISSUE-77 invariant: UNIQUE(app_id) + PK(app_credits.app_id)
-   * make the one-time property a database invariant, not an app-level flag).
-   * appSecret is returned EXACTLY once here; the DB keeps only its digest.
+   * STAGE F9 (ISSUE-88): one atomic provision of a company + its SINGLE app
+   * (1:1 enforced by the partial-UNIQUE index on apps.company_id, migration
+   * 017) + the trial grant — now ONCE PER USER into the user_credits WALLET
+   * (supersedes ISSUE-77's once-per-app invariant for owned apps; flagged on
+   * the hub per AC). The wallet row's trial_granted_at is the re-grant
+   * marker, and the grant only ever runs inside this transaction — a second
+   * company cannot farm a second trial. appSecret + deviceEnrollmentSecret
+   * are returned EXACTLY once (to the caller); only digests are persisted.
+   */
+  function provisionCompany(
+    userId: string,
+    companyName: string | null,
+  ): {
+    companyId: string;
+    appId: string;
+    appSecret: string;
+    deviceEnrollmentSecret: string;
+    name: string;
+    trial: { otpSms: number; bulkSms: number; expiresAt: number } | null;
+  } {
+    const { appId, appSecret } = generateAppCredentials();
+    // STAGE F7 (ISSUE-87): every app also gets a per-app device enrollment
+    // secret (same one-time contract as appSecret — digests at rest only).
+    const deviceEnrollmentSecret = generateDeviceEnrollmentSecret();
+    const companyId = newId();
+    const appRowId = newId();
+    const finalName = companyName ?? appId;
+    const trialCount = app.config.trialSmsCount;
+    const trialTtlSec = app.config.trialSmsTtlDays * 24 * 60 * 60;
+    const trialExpiresAt = nowSec() + trialTtlSec;
+    let trialGranted = false;
+
+    app.db.transaction(() => {
+      app.db
+        .prepare(
+          "INSERT INTO companies (id, owner_user_id, name, created_at, disabled) " +
+            "VALUES (?, ?, ?, unixepoch(), 0)",
+        )
+        .run(companyId, userId, finalName);
+      app.db
+        .prepare(
+          "INSERT INTO apps (id, app_id, app_secret_hash, device_enrollment_secret_hash, " +
+            "name, owner_user_id, company_id, created_at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())",
+        )
+        .run(
+          appRowId,
+          appId,
+          app.sha256Hex(appSecret),
+          app.sha256Hex(deviceEnrollmentSecret),
+          finalName,
+          userId,
+          companyId,
+        );
+      if (trialCount > 0) {
+        const existing = app.db
+          .prepare("SELECT trial_granted_at FROM user_credits WHERE user_id = ?")
+          .get(userId) as { trial_granted_at: number | null } | undefined;
+        if (existing === undefined || existing.trial_granted_at === null) {
+          app.db
+            .prepare(
+              // trial_* snapshot (ISSUE-84 parity): the ledger's kind=trial
+              // rows read these — the balance itself is spent away and proves
+              // nothing. Upsert (not plain INSERT): a pre-existing wallet row
+              // (e.g. from an approved buy) gains the trial without losing
+              // anything — trial_granted_at then blocks every later grant.
+              "INSERT INTO user_credits (user_id, otp_sms_remaining, bulk_sms_remaining, " +
+                "otp_expires_at, bulk_expires_at, trial_sms_granted, trial_granted_at, updated_at) " +
+                "VALUES (?, ?, ?, unixepoch() + ?, unixepoch() + ?, ?, unixepoch(), unixepoch()) " +
+                "ON CONFLICT(user_id) DO UPDATE SET " +
+                "otp_sms_remaining = otp_sms_remaining + excluded.otp_sms_remaining, " +
+                "bulk_sms_remaining = bulk_sms_remaining + excluded.bulk_sms_remaining, " +
+                "otp_expires_at = MAX(COALESCE(otp_expires_at, 0), excluded.otp_expires_at), " +
+                "bulk_expires_at = MAX(COALESCE(bulk_expires_at, 0), excluded.bulk_expires_at), " +
+                "trial_sms_granted = excluded.trial_sms_granted, " +
+                "trial_granted_at = excluded.trial_granted_at, updated_at = excluded.updated_at",
+            )
+            .run(userId, trialCount, trialCount, trialTtlSec, trialTtlSec, trialCount);
+          trialGranted = true;
+        }
+      }
+    })();
+
+    return {
+      companyId,
+      appId,
+      appSecret,
+      deviceEnrollmentSecret,
+      name: finalName,
+      trial: trialGranted ? { otpSms: trialCount, bulkSms: trialCount, expiresAt: trialExpiresAt } : null,
+    };
+  }
+
+  /**
+   * F3 (ISSUE-81) + STAGE F9 (ISSUE-88): self-serve registration. The
+   * response contract is preserved (appId/appSecret/deviceEnrollmentSecret/
+   * name/trial shown once); internally every self-serve app is now
+   * company-backed (1:1) and the trial lands in the user WALLET, once per
+   * user. `company` is additive to the 201 envelope.
    */
   app.post("/v5/auth/apps", async (request, reply) => {
     const session = requireSession(request, reply);
@@ -400,45 +446,219 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         ? body.name.trim().slice(0, 128)
         : null;
 
-    const { appId, appSecret } = generateAppCredentials();
-    // STAGE F7 (ISSUE-87): every app also gets a per-app device enrollment
-    // secret — the raw value lives only in this response, the digest in
-    // apps.device_enrollment_secret_hash (same one-time contract as appSecret).
-    const deviceEnrollmentSecret = generateDeviceEnrollmentSecret();
-    const rowId = newId();
-    const finalName = name ?? appId;
-    const trialCount = app.config.trialSmsCount;
-    const trialTtlSec = app.config.trialSmsTtlDays * 24 * 60 * 60;
-    const trialExpiresAt = nowSec() + trialTtlSec;
-
-    app.db.transaction(() => {
-      app.db
-        .prepare(
-          "INSERT INTO apps (id, app_id, app_secret_hash, device_enrollment_secret_hash, name, owner_user_id, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, unixepoch())",
-        )
-        .run(rowId, appId, app.sha256Hex(appSecret), app.sha256Hex(deviceEnrollmentSecret), finalName, session.user.id);
-      if (trialCount > 0) {
-        app.db
-          .prepare(
-            // trial_* snapshot (ISSUE-84): the ledger's kind=trial rows read
-            // these — the balance itself is spent away and proves nothing.
-            "INSERT INTO app_credits (app_id, otp_sms_remaining, bulk_sms_remaining, " +
-              "otp_expires_at, bulk_expires_at, trial_sms_granted, trial_granted_at, updated_at) " +
-              "VALUES (?, ?, ?, unixepoch() + ?, unixepoch() + ?, ?, unixepoch(), unixepoch())",
-          )
-          .run(rowId, trialCount, trialCount, trialTtlSec, trialTtlSec, trialCount);
-      }
-    })();
-
-    app.log.info({ appId, userId: session.user.id, trialSms: trialCount }, "self-serve app registered");
+    const created = provisionCompany(session.user.id, name);
+    app.log.info(
+      { appId: created.appId, companyId: created.companyId, userId: session.user.id, trialSms: created.trial?.otpSms ?? 0 },
+      "self-serve company+app registered",
+    );
     return reply.code(201).send({
       ok: true,
-      appId,
-      appSecret,
-      deviceEnrollmentSecret,
-      name: finalName,
-      trial: trialCount > 0 ? { otpSms: trialCount, bulkSms: trialCount, expiresAt: trialExpiresAt } : null,
+      appId: created.appId,
+      appSecret: created.appSecret,
+      deviceEnrollmentSecret: created.deviceEnrollmentSecret,
+      name: created.name,
+      company: { id: created.companyId, name: created.name },
+      trial: created.trial,
+    });
+  });
+
+  /**
+   * STAGE F9 (ISSUE-88): creates a company + its one app (1:1, database-
+   * enforced) and applies the first-time trial to the user WALLET. Secrets
+   * are shown exactly once here.
+   */
+  app.post("/v5/auth/companies", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const body = (request.body ?? {}) as NameBody;
+    const name =
+      typeof body.name === "string" && body.name.trim().length > 0
+        ? body.name.trim().slice(0, 128)
+        : null;
+    if (name === null) {
+      return reply.code(400).send({ ok: false, error: "Company name is required", code: "invalid_name" });
+    }
+    const created = provisionCompany(session.user.id, name);
+    app.log.info(
+      { companyId: created.companyId, appId: created.appId, userId: session.user.id },
+      "company created",
+    );
+    return reply.code(201).send({
+      ok: true,
+      company: { id: created.companyId, name: created.name, disabled: false, createdAt: nowSec() },
+      app: {
+        appId: created.appId,
+        appSecret: created.appSecret,
+        deviceEnrollmentSecret: created.deviceEnrollmentSecret,
+        name: created.name,
+      },
+      trial: created.trial,
+    });
+  });
+
+  /**
+   * STAGE F9 (ISSUE-88): the signed-in user's companies, each with its app
+   * summary + the F7 gateway number (the phone bound to the company's app).
+   * Secrets are never re-served — the projection carries no hash material
+   * (apps-list parity); credentials are recoverable via /v5/auth/apps/link.
+   */
+  app.get("/v5/auth/companies", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const rows = app.db
+      .prepare(
+        "SELECT c.id, c.name, c.created_at, c.disabled, a.app_id, a.name AS app_name, " +
+          "a.revoked_at, d.phone_number AS gateway_number " +
+          "FROM companies c JOIN apps a ON a.company_id = c.id " +
+          "LEFT JOIN devices d ON d.app_id = a.id " +
+          "WHERE c.owner_user_id = ? ORDER BY c.created_at DESC, c.id",
+      )
+      .all(session.user.id) as Array<{
+      id: string;
+      name: string;
+      created_at: number;
+      disabled: number;
+      app_id: string;
+      app_name: string;
+      revoked_at: number | null;
+      gateway_number: string | null;
+    }>;
+    return reply.code(200).send({
+      ok: true,
+      companies: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        disabled: r.disabled !== 0,
+        createdAt: r.created_at,
+        gatewayNumber: r.gateway_number,
+        app: { appId: r.app_id, name: r.app_name, revoked: r.revoked_at !== null },
+      })),
+    });
+  });
+
+  /** STAGE F9 (ISSUE-88): renames a company the caller owns (404 otherwise). */
+  app.patch("/v5/auth/companies/:id", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const params = (request.params ?? {}) as { id?: unknown };
+    const companyId = typeof params.id === "string" ? params.id : "";
+    const body = (request.body ?? {}) as NameBody;
+    const name =
+      typeof body.name === "string" && body.name.trim().length > 0
+        ? body.name.trim().slice(0, 128)
+        : null;
+    if (name === null) {
+      return reply.code(400).send({ ok: false, error: "Company name is required", code: "invalid_name" });
+    }
+    const updated = app.db
+      .prepare("UPDATE companies SET name = ? WHERE id = ? AND owner_user_id = ?")
+      .run(name, companyId, session.user.id);
+    if (updated.changes !== 1) {
+      return reply.code(404).send({ ok: false, error: "Company not found", code: "company_not_found" });
+    }
+    return reply.code(200).send({ ok: true, company: { id: companyId, name } });
+  });
+
+  /**
+   * STAGE F9 (ISSUE-88): withholds a company — its app's sends stop at the
+   * requireApp choke point (403 company_disabled, distinct from owner-level
+   * account_withheld). Idempotent; re-enablement is the operator's plane.
+   */
+  app.post("/v5/auth/companies/:id/disable", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const params = (request.params ?? {}) as { id?: unknown };
+    const companyId = typeof params.id === "string" ? params.id : "";
+    const updated = app.db
+      .prepare("UPDATE companies SET disabled = 1 WHERE id = ? AND owner_user_id = ?")
+      .run(companyId, session.user.id);
+    if (updated.changes !== 1) {
+      return reply.code(404).send({ ok: false, error: "Company not found", code: "company_not_found" });
+    }
+    app.log.info({ companyId, userId: session.user.id }, "company disabled by owner");
+    return reply.code(200).send({ ok: true, company: { id: companyId, disabled: true } });
+  });
+
+  /**
+   * STAGE F9 (ISSUE-88): the signed-in user's WALLET balance — what every
+   * company app draws from. A user with no wallet row yet reports zeros
+   * (fail-closed read, same envelope shape as the app-plane credits route).
+   */
+  app.get("/v5/auth/wallet", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const row = app.db
+      .prepare(
+        "SELECT otp_sms_remaining, bulk_sms_remaining, otp_expires_at, bulk_expires_at, " +
+          "last_transaction_id, purchased_at FROM user_credits WHERE user_id = ?",
+      )
+      .get(session.user.id) as
+      | {
+          otp_sms_remaining: number;
+          bulk_sms_remaining: number;
+          otp_expires_at: number | null;
+          bulk_expires_at: number | null;
+          last_transaction_id: string | null;
+          purchased_at: number | null;
+        }
+      | undefined;
+    return reply.code(200).send({
+      ok: true,
+      wallet: {
+        otpSmsRemaining: row?.otp_sms_remaining ?? 0,
+        bulkSmsRemaining: row?.bulk_sms_remaining ?? 0,
+        otpExpiresAt: row?.otp_expires_at ?? null,
+        bulkExpiresAt: row?.bulk_expires_at ?? null,
+        lastTransactionId: row?.last_transaction_id ?? null,
+        purchasedAt: row?.purchased_at ?? null,
+      },
+    });
+  });
+
+  /**
+   * STAGE F9 (ISSUE-88): wallet purchase history — the "wallet view shows
+   * all" panel requirement. User-attributed transactions only (wallet buys
+   * are not company-scoped; per-company usage history stays on the app-plane
+   * /v5/billing/transactions route).
+   */
+  app.get("/v5/auth/wallet/transactions", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const rows = app.db
+      .prepare(
+        // ISSUE-89: the price unit rides the row so the wallet history never
+        // renders a USD purchase with the taka symbol.
+        "SELECT ct.id, ct.package_code, ct.sms_quota, ct.amount_bdt, ct.package_type, ct.status, " +
+          "ct.trx_id, ct.requested_at, ct.resolved_at, COALESCE(p.currency, 'BDT') AS currency " +
+          "FROM credit_transactions ct LEFT JOIN packages p ON p.id = ct.package_id " +
+          "WHERE ct.user_id = ? ORDER BY ct.requested_at DESC LIMIT 100",
+      )
+      .all(session.user.id) as Array<{
+      id: string;
+      package_code: string;
+      sms_quota: number;
+      amount_bdt: number;
+      package_type: string;
+      status: string;
+      trx_id: string | null;
+      requested_at: number;
+      resolved_at: number | null;
+      currency: string;
+    }>;
+    return reply.code(200).send({
+      ok: true,
+      transactions: rows.map((t) => ({
+        transactionId: t.id,
+        packageCode: t.package_code,
+        smsQuota: t.sms_quota,
+        amountBdt: t.amount_bdt,
+        packageType: t.package_type,
+        currency: t.currency,
+        status: t.status,
+        trxId: t.trx_id,
+        requestedAt: t.requested_at,
+        resolvedAt: t.resolved_at,
+      })),
     });
   });
 

@@ -9,6 +9,7 @@ import type {
   AdminUserItem,
   LedgerReport,
   OversightCampaign,
+  PackageReport,
   PaymentSmsItem,
   PendingTransaction,
   SendLogRow,
@@ -63,10 +64,36 @@ describe("BillingQueueView", () => {
       smsQuota: 20,
       amountBdt: 50,
       packageType: "otp",
+      currency: "BDT",
       trxId: "TRXABC",
       requestedAt: 1791400000,
     },
   ];
+
+  it("renders a non-BDT pending row in its own currency, never ৳ (ISSUE-89)", () => {
+    const usdPending: PendingTransaction[] = [
+      {
+        transactionId: "txn-usd",
+        appId: "customer-app",
+        packageCode: "usd-50",
+        smsQuota: 50,
+        amountBdt: 20,
+        packageType: "otp",
+        currency: "USD",
+        trxId: null,
+        requestedAt: 1791400000,
+      },
+    ];
+    const html = renderToString(
+      <BillingQueueView
+        pending={usdPending}
+        onApprove={(): void => undefined}
+        onReject={(): void => undefined}
+      />,
+    );
+    expect(html).toContain("20 USD");
+    expect(html).not.toContain("৳20");
+  });
 
   it("renders a pending row with amount, TrxID, and both actions", () => {
     const html = renderToString(
@@ -206,6 +233,7 @@ describe("PaymentsView (F5b spec)", () => {
       smsQuota: 100,
       amountBdt: 200,
       packageType: "otp",
+      currency: "BDT",
       trxId: "TRXSEARCH1",
       requestedAt: 1791400000,
     },
@@ -223,6 +251,7 @@ describe("PaymentsView (F5b spec)", () => {
     id: "p1",
     sender: "+8801613000000",
     provider: "bkash",
+    source: "gateway",
     txnId: "TRXPAID0001",
     amountBdt: 200,
     receivedAt: 1791400000,
@@ -321,6 +350,25 @@ describe("PaymentsView (F5b spec)", () => {
     expect(html).toContain("payment_rejected");
     expect(html).toContain("disabled");
   });
+
+  it("renders the STAGE F8 source column for gateway and reader rows", () => {
+    const reader: PaymentSmsItem = {
+      ...approved,
+      id: "p5",
+      source: "reader",
+      txnId: "TRXREAD005",
+      status: "unmatched",
+      matched: null,
+      candidates: [],
+      ambiguous: false,
+    };
+    const html = renderToString(
+      <PaymentsView payments={[approved, reader]} {...base} {...noop} />,
+    );
+    expect(html).toContain("<th>Source</th>");
+    expect(html).toContain(">gateway<");
+    expect(html).toContain(">reader<");
+  });
 });
 
 describe("SettingsView (F5b spec)", () => {
@@ -359,8 +407,8 @@ describe("SettingsView (F5b spec)", () => {
 
 describe("PackagesView (F5)", () => {
   const packages: AdminPackage[] = [
-    { packageCode: "otp100", name: "OTP 100", smsQuota: 100, priceBdt: 200, validityDays: 30, type: "otp", isActive: true },
-    { packageCode: "old50", name: "Old 50", smsQuota: 50, priceBdt: 100, validityDays: 30, type: "bulk", isActive: false },
+    { packageCode: "otp100", name: "OTP 100", smsQuota: 100, priceBdt: 200, validityDays: 30, type: "otp", isActive: true, currency: "BDT" },
+    { packageCode: "old50", name: "Old 50", smsQuota: 50, priceBdt: 100, validityDays: 30, type: "bulk", isActive: false, currency: "USD" },
   ];
   const noop = {
     onCreate: (): void => undefined,
@@ -381,6 +429,50 @@ describe("PackagesView (F5)", () => {
     expect(html).toContain("Reactivate");
     expect(html).toContain('aria-label="price-old50"');
     expect(html).toContain('name="packageCode"');
+  });
+
+  it("states the price currency on every row and in the create form (ISSUE-89)", () => {
+    const html = renderToString(
+      <PackagesView packages={packages} error={null} note={null} busy={false} {...noop} />,
+    );
+    // Create form: a currency selector defaulting to BDT, not a BDT-hardcoded price.
+    expect(html).toContain('id="pkgCurrency"');
+    expect(html).toContain('<option value="BDT">BDT</option>');
+    expect(html).toContain('<option value="USD">USD</option>');
+    expect(html).toContain('<option value="EUR">EUR</option>');
+    // Per-row select reflects the stored currency (old50 is priced in USD).
+    expect(html).toContain('aria-label="currency-old50"');
+    expect(html).toContain("Currency");
+    // The old "Price (BDT)" hard label is gone.
+    expect(html).not.toContain("Price (BDT)");
+  });
+
+  it("emits a package-code pattern that compiles under the regex v flag (ISSUE-89)", () => {
+    const html = renderToString(
+      <PackagesView packages={[]} error={null} note={null} busy={false} {...noop} />,
+    );
+    const match = html.match(/pattern="([^"]*)"/);
+    expect(match).not.toBeNull();
+    const source = (match as RegExpMatchArray)[1];
+
+    // Chromium compiles the HTML pattern attribute with the `v` (unicodeSets)
+    // flag since v112: an unescaped `-` inside the class made the attribute a
+    // SyntaxError — the console logged an error and client-side validation
+    // silently never ran. The escaped hyphen keeps the class valid under v.
+    // HTML anchors the expression implicitly: ^(?:pattern)$ against the value.
+    const compile = (): RegExp => new RegExp(`^(?:${source})$`, "v");
+    expect(compile).not.toThrow();
+    const re = compile();
+
+    // Same acceptance set as the server's PACKAGE_CODE_PATTERN.
+    expect(re.test("otp100")).toBe(true);
+    expect(re.test("a_B-9")).toBe(true);
+    expect(re.test("UPPER-1")).toBe(true);
+    expect(re.test("ab cd")).toBe(false);
+    expect(re.test("bad!chars")).toBe(false);
+    expect(re.test("a")).toBe(false);
+    expect(re.test("x".repeat(65))).toBe(false);
+    expect(re.test("")).toBe(false);
   });
 
   it("shows the empty state", () => {
@@ -454,6 +546,7 @@ describe("ReportsView (F5b spec)", () => {
         packageCode: "otp100",
         qty: 100,
         amountBdt: 200,
+        currency: "BDT",
         trxId: "TRXLEDGER1",
       },
       {
@@ -466,11 +559,12 @@ describe("ReportsView (F5b spec)", () => {
         packageCode: "",
         qty: 3,
         amountBdt: 0.6000000000000001,
+        currency: "BDT",
         trxId: null,
       },
     ],
     nextCursor: "1791300000:row-1",
-    totals: [{ packageType: "otp", status: "approved", count: 1, amountBdt: 200, grantedSms: 100 }],
+    totals: [{ packageType: "otp", status: "approved", currency: "BDT", count: 1, amountBdt: 200, grantedSms: 100 }],
   };
   const sendRows: SendLogRow[] = [
     {
@@ -503,6 +597,9 @@ describe("ReportsView (F5b spec)", () => {
   const noop = {
     onLedgerLoad: (): void => undefined,
     onLedgerMore: (): void => undefined,
+    // ISSUE-89 package-aggregate report: unloaded by default (like the ledger).
+    pkgReport: null as PackageReport | null,
+    onPkgLoad: (): void => undefined,
     onSendLoad: (): void => undefined,
     onSendMore: (): void => undefined,
     onLedgerCsv: (): void => undefined,
@@ -519,12 +616,27 @@ describe("ReportsView (F5b spec)", () => {
     expect(html).toContain("TRXLEDGER1");
     expect(html).toContain("purchase");
     expect(html).toContain("spend-otp");
-    expect(html).toContain("otp/approved: 1");
+    expect(html).toContain("otp/approved BDT: 1");
     expect(html).toContain("Download CSV");
     // Spec filter: appId alongside the date range.
     expect(html).toContain('id="ledgerApp"');
     // nextCursor present → Load more (cursor pagination, max 100/page server-side).
     expect(html).toContain("Load more");
+  });
+
+  it("prices ledger rows and totals in their own currency (ISSUE-89)", () => {
+    const usdLedger: LedgerReport = {
+      ...ledger,
+      rows: [{ ...ledger.rows[0], packageCode: "usd-pack", amountBdt: 20, currency: "USD" }],
+      totals: [{ packageType: "otp", status: "approved", currency: "USD", count: 1, amountBdt: 20, grantedSms: 50 }],
+    };
+    const html = renderToString(
+      <ReportsView ledger={usdLedger} sendRows={null} sendNextCursor={null} error={null} {...noop} />,
+    );
+    expect(html).toContain("20 USD");
+    expect(html).not.toContain("৳20");
+    // Totals are currency-dimensioned: the bucket names its unit.
+    expect(html).toContain("otp/approved USD: 1 (20 USD, 50 SMS granted)");
   });
 
   it("hides Load more when the report is exhausted", () => {
@@ -562,6 +674,66 @@ describe("ReportsView (F5b spec)", () => {
       <ReportsView ledger={ledger} sendRows={sendRows} sendNextCursor={null} error={null} {...noop} />,
     );
     expect(html.match(/Download CSV/g)).toHaveLength(2);
+  });
+
+  it("renders the package-aggregate report currency-dimensioned (ISSUE-89)", () => {
+    const pkgReport: PackageReport = {
+      from: 1791000000,
+      to: 1791500000,
+      rows: [
+        {
+          packageCode: "bdt-pack",
+          name: "BDT Pack",
+          currency: "BDT",
+          countSold: 2,
+          totalAmount: 400,
+          smsSold: 200,
+          firstSoldAt: 1791100000,
+          lastSoldAt: 1791400000,
+        },
+        {
+          packageCode: "usd-pack",
+          name: "USD Pack",
+          currency: "USD",
+          countSold: 1,
+          totalAmount: 20,
+          smsSold: 50,
+          firstSoldAt: 1791200000,
+          lastSoldAt: 1791200000,
+        },
+      ],
+      totalsByCurrency: [
+        { currency: "BDT", countSold: 2, totalAmount: 400 },
+        { currency: "USD", countSold: 1, totalAmount: 20 },
+      ],
+    };
+    const html = renderToString(
+      <ReportsView ledger={null} sendRows={null} sendNextCursor={null} error={null} {...noop} pkgReport={pkgReport} />,
+    );
+    expect(html).toContain("Package sales (aggregated)");
+    expect(html).toContain('id="pkgReportForm"');
+    // Per-currency rows: a USD total must never render with the taka symbol.
+    expect(html).toContain(">bdt-pack<");
+    expect(html).toContain(">usd-pack<");
+    expect(html).toContain(">৳400<");
+    expect(html).toContain(">20 USD<");
+    // Rollup line keeps currencies separate (never summed across).
+    expect(html).toContain("BDT: 2 sold · ৳400");
+    expect(html).toContain("USD: 1 sold · 20 USD");
+  });
+
+  it("shows the empty state for a window with no approved sales", () => {
+    const html = renderToString(
+      <ReportsView
+        ledger={null}
+        sendRows={null}
+        sendNextCursor={null}
+        error={null}
+        {...noop}
+        pkgReport={{ from: 1, to: 2, rows: [], totalsByCurrency: [] }}
+      />,
+    );
+    expect(html).toContain("No approved sales in this window.");
   });
 });
 
