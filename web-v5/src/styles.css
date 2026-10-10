@@ -1,5 +1,6 @@
-/* dP Relay web-v5 — hand-rolled theme. Dark, dense, operator-tool aesthetic;
-   no CSS framework in the dependency tree (see the F1 stage report flag). */
+/* dP Relay web-v5 — hand-rolled theme. VoltAgent system: abyss-black canvas,
+   carbon surfaces, warm-charcoal hairlines, mint/signal-green accent.
+   No CSS framework in the dependency tree (see the F1 stage report flag). */
 
 :root {
   /* ISSUE-91 utility spacing — replaces ad-hoc inline marginTop styles.
@@ -8,19 +9,19 @@
   --mt-6: 6px;
   --mt-14: 14px;
   --mt-18: 18px;
-  --bg: #0e1116;
-  --bg-raised: #161b23;
-  --bg-inset: #0a0d11;
-  --line: #262d38;
-  --text: #d9e1ec;
-  --muted: #8b96a7;
-  --accent: #4cc2ff;
-  --accent-strong: #1f9ee8;
+  --bg: #050507;
+  --bg-raised: #101010;
+  --bg-inset: #101010;
+  --line: #3d3a39;
+  --text: #f2f2f2;
+  --muted: #8b949e;
+  --accent: #2fd6a1;
+  --accent-strong: #00d992;
   --error-bg: #2a1417;
   --error-line: #7f2d33;
   --error-text: #ff9ba3;
-  --ok: #57d38c;
-  --radius: 10px;
+  --ok: #10b981;
+  --radius: 8px;
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
@@ -32,7 +33,15 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 15px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: var(--accent-strong);
 }
 
 .shell {
@@ -88,8 +97,8 @@ body {
 }
 
 .nav-link.active {
-  color: var(--bg);
-  background: var(--accent);
+  color: var(--accent);
+  border-color: var(--accent);
   font-weight: 600;
 }
 
@@ -208,14 +217,14 @@ input:focus-visible,
 select:focus-visible,
 button:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--accent-strong);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
 button {
-  background: var(--accent-strong);
-  color: #04121c;
-  border: none;
+  background: var(--bg-raised);
+  color: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: 8px;
   padding: 10px 16px;
   font-size: 14px;

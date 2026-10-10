@@ -1,18 +1,18 @@
 /* dP Relay marketing site — plain CSS, no framework, no build step.
-   Theme: VoltAgent-inspired. Near-black canvas, a single electric-green
+   Theme: VoltAgent-inspired. Abyss-black canvas, a single electric-green
    accent reserved for CTAs and live markers, hairline borders instead of
    shadows. Colors live in this file only — pages never inline colors.
    Contrast pairs are measured in README.md. */
 
 :root {
   /* surfaces */
-  --canvas: #101010;
-  --canvas-soft: #1a1a1a;
+  --canvas: #050507;
+  --canvas-soft: #101010;
   --hairline: #3d3a39;
   /* text */
   --ink: #f2f2f2;
   --ink-strong: #ffffff;
-  --body-text: #bdbdbd;
+  --body-text: #b8b3b0;
   --mute: #8b949e;
   /* the one accent */
   --green: #00d992;
@@ -45,7 +45,7 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--green);
+  outline: 2px solid var(--green-soft);
   outline-offset: 2px;
 }
 
@@ -54,7 +54,7 @@ a {
 }
 
 a:hover {
-  color: var(--green-soft);
+  color: #00ffaa;
 }
 
 code {
@@ -152,8 +152,9 @@ nav[aria-label="Main"] a[aria-current="page"] {
 }
 
 nav[aria-label="Main"] a.cta {
-  color: var(--on-green);
-  background: var(--green);
+  color: var(--green-soft);
+  background: var(--canvas-soft);
+  border: 1px solid var(--green-soft);
   border-radius: var(--radius-btn);
   padding: 0.4rem 0.9rem;
   font-weight: 600;
@@ -161,7 +162,7 @@ nav[aria-label="Main"] a.cta {
 
 nav[aria-label="Main"] a.cta:hover {
   box-shadow: var(--glow);
-  color: var(--on-green);
+  color: var(--green-soft);
 }
 
 .site-footer {
@@ -183,19 +184,21 @@ nav[aria-label="Main"] a.cta:hover {
 /* ── Type ──────────────────────────────────────────────── */
 
 h1 {
-  font-size: clamp(2.1rem, 4.5vw, 3.4rem);
+  font-size: clamp(2.1rem, 5vw, 3.75rem);
   font-weight: 400;
-  line-height: 1.12;
+  line-height: 1.05;
   letter-spacing: -0.022em;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
   color: var(--ink-strong);
   margin: 0.4rem 0 0.75rem;
 }
 
 h2 {
-  font-size: 1.6rem;
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
   font-weight: 400;
-  line-height: 1.25;
-  letter-spacing: -0.015em;
+  line-height: 1.11;
+  letter-spacing: -0.025em;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
   color: var(--ink-strong);
   margin: 2.25rem 0 0.6rem;
 }
@@ -265,13 +268,14 @@ h3 {
 }
 
 .track-toggle input:focus-visible + label {
-  outline: 2px solid var(--green);
+  outline: 2px solid var(--green-soft);
   outline-offset: 2px;
 }
 
 .track-toggle input:checked + label {
-  background: var(--green);
-  color: var(--on-green);
+  background: var(--canvas-soft);
+  color: var(--green-soft);
+  border: 1px solid var(--green-soft);
 }
 
 /* ── Cards ─────────────────────────────────────────────── */
@@ -282,7 +286,7 @@ main.wrap {
 }
 
 .card {
-  background: var(--canvas);
+  background: var(--canvas-soft);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   padding: 1.5rem;
@@ -311,7 +315,7 @@ main.wrap {
 }
 
 .steps li {
-  background: var(--canvas);
+  background: var(--canvas-soft);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   padding: 1.25rem;
@@ -339,7 +343,7 @@ main.wrap {
 table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--canvas);
+  background: var(--canvas-soft);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   overflow: hidden;
@@ -433,24 +437,24 @@ tr:last-child td {
 
 .button {
   display: inline-block;
-  background: var(--green);
-  color: var(--on-green);
+  background: var(--canvas-soft);
+  color: var(--green-soft);
   text-decoration: none;
   font-weight: 600;
   border-radius: var(--radius-btn);
   padding: 0.7rem 1.3rem;
-  border: 1px solid var(--green);
+  border: 1px solid var(--green-soft);
   transition: box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .button:hover {
   box-shadow: var(--glow);
   transform: translateY(-1px);
-  color: var(--on-green);
+  color: var(--green-soft);
 }
 
 .button.secondary {
-  background: var(--canvas);
+  background: transparent;
   color: var(--ink);
   border: 1px solid var(--hairline);
 }
@@ -474,7 +478,7 @@ tr:last-child td {
   display: inline-block;
   padding: 0.25rem 0.7rem;
   border: 1px solid var(--hairline);
-  background: var(--canvas);
+  background: var(--canvas-soft);
   border-radius: 999px;
   color: var(--body-text);
   font-size: 0.85rem;
@@ -492,7 +496,7 @@ tr:last-child td {
   margin-top: 1.25rem;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
-  background: var(--canvas);
+  background: var(--canvas-soft);
   padding: 1.5rem;
   text-align: left;
 }
@@ -553,4 +557,54 @@ main.wrap > section + section h2:first-child {
   .track-toggle label {
     transition: none;
   }
+}
+
+/* Footer links: Fog Gray, brightening to white on hover. */
+.site-footer a {
+  color: var(--body-text);
+}
+
+.site-footer a:hover {
+  color: var(--ink-strong);
+}
+
+/* The brand dot pulses like a "power on" LED — slow, subtle. */
+@keyframes dot-pulse {
+  from {
+    box-shadow: 0 0 2px var(--green);
+  }
+  to {
+    box-shadow: 0 0 8px var(--green);
+  }
+}
+
+.brand::after {
+  animation: dot-pulse 2.4s ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand::after {
+    animation: none;
+  }
+}
+
+/* ── Audience grid (Who it's for) ──────────────────────── */
+
+.grid3 {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  list-style: none;
+  padding: 0;
+}
+
+.grid3 li {
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  padding: 1.25rem;
+}
+
+.grid3 h3 {
+  margin-top: 0;
 }

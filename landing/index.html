@@ -62,7 +62,46 @@
       </div>
     </section>
 
-    <section aria-labelledby="how-it-works">
+
+
+    
+    <section aria-labelledby="what">
+      <h2 id="what">What is dP Relay?</h2>
+      <p class="muted">One REST API, two ways to deliver. Track one: your own Android phone is the gateway — enroll it once and its SIM carries your messages anywhere in the world. Track two: our operator-run dedicated SIM pool covers Bangladesh <code>+880</code> on Grameenphone, Robi, Banglalink and Teletalk. Send OTP codes from your backend, run bulk campaigns from the dashboard — and every message, on either track, deducts one credit.</p>
+    </section>
+
+    <section aria-labelledby="who">
+      <h2 id="who">Who it's for</h2>
+      <ul class="grid3">
+        <li>
+          <h3>App developers</h3>
+          <p class="muted">Shipping phone verification in an ecommerce, medical or SaaS app? Copy the REST examples, point your backend at the API, and start with 20 free trial messages.</p>
+        </li>
+        <li>
+          <h3>Bangladesh-first teams</h3>
+          <p class="muted">Your users are on GP, Robi, Banglalink or Teletalk. The dedicated <code>+880</code> pool delivers at a flat rate, and you top up with bKash in BDT.</p>
+        </li>
+        <li>
+          <h3>Indie builders</h3>
+          <p class="muted">A spare Android phone becomes a worldwide gateway on your own SIM — no carrier contracts, no per-country negotiation. Scale by adding devices.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="why">
+      <h2 id="why">Why choose dP Relay</h2>
+      <div class="card">
+        <ul class="guide-steps">
+          <li>One API, two delivery tracks — switch between your own device and the dedicated pool without changing integration code.</li>
+          <li>Per-message credits at the platform rate of ৳0.20, not subscriptions — see <a href="/pricing/">pricing</a> and the <a href="/docs/">API docs</a>.</li>
+          <li>Your device, your number — BYOD delivery from any country, on any carrier your SIM reaches.</li>
+          <li>Signed webhooks (<code>X-DP-Signature</code>), strict E.164 validation, and per-number rate limits that protect deliverability.</li>
+          <li>Human-approved payments — a real operator confirms every top-up; no card required.</li>
+        </ul>
+      </div>
+    </section>
+
+<section aria-labelledby="how-it-works">
       <h2 id="how-it-works">How it works</h2>
       <ol class="steps">
         <li>
@@ -80,7 +119,7 @@
       </ol>
     </section>
 
-    <section aria-labelledby="quickstart">
+<section aria-labelledby="quickstart">
       <h2 id="quickstart">Your first OTP, three ways</h2>
       <div class="code-grid">
         <figure>
@@ -106,18 +145,6 @@
            "X-App-Secret": APP_SECRET},
   json={"phone": "+8801XXXXXXXXX"})</code></pre>
         </figure>
-      </div>
-    </section>
-
-    <section aria-labelledby="why">
-      <h2 id="why">Built for developers</h2>
-      <div class="card">
-        <ul class="guide-steps">
-          <li>Plain REST with JSON bodies and predictable <code>{ ok, error, code }</code> failures.</li>
-          <li>Strict E.164 numbers, clear error codes, per-number rate limits that protect deliverability.</li>
-          <li>Signed webhooks (<code>X-DP-Signature</code>) so your backend can trust delivery events.</li>
-          <li>Transparent per-message credits with package top-ups — see <a href="/pricing/">pricing</a> and the <a href="/docs/">API docs</a>.</li>
-        </ul>
       </div>
     </section>
   </main>
