@@ -1,7 +1,7 @@
 {
   "name": "dprelay-web-v5",
   "private": true,
-  "version": "0.1.0",
+  "version": "5.4.0",
   "type": "module",
   "description": "dP Relay v5 customer dashboard + operator panel — clean-room React + Vite + TypeScript app (static-host target: Render Static Site)",
   "scripts": {
