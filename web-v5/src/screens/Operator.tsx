@@ -1124,7 +1124,9 @@ export function PackagesView(props: {
             <option value="USD">USD</option>
             <option value="EUR">EUR</option>
           </select>
-          <label htmlFor="pkgValidity">Validity (days)</label>
+          <label htmlFor="pkgValidity">
+            Validity (days) <span className="muted">— 365 (1 yr) · 1825 (5 yrs) · 3650 (10 yrs / lifetime)</span>
+          </label>
           <input id="pkgValidity" name="validityDays" type="number" min={1} required />
           <label htmlFor="pkgType">Type</label>
           <select id="pkgType" name="type" defaultValue="otp">
