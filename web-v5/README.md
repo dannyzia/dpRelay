@@ -117,6 +117,8 @@ is `role="alert"` + `id="form-error"` and the login form points
   | button text `#04121c` on `--accent-strong #1f9ee8` | 6.42 |
   | `--error-text #ff9ba3` on `--error-bg #2a1417` / on `--bg` | 8.65 / 9.43 |
   | `--ok #57d38c` on `--bg` / on `--bg-raised` | 10.00 / 9.14 |
+  | `.button-link` `--accent #4cc2ff` on `--bg-inset #0a0d11` | 9.71 |
+  | `.badge` / `.dropzone` `--muted #8b96a7` on `--bg-inset` | 6.51 |
 
   Re-check these if any token changes, and check any new color pair the same
   way. *(The issue named a "Kalam-on-pastel" audit — `grep -r Kalam` finds no

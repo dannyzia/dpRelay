@@ -9,10 +9,10 @@ on bare Node). Directory-style clean URLs (`/pricing/` → `pricing/index.html`)
 | URL | File | Purpose |
 | --- | --- | --- |
 | `/` | `index.html` | home: product pitch + CTAs to the app |
-| `/pricing/` | `pricing/index.html` | package pricing |
+| `/pricing/` | `pricing/index.html` | country-wise coverage & package pricing (dual-track) |
 | `/payment/` | `payment/index.html` | remittance guides (owner-verbatim — see below) |
 | `/faq/` | `faq/index.html` | FAQ (SMTP-free rule — infrastructure details never appear) |
-| `/docs/` | `docs/index.html` | API docs entry point |
+| `/docs/` | `docs/index.html` | API docs: app-plane contract + BYOD device enrollment |
 
 Shared: `styles.css` (design tokens in `:root`), `robots.txt`, `sitemap.xml`.
 
@@ -51,14 +51,15 @@ single h1, links). Contrast/keyboard are checked by hand:
 - [ ] Contrast ≥ 4.5:1. Measured pairs (WCAG AA — all pass):
   | Pair | Ratio |
   | --- | --- |
-  | `--ink #16202c` on `--bg #f7f8fa` | 15.47 |
-  | `--muted #55627a` on `--bg` / on `--surface #ffffff` | 5.79 / 6.15 |
-  | `--accent-ink #ffffff` on `--accent #0b6bcb` (CTA buttons) | 5.28 |
-  | `--accent #0b6bcb` on `--bg` (links) | 4.97 |
+  | `--ink #f8fafc` on `--bg #030712` | 19.24 |
+  | `--muted #94a3b8` on `--bg` / on `--surface #0f172a` / on `--ok-bg #0c1424` | 7.85 / 6.96 / 7.18 |
+  | `--accent-ink #020617` on `--accent-strong #06b6d4` (CTA fills) | 8.31 |
+  | `--accent #22d3ee` on `--bg` (links) | 11.14 |
+  | `--ok #34d399` on `--ok-bg` (chips) | 9.57 |
 
   Re-check if any token changes. *(The issue named a "Kalam-on-pastel" audit
   — `grep -r Kalam` finds no such font anywhere in the repo; the landing is
-  system-ui on the light tokens above, and those are the pairs audited.)*
+  system-ui on the dark tokens above, and those are the pairs audited.)*
 - [ ] Every page: keyboard-reachable nav and CTAs with a visible focus ring;
   headings run h1 → h2 in order; images (if any) have alt text.
 - [ ] 200% zoom: no clipped text or horizontal scrolling on `/` and

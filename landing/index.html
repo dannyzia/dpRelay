@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>dP Relay — Bulk &amp; OTP SMS API for Bangladesh</title>
-  <meta name="description" content="Send OTP and bulk SMS in Bangladesh at ৳0.20 per SMS. Simple REST API, instant app credentials, bKash payments. New apps start with free trial credits.">
+  <title>dP Relay — BYOD SMS Gateway &amp; Bangladesh OTP API</title>
+  <meta name="description" content="Send OTP and bulk SMS worldwide through your own Android gateway, or use our Bangladesh SIM pool. One REST API, free trial credits, bKash top-ups.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -25,31 +25,87 @@
 
   <main class="wrap">
     <section class="hero">
-      <h1>OTP &amp; bulk SMS for Bangladesh, one simple API</h1>
-      <p class="price">৳0.20 BDT / SMS</p>
-      <p class="muted">Verification codes and bulk campaigns over a REST API you can integrate in minutes. Pay with bKash, top up from the dashboard, start with free trial credits.</p>
+      <h1>Your Android phone is the SMS gateway — or use ours</h1>
+      <p class="muted">dP Relay delivers OTP codes and bulk campaigns over one REST API: through a device you own, anywhere in the world, or through our dedicated Bangladesh SIM pool.</p>
+      <div class="track-toggle" role="group" aria-label="Choose a delivery track">
+        <input type="radio" name="track" id="track-global" checked>
+        <label for="track-global">Global · your device</label>
+        <input type="radio" name="track" id="track-bd">
+        <label for="track-bd">Bangladesh · dedicated pool</label>
+      </div>
+      <div class="track-panels">
+        <section id="panel-global">
+          <h2>Worldwide reach on a device you own</h2>
+          <p class="muted">Enroll any Android phone as your app's gateway and send through its SIM — any carrier, any country your phone can reach. Your carrier plan carries delivery; the platform meters each message from your credit balance.</p>
+          <ol class="guide-steps">
+            <li>Install the dP Relay gateway app on the phone that holds your SIM.</li>
+            <li>Paste the device enrollment secret from the dashboard — the app registers itself to your account.</li>
+            <li>Call the API; messages go out over your own number.</li>
+          </ol>
+        </section>
+        <section id="panel-bd">
+          <h2>Dedicated SIM pool for Bangladesh</h2>
+          <p class="muted">Prefer not to run a device? Our operator-run SIM pool delivers to <strong>+880</strong> numbers on Grameenphone, Robi, Banglalink and Teletalk at a flat <strong>৳0.20 per SMS</strong>, topped up with bKash.</p>
+          <p class="actions"><a class="button secondary" href="/pricing/">See pricing</a></p>
+        </section>
+      </div>
       <p class="actions">
         <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Create an account</a>
         <a class="button secondary" href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
       </p>
+      <div class="chip-row">
+        <span class="chip"><em>Any carrier</em> worldwide</span>
+        <span class="chip">E.164 strict validation</span>
+        <span class="chip">Signed <em>webhooks</em></span>
+        <span class="chip">bKash <em>top-ups</em></span>
+      </div>
     </section>
 
     <section aria-labelledby="how-it-works">
       <h2 id="how-it-works">How it works</h2>
       <ol class="steps">
         <li>
-          <strong>Create your account</strong>
-          <p class="muted">Sign up with your email, verify it, and land in the dashboard — new apps receive free trial credits.</p>
+          <strong>Create your app</strong>
+          <p class="muted">Sign up, verify your email, register an app — the <code>appId</code> and <code>appSecret</code> are issued once. New apps start with free trial credits.</p>
         </li>
         <li>
-          <strong>Register an app</strong>
-          <p class="muted">The dashboard issues your <code>appId</code> and <code>appSecret</code> once. They are the only credentials every API call needs.</p>
+          <strong>Connect a gateway</strong>
+          <p class="muted">Enroll your own Android phone from the dashboard, or rely on the operator's Bangladesh SIM pool — both deliver through the same API.</p>
         </li>
         <li>
           <strong>Send messages</strong>
-          <p class="muted">Call <code>POST /v5/otp/send</code> for verification codes or launch a bulk campaign from the dashboard. Balance updates as credits are used.</p>
+          <p class="muted">Call <code>POST /v5/otp/send</code> for codes or launch bulk campaigns from the dashboard. Balance updates as credits are used.</p>
         </li>
       </ol>
+    </section>
+
+    <section aria-labelledby="quickstart">
+      <h2 id="quickstart">Your first OTP, three ways</h2>
+      <div class="code-grid">
+        <figure>
+          <figcaption>cURL</figcaption>
+          <pre><code>curl -X POST "$API/v5/otp/send" \
+  -H "X-App-Id: $APP_ID" \
+  -H "X-App-Secret: $APP_SECRET" \
+  -d '{"phone":"+8801XXXXXXXXX"}'</code></pre>
+        </figure>
+        <figure>
+          <figcaption>Node.js</figcaption>
+          <pre><code>const res = await fetch(`${API}/v5/otp/send`, {
+  method: "POST",
+  headers: { "X-App-Id": APP_ID,
+             "X-App-Secret": APP_SECRET },
+  body: JSON.stringify({ phone: "+8801XXXXXXXXX" }),
+});</code></pre>
+        </figure>
+        <figure>
+          <figcaption>Python</figcaption>
+          <pre><code>r = requests.post(f"{API}/v5/otp/send",
+  headers={"X-App-Id": APP_ID,
+           "X-App-Secret": APP_SECRET},
+  json={"phone": "+8801XXXXXXXXX"})</code></pre>
+        </figure>
+      </div>
     </section>
 
     <section aria-labelledby="why">
@@ -57,9 +113,9 @@
       <div class="card">
         <ul class="guide-steps">
           <li>Plain REST with JSON bodies and predictable <code>{ ok, error, code }</code> failures.</li>
-          <li>Strict E.164 numbers, clear error codes, and per-number rate limits that protect deliverability.</li>
+          <li>Strict E.164 numbers, clear error codes, per-number rate limits that protect deliverability.</li>
           <li>Signed webhooks (<code>X-DP-Signature</code>) so your backend can trust delivery events.</li>
-          <li>Transparent pricing at ৳0.20 per SMS with package top-ups via bKash — see <a href="/pricing/">pricing</a>.</li>
+          <li>Transparent per-message credits with package top-ups — see <a href="/pricing/">pricing</a> and the <a href="/docs/">API docs</a>.</li>
         </ul>
       </div>
     </section>

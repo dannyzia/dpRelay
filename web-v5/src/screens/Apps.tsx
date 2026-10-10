@@ -20,6 +20,7 @@ import {
 } from "../api";
 import { formatPrice } from "../lib/format";
 import { hrefFor } from "../lib/router";
+import { DevicePairingView } from "./DevicePairing";
 
 /** Epoch-seconds → a short UTC date for the wallet panels. */
 function shortDate(epochSec: number | null): string {
@@ -241,6 +242,7 @@ export function AppsView(props: {
               Device enrollment secret:{" "}
               <code data-testid="fresh-device-secret">{props.freshSecret.deviceEnrollmentSecret}</code>
             </p>
+            <DevicePairingView secret={props.freshSecret.deviceEnrollmentSecret} />
             {props.freshSecret.trialSms > 0 && (
               <p className="muted" data-testid="fresh-trial">
                 Trial credits ({props.freshSecret.trialSms} OTP + {props.freshSecret.trialSms} bulk

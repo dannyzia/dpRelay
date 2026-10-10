@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FAQ — dP Relay SMS API</title>
-  <meta name="description" content="Answers on payments, API keys, password resets, OTP pricing, and failed SMS delivery for the dP Relay SMS platform.">
+  <meta name="description" content="Answers on BYOD gateways, payments, API keys, password resets, OTP pricing, and delivery for the dP Relay dual-track SMS platform.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/faq/">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -25,6 +25,7 @@
 
   <main class="wrap">
     <h1>Frequently asked questions</h1>
+    <p class="muted">Two delivery tracks, one platform — the gateway questions sit at the end.</p>
 
     <section class="card" aria-labelledby="faq-pay">
       <h2 id="faq-pay">How do I pay?</h2>
@@ -49,6 +50,21 @@
     <section class="card" aria-labelledby="faq-missing">
       <h2 id="faq-missing">Why hasn't my SMS arrived?</h2>
       <p class="muted">Check that the recipient number is in strict E.164 format (e.g. +8801XXXXXXXXX) and that the recipient's device is switched on and reachable. Failed sends show in the <strong>History</strong> screen; repeated failures usually mean the receiving device is offline — contact the operator.</p>
+    </section>
+
+    <section class="card" aria-labelledby="q-byod-own">
+      <h2 id="q-byod-own">Can I use my own phone as the gateway?</h2>
+      <p class="muted">Yes — that's the BYOD track. Enroll any Android phone from the Apps screen: the gateway app registers to your account and messages go out over your SIM, on any carrier, anywhere in the world. Each message still deducts one SMS credit from your balance.</p>
+    </section>
+
+    <section class="card" aria-labelledby="q-byod-choose">
+      <h2 id="q-byod-choose">BYOD or the dedicated pool — which track?</h2>
+      <p class="muted">Choose BYOD for worldwide reach and your own sender number; choose the dedicated pool to serve Bangladesh (+880 on Grameenphone, Robi, Banglalink, Teletalk) without running hardware. Both deliver through the identical API and both deduct credits the same way.</p>
+    </section>
+
+    <section class="card" aria-labelledby="q-byod-secret">
+      <h2 id="q-byod-secret">What if I lose my enrollment secret?</h2>
+      <p class="muted">Enrollment secrets are shown once when you enroll a device. Lose it? Enroll the device again to issue a fresh secret, then paste it into the gateway app right away — it pairs your phone to your account and is not your password.</p>
     </section>
   </main>
 
