@@ -23,11 +23,12 @@
  * Nothing here touches the real keyring, and no test prints a secret.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir, homedir } from "node:os";
+import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require_ = createRequire(import.meta.url);
@@ -202,7 +203,7 @@ describe("round trip through a stubbed secret-tool", () => {
    * and exits 1 *silently* when the account is absent.
    */
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "secret-store-test-"));
+    dir = testTmpDir("secret-store-test-");
     bin = join(dir, "bin");
     storeDir = join(dir, "store");
     recordPath = join(dir, "argv.log");

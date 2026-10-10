@@ -4,17 +4,16 @@
  * payment-SMS ingest (validation + idempotency), FCM token storage.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import type { FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const TEST_ENROLLMENT_SECRET = "enroll-only-secret-0123456789abcdef0123456789ab";
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-device-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-device-test-"), "test.db");
   return buildApp({
     dbPath,
     // Enrollment enabled by default: every device-plane flow needs a key. The

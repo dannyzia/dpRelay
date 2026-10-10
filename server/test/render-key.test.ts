@@ -23,12 +23,13 @@
  * The scan reads source text only. It never reads, parses or prints the key.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, chmodSync, rmSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, chmodSync, rmSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir, homedir } from "node:os";
+import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require_ = createRequire(import.meta.url);
@@ -156,7 +157,7 @@ describe("resolveRenderApiKey precedence", () => {
   let envBackup: Record<string, string | undefined>;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "render-key-test-"));
+    dir = testTmpDir("render-key-test-");
     envBackup = {
       RENDER_API_KEY: process.env.RENDER_API_KEY,
       RENDER_API_KEY_FILE: process.env.RENDER_API_KEY_FILE,

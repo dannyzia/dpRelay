@@ -4,17 +4,16 @@
  * Uses temp DBs and a test JWT secret; no real network.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import type { FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 /** Deterministic test secret (32+ chars) — never a production value. */
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 
 function makeApp(): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-auth-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-auth-test-"), "test.db");
   return buildApp({ dbPath, env: { JWT_SECRET: TEST_JWT_SECRET } });
 }
 

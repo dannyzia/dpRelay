@@ -14,11 +14,10 @@
  * - rawBody is accepted for payload parity but never persisted.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "reader-test-jwt-0123456789abcdef0123456789abcdef";
 const READER = "reader-secret-0123456789abcdef0123456789abcdef";
@@ -34,7 +33,7 @@ const BODY = "TrxID 8AC3K2L9P1 received from 01712345678. Tk 500.00 paid. Fee Tk
 let app: FastifyInstance;
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "f8-reader-")), "test.db");
+  const dbPath = join(testTmpDir("f8-reader-"), "test.db");
   return buildApp({
     dbPath,
     startCron: false,

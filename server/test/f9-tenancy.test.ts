@@ -10,12 +10,11 @@
  * tests (each `it` builds its own app unless noted).
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
 import type { FastifyInstance, InjectOptions } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const OPERATOR = "test-operator-secret-0123456789abcdef";
@@ -23,7 +22,7 @@ const OPERATOR = "test-operator-secret-0123456789abcdef";
 let app: FastifyInstance;
 
 function makeApp(env: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-f9-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-f9-test-"), "test.db");
   return buildApp({
     dbPath,
     env: {

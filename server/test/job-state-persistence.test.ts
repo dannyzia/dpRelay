@@ -17,8 +17,6 @@
  * row was written" would pass even if nothing ever read that row back.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import {
@@ -31,6 +29,7 @@ import {
 import { ALERT_SINK_STATE_KEY, WATCHDOG_DEDUPE_STATE_KEY } from "../src/job-state.js";
 import { loadConfig } from "../src/config.js";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 
@@ -45,7 +44,7 @@ const ALERT: WatchdogAlert = {
 
 /** One db path reused across "restarts" so state has somewhere to survive to. */
 function dbPath(): string {
-  return join(mkdtempSync(join(tmpdir(), "dprelay-jobstate-")), "test.db");
+  return join(testTmpDir("dprelay-jobstate-"), "test.db");
 }
 
 function makeApp(path: string, env: Record<string, string> = {}): FastifyInstance {

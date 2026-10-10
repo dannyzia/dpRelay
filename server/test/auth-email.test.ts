@@ -5,11 +5,10 @@
  * tested against the real module.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import type { FastifyInstance, InjectOptions } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 /** Captured sends: each entry is the raw body text (contains the token link). */
 const sent: Array<{ to: string; subject: string; text: string }> = [];
@@ -31,7 +30,7 @@ const PASSWORD = "correct-horse-battery";
 let app: FastifyInstance;
 
 function makeApp(env: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-auth-email-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-auth-email-test-"), "test.db");
   return buildApp({
     dbPath,
     env: { JWT_SECRET: TEST_JWT_SECRET, DASHBOARD_BASE_URL: DASHBOARD, ...env },

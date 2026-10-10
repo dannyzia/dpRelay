@@ -18,8 +18,7 @@
  * trusting the status code instead of the receipt is exactly the bug.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 
@@ -48,6 +47,7 @@ import {
 } from "../src/jobs.js";
 import type { AlertSinkStatus } from "../src/jobs.js";
 import type { FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const TG_TOKEN = "12345:TEST-TOKEN-abcdefghijklmnop";
@@ -79,7 +79,7 @@ afterEach(() => {
 });
 
 function makeApp(env: Record<string, string> = {}): FastifyInstance {
-  const dir = mkdtempSync(join(tmpdir(), "dprelay-canary-"));
+  const dir = testTmpDir("dprelay-canary-");
   tempDirs.push(dir);
   return buildApp({
     dbPath: join(dir, "test.db"),
@@ -366,7 +366,7 @@ describe("alert canary scheduling", () => {
     const { urls, bodies } = stubFetch(() => okBody(5150));
     // cron enabled: the other four jobs land here too, and their mocked timers
     // are never invoked.
-    const dir = mkdtempSync(join(tmpdir(), "dprelay-canary-"));
+    const dir = testTmpDir("dprelay-canary-");
     tempDirs.push(dir);
     const app = buildApp({
       dbPath: join(dir, "test.db"),
@@ -410,7 +410,7 @@ describe("alert canary scheduling", () => {
     // The whole point of defaulting off: an operator who never opted in must not
     // receive daily messages because someone flipped a condition somewhere.
     stubFetch(() => okBody(1));
-    const dir = mkdtempSync(join(tmpdir(), "dprelay-canary-"));
+    const dir = testTmpDir("dprelay-canary-");
     tempDirs.push(dir);
     const app = buildApp({
       dbPath: join(dir, "test.db"),

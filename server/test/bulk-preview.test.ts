@@ -7,17 +7,16 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "bulk-preview-jwt-0123456789abcdef0123456789abcdef";
 const TEST_ENROLLMENT_SECRET = "enroll-only-secret-0123456789abcdef0123456789ab";
 
 function makeApp(extra: Record<string, string> = {}): FastifyInstance {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "dprelay-bulk-preview-test-")), "test.db");
+  const dbPath = join(testTmpDir("dprelay-bulk-preview-test-"), "test.db");
   return buildApp({
     dbPath,
     env: {

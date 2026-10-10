@@ -26,13 +26,13 @@
  * database, and every tick is accounted for as alert / suppressed / quiet.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
 import { findStaleDevices, resetStaleAlertDedupe } from "../src/jobs.js";
 import { sha256Hex } from "../src/services/crypto.js";
 import type { FastifyInstance } from "fastify";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const TEST_OPERATOR_SECRET = "operator-test-secret-0123456789abcdef0123456789ab";
@@ -114,7 +114,7 @@ async function replayWeek(
   quarantineSec: number,
   seed: (app: FastifyInstance, t0Sec: number) => void,
 ): Promise<WeekReplay> {
-  const dir = mkdtempSync(join(tmpdir(), "dprelay-weekreplay-"));
+  const dir = testTmpDir("dprelay-weekreplay-");
   tempDirs.push(dir);
   const app = buildApp({
     dbPath: join(dir, "test.db"),

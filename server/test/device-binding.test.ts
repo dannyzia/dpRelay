@@ -16,12 +16,11 @@
  *    number | bound-app for the panel.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
+import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 const TEST_JWT_SECRET = "binding-test-jwt-0123456789abcdef0123456789abcdef";
 const ENROLL_SECRET = "binding-enroll-secret-0123456789abcdef0123456789ab";
@@ -32,7 +31,7 @@ let app: FastifyInstance;
 
 beforeEach(() => {
   app = buildApp({
-    dbPath: join(mkdtempSync(join(tmpdir(), "dprelay-binding-test-")), "test.db"),
+    dbPath: join(testTmpDir("dprelay-binding-test-"), "test.db"),
     env: {
       JWT_SECRET: TEST_JWT_SECRET,
       DEVICE_ENROLLMENT_SECRET: ENROLL_SECRET,
