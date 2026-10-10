@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>API docs — send, verify, status | dP Relay</title>
-  <meta name="description" content="OTP send/verify/status API contract, error codes, signed-webhook verification, and curl examples for the dP Relay SMS platform.">
+  <meta name="description" content="OTP send/verify/status contract, device enrollment for BYOD gateways, error codes, signed-webhook verification, and curl examples for the dP Relay SMS platform.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/docs/">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -33,8 +33,18 @@
     <pre><code>X-App-Id: &lt;your app id&gt;
 X-App-Secret: &lt;your app secret&gt;</code></pre>
 
+    <section aria-labelledby="tracks">
+      <h2 id="tracks">Two tracks, one API</h2>
+      <p class="muted">
+        Every call authenticates with <code>X-App-Id</code> / <code>X-App-Secret</code>
+        regardless of track. BYOD gateways serve worldwide numbers over your own SIM; the
+        dedicated pool serves Bangladesh <code>+880</code>. Same endpoints, same credit
+        deduction per message.
+      </p>
+    </section>
+
     <section aria-labelledby="send">
-      <h2 id="send">1 · Send an OTP</h2>
+      <h2 id="send">Send an OTP</h2>
       <pre><code>POST /v5/otp/send
 { "phone": "+8801XXXXXXXXX" }
 
@@ -48,7 +58,7 @@ X-App-Secret: &lt;your app secret&gt;</code></pre>
     </section>
 
     <section aria-labelledby="verify">
-      <h2 id="verify">2 · Verify the code</h2>
+      <h2 id="verify">Verify the code</h2>
       <pre><code>POST /v5/otp/verify
 { "phone": "+8801XXXXXXXXX", "otp": "123456" }
 
@@ -61,7 +71,7 @@ X-App-Secret: &lt;your app secret&gt;</code></pre>
     </section>
 
     <section aria-labelledby="status">
-      <h2 id="status">3 · Poll status</h2>
+      <h2 id="status">Poll status</h2>
       <pre><code>GET /v5/otp/status?phone=%2B8801XXXXXXXXX
 
 200 { "ok": true, "status": "pending|verified|expired",
@@ -84,6 +94,10 @@ X-App-Secret: &lt;your app secret&gt;</code></pre>
           <tr><td>409</td><td><code>trx_id_exists</code></td><td>That bKash TrxID is already attached to another pending transaction.</td></tr>
           <tr><td>423</td><td><code>otp_locked</code></td><td>Too many verify attempts; retry after <code>retryAfterSec</code>.</td></tr>
           <tr><td>429</td><td><code>rate_limited</code> / <code>resend_cooldown</code></td><td>Per-app per-number rate limit, or per-number resend cooldown.</td></tr>
+          <tr><td>401</td><td><code>invalid_enrollment_secret</code></td><td>Device enroll presented a wrong bearer secret.</td></tr>
+          <tr><td>403</td><td><code>enrollment_disabled</code></td><td>Enrollment is off for this deployment (nothing to enroll against).</td></tr>
+          <tr><td>409</td><td><code>phone_number_exists</code></td><td>That gateway phone number is registered to another device.</td></tr>
+          <tr><td>400</td><td><code>invalid_phone_number</code></td><td>Phone-number update was not strict E.164.</td></tr>
         </tbody>
       </table>
     </section>
@@ -96,6 +110,28 @@ X-App-Secret: &lt;your app secret&gt;</code></pre>
         keyed with your app's webhook secret. Verify it with a timing-safe comparison over
         the raw bytes before parsing the JSON, and answer 2xx promptly — failed deliveries
         are retried.
+      </p>
+    </section>
+
+    <section aria-labelledby="pairing">
+      <h2 id="pairing">Connect your own gateway (BYOD)</h2>
+      <p class="muted">
+        Any Android phone becomes the gateway: enroll it once, and its SIM delivers your
+        messages worldwide. Enrollment uses a Bearer secret — the dashboard's
+        <strong>Apps screen</strong> issues it when you enroll a device, shown once. Paste
+        it into the gateway app on the phone (manual entry; there is no QR scanning in the
+        app), and the app performs the call below itself.
+      </p>
+      <pre><code>POST /v5/device/enroll
+Authorization: Bearer &lt;enrollment secret&gt;
+{ "label": "my office phone" }
+
+201 { "ok": true, "deviceId": "...", "apiKey": "..." }</code></pre>
+      <p class="muted">
+        Add or fix the SIM's number afterwards with
+        <code>POST /v5/device/phone-number</code> <code>{ "phoneNumber": "+8801XXXXXXXXX" }</code> —
+        strict E.164. A malformed number at enroll time is ignored (not stored) so a
+        carrier-formatted typo cannot block pairing.
       </p>
     </section>
 

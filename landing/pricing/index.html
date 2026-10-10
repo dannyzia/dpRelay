@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pricing — ৳0.20 per SMS | dP Relay</title>
-  <meta name="description" content="Flat ৳0.20 BDT per SMS for OTP and bulk messages. Buy credit packages in the dashboard with bKash. New apps start with free trial credits.">
+  <title>Pricing — dual-track SMS credits | dP Relay</title>
+  <meta name="description" content="BYOD worldwide or a Bangladesh dedicated SIM pool — one ৳0.20-per-SMS credit balance, packages in BDT, USD or EUR, bKash and remittance top-ups.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/pricing/">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -24,31 +24,67 @@
   </header>
 
   <main class="wrap">
-    <h1>Pricing</h1>
-    <p class="muted">One flat rate, no surprises.</p>
-
-    <section class="card" aria-labelledby="base-rate">
-      <h2 id="base-rate">Base rate</h2>
-      <p class="price big-number">৳0.20 BDT / SMS</p>
-      <p class="muted">Charged per message for both OTP verification codes and bulk campaigns, deducted from your credit balance as messages are sent.</p>
+    <h1>Pricing that follows your phone</h1>
+    <p class="muted">Two delivery tracks, one credit balance — pick the reach you need, pay the same platform rate either way.</p>
+    <section aria-labelledby="matrix">
+      <h2 id="matrix">Country-wise coverage &amp; rates</h2>
+      <table>
+        <thead>
+          <tr><th>Track</th><th>Coverage</th><th>Delivery</th><th>Per message</th><th>Currency</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>BYOD gateway</strong></td>
+            <td>Worldwide — any country your SIM can reach</td>
+            <td>Your own Android phone</td>
+            <td>1 SMS credit</td>
+            <td>BDT · USD · EUR</td>
+          </tr>
+          <tr>
+            <td><strong>Dedicated pool</strong></td>
+            <td>Bangladesh <code>+880</code> — Grameenphone, Robi, Banglalink, Teletalk</td>
+            <td>Operator SIM pool</td>
+            <td>1 SMS credit (৳0.20)</td>
+            <td>BDT · USD · EUR</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted">Every message — OTP or bulk, either track — deducts one SMS credit from the same balance at the platform rate of <strong>৳0.20 per credit</strong>. No per-country surcharges; the difference is the delivery infrastructure, not the price.</p>
     </section>
-
     <section aria-labelledby="packages">
       <h2 id="packages">Credit packages</h2>
       <p class="muted">
-        Package sizes and rates are listed live in the dashboard — plans and included quotas
-        change over time, so the dashboard is the source of truth. Open
-        <strong>Buy credits</strong> after signing in, pick a package, and pay with bKash:
-      </p>
-      <p class="actions" style="justify-content: flex-start;">
-        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/buy">View packages in the dashboard</a>
+        Packages are operator-managed plans, so sizes and bonuses change — the dashboard
+        list is the live source of truth. Every package has the same shape:
       </p>
       <ul class="guide-steps">
-        <li>New apps receive free trial credits before any purchase.</li>
-        <li>Top-ups are paid by sending money to the bKash number and submitting the TrxID — full walkthrough on the <a href="/payment/">payment page</a>.</li>
-        <li>OTP credits and bulk credits are tracked as separate balances with their own expiry.</li>
+        <li><strong>Type</strong> — OTP-only, bulk-only, or a combined balance.</li>
+        <li><strong>Credits</strong> — the SMS count added on approval, priced at ৳0.20 per credit in BDT terms.</li>
+        <li><strong>Validity</strong> — a window the credits stay usable for; balances expire per package.</li>
+        <li><strong>Currency</strong> — priced in BDT, USD, or EUR.</li>
       </ul>
+      <div class="card nested">
+        <h3>Free trial</h3>
+        <p class="muted">Every new app starts with <strong>20 free messages valid for 30 days</strong> — enough to wire up the OTP flow before spending anything.</p>
+      </div>
+      <p class="actions">
+        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/buy">See live packages in the dashboard</a>
+      </p>
     </section>
+    <section aria-labelledby="paying">
+      <h2 id="paying">Ways to pay</h2>
+      <ul class="guide-steps">
+        <li><strong>BDT</strong> — bKash Send Money, then submit the TrxID on the Buy credits screen.</li>
+        <li><strong>USD / EUR</strong> — any of five remittance services route to the bKash wallet: TapTap Send, Remitly, Wise, Western Union, WorldRemit.</li>
+        <li>TrxIDs are confirmed by a human operator — credits appear once the match is approved.</li>
+      </ul>
+      <p class="actions">
+        <a class="button secondary" href="/payment/">Step-by-step payment guides</a>
+        <a class="button secondary" href="/docs/">API documentation</a>
+      </p>
+    </section>
+
+
   </main>
 
   <footer class="site-footer">

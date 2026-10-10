@@ -1,14 +1,30 @@
-/* dP Relay marketing site — plain CSS, no framework, no build step. */
+/* dP Relay marketing site — plain CSS, no framework, no build step.
+   Theme: VoltAgent-inspired. Abyss-black canvas, a single electric-green
+   accent reserved for CTAs and live markers, hairline borders instead of
+   shadows. Colors live in this file only — pages never inline colors.
+   Contrast pairs are measured in README.md. */
 
 :root {
-  --bg: #f7f8fa;
-  --surface: #ffffff;
-  --ink: #16202c;
-  --muted: #55627a;
-  --accent: #0b6bcb;
-  --accent-ink: #ffffff;
-  --line: #dde3ec;
-  --ok-bg: #eaf4ff;
+  /* surfaces */
+  --canvas: #050507;
+  --canvas-soft: #101010;
+  --hairline: #3d3a39;
+  /* text */
+  --ink: #f2f2f2;
+  --ink-strong: #ffffff;
+  --body-text: #b8b3b0;
+  --mute: #8b949e;
+  /* the one accent */
+  --green: #00d992;
+  --green-soft: #2fd6a1;
+  --green-deep: #10b981;
+  --on-green: #101010;
+  /* the one ornament */
+  --line-dash: rgba(79, 93, 117, 0.4);
+  /* radii: 6px buttons/inputs, 8px cards, pill only for status tags */
+  --radius-btn: 6px;
+  --radius-card: 8px;
+  --glow: 0 0 15px rgba(92, 88, 85, 0.2);
 }
 
 * {
@@ -17,33 +33,50 @@
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
-  line-height: 1.6;
-  color: var(--ink);
-  background: var(--bg);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  line-height: 1.65;
+  color: var(--body-text);
+  background: var(--canvas);
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(0, 217, 146, 0.25);
+}
+
+:focus-visible {
+  outline: 2px solid var(--green-soft);
+  outline-offset: 2px;
 }
 
 a {
-  color: var(--accent);
+  color: var(--green-deep);
+}
+
+a:hover {
+  color: #00ffaa;
 }
 
 code {
-  background: var(--ok-bg);
-  border: 1px solid var(--line);
+  background: var(--canvas-soft);
+  color: var(--ink);
   border-radius: 4px;
-  padding: 0.05rem 0.3rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 0.05rem 0.35rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
 }
 
 pre {
-  background: #0f1722;
-  color: #e7edf6;
-  border-radius: 8px;
+  margin: 0;
+  background: var(--canvas-soft);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   padding: 1rem;
   overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.9rem;
-  line-height: 1.5;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
 }
 
 pre code {
@@ -53,15 +86,20 @@ pre code {
   color: inherit;
 }
 
+/* ── Header / nav / footer ─────────────────────────────── */
+
 .site-header {
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
+  background: var(--canvas);
+  border-bottom: 1px solid var(--hairline);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .site-header .wrap,
 .site-footer .wrap,
 main.wrap {
-  max-width: 960px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 0 1.25rem;
 }
@@ -71,102 +109,201 @@ main.wrap {
   flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
-  min-height: 60px;
+  min-height: 64px;
 }
 
 .brand {
   font-weight: 700;
-  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  font-size: 1.2rem;
   text-decoration: none;
   color: var(--ink);
+}
+
+.brand::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 0.4rem;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green);
 }
 
 nav[aria-label="Main"] {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.9rem;
+  gap: 1.1rem;
 }
 
 nav[aria-label="Main"] a {
   text-decoration: none;
-  color: var(--muted);
+  color: var(--body-text);
+  font-size: 0.95rem;
 }
 
-nav[aria-label="Main"] a:hover,
+nav a:hover {
+  color: var(--ink-strong);
+}
+
 nav[aria-label="Main"] a[aria-current="page"] {
-  color: var(--accent);
+  color: var(--green-soft);
 }
 
 nav[aria-label="Main"] a.cta {
-  color: var(--accent-ink);
-  background: var(--accent);
-  border-radius: 6px;
-  padding: 0.35rem 0.8rem;
+  color: var(--green-soft);
+  background: var(--canvas-soft);
+  border: 1px solid var(--green-soft);
+  border-radius: var(--radius-btn);
+  padding: 0.4rem 0.9rem;
+  font-weight: 600;
 }
 
-main.wrap {
-  padding-top: 2rem;
-  padding-bottom: 3rem;
+nav[aria-label="Main"] a.cta:hover {
+  box-shadow: var(--glow);
+  color: var(--green-soft);
 }
+
+.site-footer {
+  border-top: 1px solid var(--hairline);
+  background: var(--canvas);
+  color: var(--mute);
+  font-size: 0.9rem;
+}
+
+.site-footer .wrap {
+  padding-top: 1.25rem;
+  padding-bottom: 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+/* ── Type ──────────────────────────────────────────────── */
 
 h1 {
-  font-size: 2rem;
-  line-height: 1.2;
-  margin: 0 0 0.75rem;
+  font-size: clamp(2.1rem, 5vw, 3.75rem);
+  font-weight: 400;
+  line-height: 1.05;
+  letter-spacing: -0.022em;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+  color: var(--ink-strong);
+  margin: 0.4rem 0 0.75rem;
 }
 
 h2 {
-  font-size: 1.35rem;
-  margin: 2rem 0 0.5rem;
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  font-weight: 400;
+  line-height: 1.11;
+  letter-spacing: -0.025em;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+  color: var(--ink-strong);
+  margin: 2.25rem 0 0.6rem;
 }
 
 h3 {
   font-size: 1.05rem;
-  margin: 1.25rem 0 0.35rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 1.4rem 0 0.35rem;
 }
 
 .muted,
 .tagline {
-  color: var(--muted);
+  color: var(--mute);
 }
 
+.tagline {
+  font-size: 1.1rem;
+}
+
+/* Uppercase tracked eyebrow — the signature label style. */
+.eyebrow {
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--green-soft);
+  margin: 0 0 0.2rem;
+}
+
+/* ── Hero (flat band — no card chrome) ─────────────────── */
+
 .hero {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 2.25rem 2rem;
+  padding: 3.25rem 1rem 2rem;
   text-align: center;
 }
 
-.hero .price {
-  font-size: 2.4rem;
-  font-weight: 700;
-  margin: 0.5rem 0 0.25rem;
+.track-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  margin: 1.25rem auto 0.5rem;
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
 }
 
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  justify-content: center;
-  margin-top: 1.25rem;
+.track-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  margin: 0;
 }
 
-.button {
-  display: inline-block;
-  background: var(--accent);
-  color: var(--accent-ink);
-  text-decoration: none;
+.track-toggle label {
+  padding: 0.45rem 1.1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--mute);
   font-weight: 600;
-  border-radius: 8px;
-  padding: 0.7rem 1.3rem;
+  font-size: 0.95rem;
+  transition: background 0.18s ease, color 0.18s ease;
 }
 
-.button.secondary {
-  background: var(--surface);
-  color: var(--accent);
-  border: 1px solid var(--accent);
+.track-toggle label:hover {
+  color: var(--ink);
 }
+
+.track-toggle input:focus-visible + label {
+  outline: 2px solid var(--green-soft);
+  outline-offset: 2px;
+}
+
+.track-toggle input:checked + label {
+  background: var(--canvas-soft);
+  color: var(--green-soft);
+  border: 1px solid var(--green-soft);
+}
+
+/* ── Cards ─────────────────────────────────────────────── */
+
+main.wrap {
+  padding-top: 2.5rem;
+  padding-bottom: 3.5rem;
+}
+
+.card {
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.card.nested {
+  margin-top: 1rem;
+  border: 1px dashed var(--hairline);
+  background: var(--canvas-soft);
+}
+
+.card.nested h3:first-child {
+  margin-top: 0;
+}
+
+/* ── Steps ─────────────────────────────────────────────── */
 
 .steps {
   counter-reset: step;
@@ -178,86 +315,296 @@ h3 {
 }
 
 .steps li {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   padding: 1.25rem;
 }
 
 .steps li::before {
   counter-increment: step;
   content: counter(step);
-  display: inline-block;
+  display: block;
   width: 2rem;
   height: 2rem;
   line-height: 2rem;
   text-align: center;
   border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink);
+  border: 1px solid var(--hairline);
+  background: var(--canvas-soft);
+  color: var(--green-soft);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   font-weight: 700;
   margin-bottom: 0.5rem;
 }
 
-.card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-
-.guide-steps {
-  padding-left: 1.25rem;
-}
-
-.guide-steps li {
-  margin-bottom: 0.35rem;
-}
-
-.big-number {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 1.6rem;
-  font-weight: 700;
-}
+/* ── Tables ────────────────────────────────────────────── */
 
 table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
   overflow: hidden;
+  font-size: 0.95rem;
 }
 
 th,
 td {
   text-align: left;
   padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hairline);
   vertical-align: top;
 }
 
 th {
-  background: var(--ok-bg);
+  background: var(--canvas-soft);
+  color: var(--mute);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+td {
+  color: var(--body-text);
+}
+
+td code {
+  color: var(--green-soft);
 }
 
 tr:last-child td {
   border-bottom: 0;
 }
 
-.site-footer {
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 0.9rem;
+/* ── Code preview grid (cURL / Node / Python) ──────────── */
+
+.code-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
 
-.site-footer .wrap {
-  padding-top: 1.25rem;
-  padding-bottom: 1.25rem;
+.code-grid figure {
+  margin: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--canvas-soft);
+}
+
+.code-grid figcaption {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.code-grid figcaption::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+}
+
+.code-grid pre {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.82rem;
+  padding: 0.9rem 0.85rem;
+}
+
+/* ── Buttons ───────────────────────────────────────────── */
+
+.actions {
   display: flex;
   flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 1.25rem;
+}
+
+.button {
+  display: inline-block;
+  background: var(--canvas-soft);
+  color: var(--green-soft);
+  text-decoration: none;
+  font-weight: 600;
+  border-radius: var(--radius-btn);
+  padding: 0.7rem 1.3rem;
+  border: 1px solid var(--green-soft);
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.button:hover {
+  box-shadow: var(--glow);
+  transform: translateY(-1px);
+  color: var(--green-soft);
+}
+
+.button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+}
+
+.button.secondary:hover {
+  border-color: var(--green-soft);
+  color: var(--ink);
+}
+
+/* ── Feature chips (status pills) ──────────────────────── */
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin: 1rem auto 0;
+}
+
+.chip {
+  display: inline-block;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--hairline);
+  background: var(--canvas-soft);
+  border-radius: 999px;
+  color: var(--body-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.chip em {
+  color: var(--green-soft);
+  font-style: normal;
+}
+
+/* ── Tier panels (home page track switch) ──────────────── */
+
+.track-panels section {
+  margin-top: 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--canvas-soft);
+  padding: 1.5rem;
+  text-align: left;
+}
+
+.track-panels h2 {
+  margin-top: 0;
+  font-size: 1.2rem;
+}
+
+.track-panels section p:first-of-type strong {
+  color: var(--ink);
+}
+
+.track-panels .actions {
+  justify-content: flex-start;
+  margin-top: 1rem;
+}
+
+/* CSS-only track switch: show the panel matching the checked radio.
+   Browsers without :has() show both panels — graceful fallback. */
+.track-panels #panel-bd {
+  display: none;
+}
+
+.hero:has(#track-bd:checked) #panel-bd {
+  display: block;
+}
+
+.hero:has(#track-bd:checked) #panel-global {
+  display: none;
+}
+
+/* ── Signature dashed divider between sections ─────────── */
+
+main.wrap > section + section {
+  border-top: 1px dashed var(--line-dash);
+  padding-top: 2.25rem;
+}
+
+main.wrap > section + section h2:first-child {
+  margin-top: 0;
+}
+
+/* ── Responsive ────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .hero {
+    padding: 2.25rem 1rem 1.5rem;
+  }
+
+  nav[aria-label="Main"] {
+    gap: 0.8rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button,
+  .track-toggle label {
+    transition: none;
+  }
+}
+
+/* Footer links: Fog Gray, brightening to white on hover. */
+.site-footer a {
+  color: var(--body-text);
+}
+
+.site-footer a:hover {
+  color: var(--ink-strong);
+}
+
+/* The brand dot pulses like a "power on" LED — slow, subtle. */
+@keyframes dot-pulse {
+  from {
+    box-shadow: 0 0 2px var(--green);
+  }
+  to {
+    box-shadow: 0 0 8px var(--green);
+  }
+}
+
+.brand::after {
+  animation: dot-pulse 2.4s ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand::after {
+    animation: none;
+  }
+}
+
+/* ── Audience grid (Who it's for) ──────────────────────── */
+
+.grid3 {
+  display: grid;
   gap: 1rem;
-  justify-content: space-between;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  list-style: none;
+  padding: 0;
+}
+
+.grid3 li {
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  padding: 1.25rem;
+}
+
+.grid3 h3 {
+  margin-top: 0;
 }
