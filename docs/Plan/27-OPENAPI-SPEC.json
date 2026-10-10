@@ -3,7 +3,7 @@
   "info": {
     "title": "dP Relay v5 API",
     "description": "dP Relay v5 (Modification 6 — Firebase exit): device plane, OTP plane, billing/credits, bulk campaigns, contact groups, templates, and the operator admin plane. Webhook deliveries are signed with X-DP-Signature (hex HMAC-SHA256 of the raw body).",
-    "version": "5.3.8-alpha.0"
+    "version": "5.4.0"
   },
   "components": {
     "schemas": {}
