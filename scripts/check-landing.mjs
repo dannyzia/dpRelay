@@ -261,6 +261,15 @@ if (home != null) {
   } else {
     pass("/: hero script tag present");
   }
+  // Spec section 8: the hero loads its seeded data from the committed static
+  // world-dots.js (defer = document order, before hero.js) — no runtime fetch.
+  const worldDotsAt = home.indexOf('<script src="/assets/world-dots.js" defer></script>');
+  const heroTagAt = home.indexOf('<script src="/assets/hero.js" defer></script>');
+  if (worldDotsAt === -1 || worldDotsAt > heroTagAt) {
+    fail("/: world-dots.js script tag missing or not before hero.js");
+  } else {
+    pass("/: world-dots.js script tag present and before hero.js");
+  }
 }
 
 // FAQ: SMTP/infrastructure strings are forbidden (owner flag).
@@ -317,6 +326,43 @@ function checkRedaction() {
   else pass("redaction gate: no BD mobile-number patterns anywhere in landing/");
 }
 checkRedaction();
+
+// Release gate (parallax.md §15): owner-note markup and bracketed editorial
+// placeholders are draft-only. With RELEASE_GATE=1 the gate fails on them so
+// a release cannot ship unresolved notes; draft mode reports the count and
+// passes. The bracket pattern covers every placeholder form currently in the
+// tree ([legal …], [country], [add …], [state …], [app …]) plus common forms.
+const NOTE_CLASS_NEEDLES = ['class="owner-note"', 'class="internal-note"'];
+const NOTE_BRACKET_RE = /\[(?:legal|country|add|state|app|insert|todo|draft|verify|optional)\b[^\]]*\]/gi;
+function checkReleaseGate() {
+  const hits = [];
+  function walk(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(p); continue; }
+      if (!REDACT_SCAN_EXT.has(extname(entry.name))) continue;
+      const text = readFileSync(p, "utf8");
+      for (const needle of NOTE_CLASS_NEEDLES) {
+        if (text.includes(needle)) hits.push(`${relative(ROOT, p)}: owner-note markup`);
+      }
+      for (const m of text.matchAll(NOTE_BRACKET_RE)) {
+        hits.push(`${relative(ROOT, p)}: bracketed editorial note "${m[0]}"`);
+        break; // one report per file is enough to locate it
+      }
+    }
+  }
+  walk(SITE);
+  if (process.env.RELEASE_GATE === "1") {
+    if (hits.length > 0) {
+      fail(`release gate: ${hits.length} draft marker(s) — ${hits.join("; ")}`);
+    } else {
+      pass("release gate: no draft markers (RELEASE_GATE=1)");
+    }
+  } else {
+    pass(`release gate: draft mode — ${hits.length} draft marker(s) present (set RELEASE_GATE=1 to fail on these)`);
+  }
+}
+checkReleaseGate();
 
 // sitemap.xml: exists, lists exactly PAGES, URLs resolve to files.
 const sitemapPath = join(SITE, "sitemap.xml");

@@ -208,7 +208,6 @@ X-App-Secret: &lt;your app secret&gt;</code></pre>
                 <tr><td>401</td><td>Authentication error</td><td>Check the app ID and app secret; use the exact code returned by the API</td></tr>
                 <tr><td>402</td><td><code>insufficient_credits</code></td><td>Check balance and purchase an eligible package if needed</td></tr>
                 <tr><td>404</td><td><code>not_found</code></td><td>Check the requested session or resource</td></tr>
-                <tr><td>409</td><td><code>trx_id_exists</code></td><td>Check whether the transaction reference has already been submitted</td></tr>
                 <tr><td>423</td><td><code>otp_locked</code></td><td>Follow the retry information returned by the API</td></tr>
                 <tr><td>429</td><td><code>rate_limited</code>, <code>resend_cooldown</code></td><td>Stop retrying and respect the applicable limits</td></tr>
               </tbody>
@@ -233,6 +232,7 @@ X-App-Secret: &lt;your app secret&gt;</code></pre>
               </tbody>
             </table>
           </div>
+          <p>Submitting a transaction reference that is already attached to a purchase returns <code>409 trx_id_exists</code>. Check whether the reference has already been submitted before retrying.</p>
           <p>Use the live documentation in your account for request fields and response schemas. Not every purchase method uses a bKash TrxID — see the payment guides for method-specific steps.</p>
           <p><a href="/help/payments/">Read the payment guides</a></p>
         </section>
