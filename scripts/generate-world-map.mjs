@@ -5,7 +5,9 @@
  * Reads Natural Earth 110m land polygons (world-atlas, public domain) and emits
  * two committed assets from the SAME data + SAME seeded graph, so the canvas
  * scene and the no-JS fallback always agree:
- *   landing/assets/world-dots.json — { dots, cities, edges } for hero.js
+ *   landing/assets/world-dots.json — { dots, cities, edges } (generator cache)
+ *   landing/assets/world-dots.js — window.WORLD_DOTS = <json>; (what hero.js
+ *     loads; kept identical to the JSON, no runtime fetch per spec section 8)
  *   landing/assets/hero-fallback.svg — static SVG of the assembled map+network
  *
  * Run (deps are generation-time only, never shipped):
@@ -174,6 +176,7 @@ const json = JSON.stringify({
   edges,
 });
 writeFileSync(join(OUT, "world-dots.json"), json);
+writeFileSync(join(OUT, "world-dots.js"), "window.WORLD_DOTS=" + json + ";\n");
 writeFileSync(join(OUT, "hero-fallback.svg"), svg);
 console.log(`dots=${dots.length} step=${usedStep}deg cities=${cities.length} edges=${edges.length}`);
 console.log(`json=${(json.length / 1024).toFixed(1)}KB svg=${(svg.length / 1024).toFixed(1)}KB`);

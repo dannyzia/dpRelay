@@ -13,10 +13,23 @@
  *   network 0.75-0.90 city nodes, deterministic arcs, message packets
  *   finale 0.90-1.00  one synchronized arc pulse, packets speed up, CTA glows
  *
- * Dev-only progress hook: add ?heroP=0.42 to the URL to freeze p. Inert in
- * normal production browsing; this site has no build step, so a runtime gate
- * is the only way to keep the hook out of page behaviour (documented
- * deviation from spec section 5).
+ * Phase-boundary contract (spec section 5, "Phase-boundary continuity"):
+ * bubbleTarget -> burstTarget -> mapTarget are three fixed seeded arrays; the
+ * BURST phase interpolates bubble->burst and the MAP phase burst->map, so
+ * p=0.45 joins exactly and no particle ever reassembles twice. From MAP
+ * through FINALE every geographic element (dots, cities, arcs, packets,
+ * pulses) draws inside ONE shared ctx.translate(mapOffset) whose input is a
+ * single continuous progress sub = seg(p, 0.45, 1) - no per-function ad hoc
+ * offsets, x never leaks into y, and the finale changes pulse/packet speed
+ * only. Continuity is verified by rendered-pixel boundary sweeps, not just
+ * code inspection.
+ *
+ * Dev-only progress hook: add ?heroP=0.42 on localhost to freeze p. The hook
+ * is hostname-gated and inert on any public hostname (spec section 5).
+ *
+ * Low-power: viewports under 720 CSS px and low hardwareConcurrency devices
+ * morph a 40% subset; the remaining map dots fade in deterministically during
+ * the MAP phase (spec section 9), so the complete map still assembles.
  */
 (function () {
   'use strict';
@@ -97,9 +110,11 @@
   var ctx = canvas.getContext('2d');
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // Dev-only freeze hook (documented deviation): ?heroP=0.42 pins progress.
+  // Dev-only freeze hook, hostname-gated: ?heroP=0.42 works on localhost only
+  // and is inert on any public hostname (spec section 5).
   var devP = null;
   (function () {
+    if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname)) return;
     var m = window.location.search.match(/[?&]heroP=([0-9]*\.?[0-9]+)/);
     if (m) devP = clamp(parseFloat(m[1], 10), 0, 1);
   })();
@@ -114,27 +129,29 @@
   var live = false;
   var inView = true;
   var N = 0, showN = 0;
-  var dotXY = null;
-  var startXY = null;
+  var bubbleXY = null;   // bubbleTarget — speech-bubble rim positions
+  var burstXY = null;    // burstTarget — dispersed scatter at end of BURST
+  var mapXY = null;      // mapTarget — assigned land-dot positions
   var ctrlXY = null;
   var stag = null;
   var cityXY = null, cityRank = null;
   var EDGES = [];
   var packets = [];
 
-  // Map data is committed and seeded upstream by scripts/generate-world-map.mjs;
-  // the runtime only consumes it. Failure keeps the static SVG fallback.
-  fetch('/assets/world-dots.json', { credentials: 'omit' })
-    .then(function (r) {
-      if (!r.ok) throw new Error('http ' + r.status);
-      return r.json();
-    })
-    .then(function (data) {
-      prepare(data);
-      ready = true;
-      resize();
-    })
-    .catch(function () { /* static SVG fallback stays visible */ });
+  // Map data is committed and seeded upstream by scripts/generate-world-map.mjs
+  // and shipped as the static world-dots.js (window.WORLD_DOTS) — no runtime
+  // fetch (spec section 8). Missing data keeps the static SVG fallback.
+  function boot() {
+    if (!window.WORLD_DOTS) return; // static SVG fallback stays visible
+    prepare(window.WORLD_DOTS);
+    ready = true;
+    resize();
+  }
+  if (window.requestIdleCallback) {
+    window.requestIdleCallback(boot, { timeout: 500 });
+  } else {
+    window.setTimeout(boot, 1);
+  }
 
   // ── Data prep: seeded particle assignment, frozen after this one pass ─────
   function prepare(data) {
@@ -147,17 +164,24 @@
       var tmp = order[i]; order[i] = order[j]; order[j] = tmp;
     }
     N = dots.length;
-    dotXY = new Float32Array(N * 2);
-    startXY = new Float32Array(N * 2);
+    bubbleXY = new Float32Array(N * 2);
+    burstXY = new Float32Array(N * 2);
+    mapXY = new Float32Array(N * 2);
     ctrlXY = new Float32Array(N * 2);
     stag = new Float32Array(N);
     for (i = 0; i < N; i += 1) {
-      dotXY[i * 2] = dots[order[i]][0];
-      dotXY[i * 2 + 1] = dots[order[i]][1];
+      mapXY[i * 2] = dots[order[i]][0];
+      mapXY[i * 2 + 1] = dots[order[i]][1];
+      // bubbleTarget: deterministic positions derived from the bubble shape
       var ang = rnd() * Math.PI * 2;
       var rad = 0.92 + (rnd() - 0.5) * 0.32;
-      startXY[i * 2] = Math.cos(ang) * rad;
-      startXY[i * 2 + 1] = Math.sin(ang) * rad * 0.86;
+      bubbleXY[i * 2] = Math.cos(ang) * rad;
+      bubbleXY[i * 2 + 1] = Math.sin(ang) * rad * 0.86;
+      // burstTarget: dispersed organic scatter, light directional drift
+      var bang = rnd() * Math.PI * 2;
+      var bdist = 0.10 + Math.pow(rnd(), 0.65) * 0.40;
+      burstXY[i * 2] = clamp(0.5 + Math.cos(bang) * bdist * 1.4 + 0.10, 0.02, 0.98);
+      burstXY[i * 2 + 1] = clamp(0.44 + Math.sin(bang) * bdist * 0.62 - 0.05, 0.05, 0.95);
       ctrlXY[i * 2] = rnd() * 1.6 - 0.8;
       ctrlXY[i * 2 + 1] = rnd() * 1.1 - 0.55;
       stag[i] = rnd();
@@ -241,7 +265,8 @@
     map.h = mh;
     map.x = (W - mw) / 2;
     map.y = Math.round(H * 0.54 - mh / 2);
-    showN = W < 720 ? Math.floor(N * 0.4) : N;
+    showN = (W < 720 || (navigator.hardwareConcurrency || 8) <= 4)
+      ? Math.floor(N * 0.4) : N;
     var rect = wrapper.getBoundingClientRect();
     wrapTop = rect.top + window.scrollY;
     dirty = true;
@@ -249,13 +274,23 @@
   }
 
   // ── ICON phase: chat bubble + breathing glow + two shockwave rings ────────
+  // drawGlow is shared with BURST and bubbleR(p) keeps the breathing radius
+  // continuous across the p=0.20 boundary (spec section 5 invariant).
+  function drawGlow(cx, cy, r, alpha) {
+    var g = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r * 2.1);
+    g.addColorStop(0, rgba(COL.green, 0.16 * alpha));
+    g.addColorStop(1, rgba(COL.green, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - r * 2.2, cy - r * 2.2, r * 4.4, r * 4.4);
+  }
+  function bubbleR(p) {
+    return Math.min(W, H) * 0.11 * (1 + 0.05 * Math.sin(p * Math.PI * 6));
+  }
   function drawIcon(p) {
     var u = seg(p, PHASES.icon[0], PHASES.icon[1]);
     var cx = W * 0.5;
     var cy = H * 0.44;
-    var r = Math.min(W, H) * 0.11;
-    var breathe = 1 + 0.05 * Math.sin(p * Math.PI * 6);
-    r *= breathe;
+    var r = bubbleR(p);
     for (var k = 0; k < 2; k += 1) {
       var ru = seg(u, 0.15 + k * 0.3, 0.75 + k * 0.3);
       if (ru > 0 && ru < 1) {
@@ -266,11 +301,7 @@
         ctx.stroke();
       }
     }
-    var g = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r * 2.1);
-    g.addColorStop(0, rgba(COL.green, 0.16));
-    g.addColorStop(1, rgba(COL.green, 0));
-    ctx.fillStyle = g;
-    ctx.fillRect(cx - r * 2.2, cy - r * 2.2, r * 4.4, r * 4.4);
+    drawGlow(cx, cy, r, 1);
     drawBubble(cx, cy, r);
   }
   function drawBubble(cx, cy, r) {
@@ -300,19 +331,23 @@
     }
   }
 
-  // ── BURST: particles leave the bubble silhouette in organic flow ──────────
+  // ── BURST: particles leave the bubble toward a dispersed scatter field ────
+  // bubbleTarget -> burstTarget only (spec section 5). Targets are scene
+  // coordinates; the map is never aimed at from here, so the p=0.45 join
+  // hands over exactly where this phase stops.
   function drawBurst(p) {
     var u = seg(p, PHASES.burst[0], PHASES.burst[1]);
     var cx = W * 0.5, cy = H * 0.44;
-    var r = Math.min(W, H) * 0.11;
+    var r = bubbleR(p);
     var fade = 1 - seg(u, 0, 0.25);
     if (fade > 0) {
       ctx.save();
       ctx.globalAlpha = fade;
+      drawGlow(cx, cy, r, 1);
       drawBubble(cx, cy, r);
       ctx.restore();
     }
-    var ghost = clamp(1 - (u - 0.15) / 0.5, 0, 1);
+    var ghost = clamp(1 - (u - 0.15) / 0.5, 0, 1) * seg(u, 0, 0.1);
     if (ghost > 0) {
       ctx.beginPath();
       ctx.arc(cx, cy, r * 1.05, 0, Math.PI * 2);
@@ -325,10 +360,10 @@
     for (var i = 0; i < n; i += 1) {
       var ti = easeOutCubic(clamp((u - stag[i] * 0.35) / 0.65, 0, 1));
       if (ti <= 0) continue;
-      var sx = cx + startXY[i * 2] * r;
-      var sy = cy + startXY[i * 2 + 1] * r;
-      var tx = map.x + dotXY[i * 2] * map.w;
-      var ty = map.y + dotXY[i * 2 + 1] * map.h;
+      var sx = cx + bubbleXY[i * 2] * r;
+      var sy = cy + bubbleXY[i * 2 + 1] * r;
+      var tx = burstXY[i * 2] * W;
+      var ty = burstXY[i * 2 + 1] * H;
       var mxp = W * 0.5 + ctrlXY[i * 2] * W * 0.5;
       var myp = H * 0.5 + ctrlXY[i * 2 + 1] * H * 0.5;
       var a = 1 - ti, b = ti;
@@ -348,8 +383,14 @@
     }
   }
 
-  // ── MAP phase: morph completes; faint grid + remaining dots settle in ─────
-  function drawGrid(alpha, offX, offY) {
+  // ── MAP phase: burst->map morph; assembled elements share ONE translate ───
+  // The grid keeps background depth (off.bg); settled dots, the low-power
+  // extras and every morph target use the single shared map offset passed
+  // down from render() — no per-function offsets (spec section 5).
+  function morphT(u, s) {
+    return easeInOutCubic(clamp((u * 1.35 - s * 0.35) / 0.85, 0, 1));
+  }
+  function drawGrid(alpha, offX) {
     if (alpha <= 0) return;
     ctx.strokeStyle = rgba(COL.hair, alpha);
     ctx.lineWidth = 1;
@@ -358,61 +399,80 @@
     for (c = 1; c < cols; c += 1) {
       x = map.x + (c / cols) * map.w + offX;
       ctx.beginPath();
-      ctx.moveTo(x, map.y + offY);
-      ctx.lineTo(x, map.y + map.h + offY);
+      ctx.moveTo(x, map.y);
+      ctx.lineTo(x, map.y + map.h);
       ctx.stroke();
     }
     for (r2 = 1; r2 < rows; r2 += 1) {
-      y = map.y + (r2 / rows) * map.h + offY;
+      y = map.y + (r2 / rows) * map.h;
       ctx.beginPath();
       ctx.moveTo(map.x + offX, y);
       ctx.lineTo(map.x + map.w + offX, y);
       ctx.stroke();
     }
   }
-  function drawStaticMap(alpha, offX, offY) {
-    ctx.fillStyle = rgba(COL.deep, alpha);
-    for (var i = 0; i < N; i += 1) {
-      var x = map.x + dotXY[i * 2] * map.w + offX;
-      var y = map.y + dotXY[i * 2 + 1] * map.h + offY;
-      ctx.fillRect(x - 1.2, y - 1.2, 2.4, 2.4);
+  function drawStaticMap(aMain, aExtra) {
+    if (aMain > 0) {
+      ctx.fillStyle = rgba(COL.deep, aMain);
+      for (var i = 0; i < showN; i += 1) {
+        ctx.fillRect(map.x + mapXY[i * 2] * map.w - 1.2,
+          map.y + mapXY[i * 2 + 1] * map.h - 1.2, 2.4, 2.4);
+      }
+    }
+    if (aExtra > 0 && showN < N) {
+      ctx.fillStyle = rgba(COL.deep, aExtra);
+      for (i = showN; i < N; i += 1) {
+        ctx.fillRect(map.x + mapXY[i * 2] * map.w - 1.2,
+          map.y + mapXY[i * 2 + 1] * map.h - 1.2, 2.4, 2.4);
+      }
     }
   }
-  function drawMap(p) {
+  function drawMap(p, off) {
     var u = seg(p, PHASES.map[0], PHASES.map[1]);
-    var off = layerOff(u);
-    drawGrid(0.6 * smooth(Math.min(1, u * 2)), off.bg, 0);
-    var cx = W * 0.5, cy = H * 0.44;
-    var r = Math.min(W, H) * 0.11;
+    drawGrid(0.6 * smooth(Math.min(1, u * 2)), off.bg);
     var n = Math.min(showN, N);
+    // Settled dots and the fading-in extras draw inside the ONE shared
+    // translate — their geometry stays fixed relative to the map rect.
+    ctx.save();
+    ctx.translate(off.map, 0);
+    ctx.fillStyle = rgba(COL.deep, 0.55);
     for (var i = 0; i < n; i += 1) {
-      var ti = easeInOutCubic(clamp((u * 1.35 - stag[i] * 0.35) / 0.85, 0, 1));
-      var tx = map.x + dotXY[i * 2] * map.w + off.map;
-      var ty = map.y + dotXY[i * 2 + 1] * map.h;
-      if (ti >= 1) {
-        ctx.fillStyle = rgba(COL.deep, 0.55);
-        ctx.fillRect(tx - 1.2, ty - 1.2, 2.4, 2.4);
-        continue;
-      }
-      var sx = cx + startXY[i * 2] * r;
-      var sy = cy + startXY[i * 2 + 1] * r;
-      var mxp = W * 0.5 + ctrlXY[i * 2] * W * 0.5 + off.fg;
-      var myp = H * 0.5 + ctrlXY[i * 2 + 1] * H * 0.5;
-      var a = 1 - ti, b = ti;
-      var ix = a * a * sx + 2 * a * b * mxp + b * b * tx;
-      var iy = a * a * sy + 2 * a * b * myp + b * b * ty;
-      ctx.fillStyle = rgba(COL.deep, 0.85);
-      ctx.fillRect(ix - 1.2, iy - 1.2, 2.4, 2.4);
+      if (morphT(u, stag[i]) < 1) continue;
+      ctx.fillRect(map.x + mapXY[i * 2] * map.w - 1.2,
+        map.y + mapXY[i * 2 + 1] * map.h - 1.2, 2.4, 2.4);
     }
     var extra = clamp((u - 0.55) / 0.45, 0, 1);
     if (extra > 0 && showN < N) {
       ctx.fillStyle = rgba(COL.deep, 0.4);
       for (i = showN; i < N; i += 1) {
         if ((i % 7) / 7 > extra) continue;
-        var ex = map.x + dotXY[i * 2] * map.w + off.map;
-        var ey = map.y + dotXY[i * 2 + 1] * map.h;
-        ctx.fillRect(ex - 1.2, ey - 1.2, 2.4, 2.4);
+        ctx.fillRect(map.x + mapXY[i * 2] * map.w - 1.2,
+          map.y + mapXY[i * 2 + 1] * map.h - 1.2, 2.4, 2.4);
       }
+    }
+    ctx.restore();
+    // Morphing particles fly in scene space: they leave the unshifted burst
+    // scatter and land on the transformed dot position, so the p=0.45 join
+    // is exact at ti=0 and the p=0.75 landing is exact at ti=1.
+    ctx.fillStyle = rgba(COL.deep, 0.85);
+    for (i = 0; i < n; i += 1) {
+      var ti = morphT(u, stag[i]);
+      if (ti <= 0) {
+        ctx.fillRect(burstXY[i * 2] * W - 1.2,
+          burstXY[i * 2 + 1] * H - 1.2, 2.4, 2.4);
+        continue;
+      }
+      if (ti >= 1) continue;
+      var sx = burstXY[i * 2] * W;
+      var sy = burstXY[i * 2 + 1] * H;
+      var tx = map.x + mapXY[i * 2] * map.w + off.map;
+      var ty = map.y + mapXY[i * 2 + 1] * map.h;
+      var mxp = W * 0.5 + ctrlXY[i * 2] * W * 0.5 + (off.fg - off.map) * (1 - ti);
+      var myp = H * 0.5 + ctrlXY[i * 2 + 1] * H * 0.5;
+      var a = 1 - ti, b = ti;
+      var ix = a * a * sx + 2 * a * b * mxp + b * b * tx;
+      var iy = a * a * sy + 2 * a * b * myp + b * b * ty;
+      ctx.fillRect(ix - 1.2, iy - 1.2, 2.4, 2.4);
     }
   }
 
@@ -430,7 +490,7 @@
       o * o * y1 + 2 * o * s * cy2 + s * s * y2
     ];
   }
-  function drawArcs(f, alpha, offX, pulse) {
+  function drawArcs(f, alpha, pulse) {
     if (f <= 0 || EDGES.length === 0) return;
     ctx.save();
     ctx.beginPath();
@@ -452,7 +512,6 @@
         var sx = x1 + copies[ci][0];
         var ex = x2 + copies[ci][1];
         var c = arcCtrl(sx, y1, ex, y2);
-        var o = 1 - f, s = f;
         var cx2 = sx + (c[0] - sx) * f;
         var cy2 = y1 + (c[1] - y1) * f;
         var pt = quadPoint(sx, y1, c[0], c[1], ex, y2, f);
@@ -464,13 +523,16 @@
     }
     ctx.restore();
   }
-  function drawCities(ap, offX) {
+  // Cities and arcs draw in map-local coordinates; the ONE shared translate
+  // from the caller supplies the single parallax offset — offsets are never
+  // added inside these functions (spec section 5, shared-transform rules).
+  function drawCities(ap) {
     if (ap <= 0 || !cityRank) return;
     for (var k = 0; k < cityRank.length; k += 1) {
       var a = seg(ap, cityRank[k], cityRank[k] + 0.25);
       if (a <= 0) continue;
-      var x = map.x + cityXY[k * 2] * map.w + offX;
-      var y = map.y + cityXY[k * 2 + 1] * map.h + offX;
+      var x = map.x + cityXY[k * 2] * map.w;
+      var y = map.y + cityXY[k * 2 + 1] * map.h;
       ctx.beginPath();
       ctx.arc(x, y, 2.6, 0, Math.PI * 2);
       ctx.fillStyle = rgba(COL.deep, 0.9 * a);
@@ -479,16 +541,17 @@
   }
 
   // ── Message packets: restrained rectangles travelling the fixed arcs ──────
-  function drawPackets(p, pulse, offX) {
-    ctx.fillStyle = rgba(COL.green, Math.min(1, 0.95 + pulse * 0.05));
+  function drawPackets(p, pulse, pkAlpha) {
+    if (pkAlpha <= 0) return;
+    ctx.fillStyle = rgba(COL.green, Math.min(1, (0.95 + pulse * 0.05) * pkAlpha));
     for (var i = 0; i < packets.length; i += 1) {
       var pk = packets[i];
       var t = (pk.phase + p * pk.speed * (1 + pulse * 2.5)) % 1;
       var a = EDGES[pk.edge][0], b = EDGES[pk.edge][1];
-      var x1 = map.x + cityXY[a * 2] * map.w + offX;
-      var y1 = map.y + cityXY[a * 2 + 1] * map.h + offX;
-      var x2 = map.x + cityXY[b * 2] * map.w + offX;
-      var y2 = map.y + cityXY[b * 2 + 1] * map.h + offX;
+      var x1 = map.x + cityXY[a * 2] * map.w;
+      var y1 = map.y + cityXY[a * 2 + 1] * map.h;
+      var x2 = map.x + cityXY[b * 2] * map.w;
+      var y2 = map.y + cityXY[b * 2 + 1] * map.h;
       var d = cityXY[b * 2] - cityXY[a * 2];
       if (d > 0.5) x2 -= map.w;
       else if (d < -0.5) x2 += map.w;
@@ -500,22 +563,30 @@
   }
 
   // ── NETWORK + FINALE phases ────────────────────────────────────────────────
-  function drawNetwork(p) {
-    var u = seg(p, PHASES.network[0], PHASES.network[1]);
-    var off = layerOff(0.5 + u * 0.4);
-    drawGrid(0.5, off.bg, 0);
-    drawStaticMap(0.5, off.map, 0);
-    drawArcs(seg(u, 0.15, 0.8), 0.45, off.map, 0);
-    drawCities(seg(u, 0, 0.7), off.map);
-    drawPackets(p, 0, off.map);
+  // Both draw the same assembled scene inside the ONE shared translate; the
+  // finale only adds arc pulse, packet brightness and packet speed. The
+  // pulse is gated to zero at the p=0.90 boundary so the join stays exact.
+  function drawNetworkScene(p, u, off) {
+    drawGrid(0.6, off.bg);
+    ctx.save();
+    ctx.translate(off.map, 0);
+    drawStaticMap(0.55, 0.4);
+    drawArcs(seg(u, 0.15, 0.8), 0.45, 0);
+    drawCities(seg(u, 0, 0.7));
+    drawPackets(p, 0, seg(u, 0.2, 0.6));
+    ctx.restore();
   }
-  function drawFinale(p) {
-    var pulse = gauss(p, 0.95, 0.03);
-    drawGrid(0.5, 0, 0);
-    drawStaticMap(0.5, 0, 0);
-    drawArcs(1, 0.45, 0, pulse);
-    drawCities(1, 0);
-    drawPackets(p, pulse, 0);
+  function drawFinaleScene(p, off) {
+    var pulse = gauss(p, 0.95, 0.03) *
+      seg(p, PHASES.finale[0], PHASES.finale[0] + 0.03);
+    drawGrid(0.6, off.bg);
+    ctx.save();
+    ctx.translate(off.map, 0);
+    drawStaticMap(0.55, 0.4);
+    drawArcs(1, 0.45, pulse);
+    drawCities(1);
+    drawPackets(p, pulse, 1);
+    ctx.restore();
   }
 
   // ── Render dispatch: one draw per scroll update, zero idle work ───────────
@@ -525,9 +596,15 @@
     if (p < PHASES.burst[1]) {
       if (p < PHASES.icon[1]) drawIcon(p);
       else drawBurst(p);
-    } else if (p < PHASES.network[0]) drawMap(p);
-    else if (p < PHASES.finale[0]) drawNetwork(p);
-    else drawFinale(p);
+    } else {
+      // ONE continuous progress + ONE offset triple from MAP through FINALE
+      var sub = seg(p, PHASES.map[0], 1);
+      var off = layerOff(sub);
+      if (p < PHASES.network[0]) drawMap(p, off);
+      else if (p < PHASES.finale[0]) {
+        drawNetworkScene(p, seg(p, PHASES.network[0], PHASES.network[1]), off);
+      } else drawFinaleScene(p, off);
+    }
     if (!live) {
       scene.classList.add('hero-live');
       live = true;
