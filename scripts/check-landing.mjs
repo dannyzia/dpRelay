@@ -54,12 +54,22 @@ const FAQ_FORBIDDEN = [
 ];
 
 /** AGPL identifier pattern mirrored from scripts/agpl-grep.sh. */
-const AGPL_PATTERN = /com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node/;
-
-/** Owner-verbatim (hub event 1243) pins — exact strings, never paraphrased. */
+const AGPL_PATTERN = /com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node/;/** Owner-verbatim pins — exact strings, never paraphrased.
+ *
+ *  2026-10-11 (owner decision): the two public bKash wallet-number pins that
+ *  used to sit here are redacted — the digits are deliberately not restated in
+ *  this comment. This supersedes the hub-event-1243 wording: the copy doc's
+ *  Payment guides section removes the public number so every guide points at
+ *  the bKash number and recipient name shown on the signed-in Buy credits
+ *  screen. The pins below are the identical redacted step sentences that now
+ *  appear on /docs/payments/, so the check stays byte-identical without
+ *  publishing the wallet number.
+ *
+ *  Gate: `grep -rn "01613249520\|+8801613249520" landing/` must be empty.
+ *  (That scope is landing/ only — the digits still appear elsewhere in the
+ *  repo, e.g. server and app test fixtures, which this gate does not cover.)
+ */
 const PAYMENT_PINS = [
-  "01613249520",
-  "+8801613249520",
   "How to Send Using TapTap Send",
   "How to Send Using Remitly",
   "How to Send Using Wise",
@@ -70,6 +80,8 @@ const PAYMENT_PINS = [
   "Best for getting the mid-market exchange rate with low, transparent fees.",
   "Best for sending online or paying with cash at a brick-and-mortar location.",
   "Available in over 50 countries for fast mobile wallet routing.",
+  "Phone Number: Input the bKash number shown on Buy credits.",
+  "Phone Number: Type in the bKash number shown on Buy credits.",
 ];
 
 const VOID_TAGS = new Set([
