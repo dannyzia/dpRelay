@@ -51,13 +51,13 @@ single h1, links). Contrast/keyboard are checked by hand:
 - [ ] Contrast ≥ 4.5:1. Measured pairs (WCAG AA — all pass):
   | Pair | Ratio |
   | --- | --- |
-  | `--ink #f2f2f2` on `--canvas #050507` | 18.19 |
-  | `--ink` on `--canvas-soft #101010` (cards/CTAs) | 17.00 |
-  | `--body-text #b8b3b0` on `--canvas` / on `--canvas-soft` | 9.81 / 9.16 |
-  | `--mute #8b949e` on `--canvas` / on `--canvas-soft` | 6.62 / 6.19 |
-  | `--green-soft #2fd6a1` on `--canvas-soft` (CTA/eyebrow/toggle) | 10.20 |
-  | `--green-deep #10b981` on `--canvas` (links) | 8.03 |
-  | link hover `#00ffaa` on `--canvas-soft` | 14.39 |
+  | `--ink-strong #0b1220` on `--canvas #ffffff` | 18.72 |
+  | `--ink #16202c` on `--surface #ffffff` (cards/tables) | 16.44 |
+  | `--body-text #3a4657` on `--canvas` | 9.57 |
+  | `--mute #667085` on `--canvas` | 4.97 |
+  | `--green-soft #047857` on `--canvas` / `--canvas-soft` (eyebrow/chips/code) | 5.48 / 5.14 |
+  | `--on-green #101010` on `--green #00d992` (CTA fills) | 10.28 |
+  | link hover `#065f46` on `--canvas` | 7.68 |
 
   Re-check if any token changes. *(The issue named a "Kalam-on-pastel" audit
   — `grep -r Kalam` finds no such font anywhere in the repo; the landing is
