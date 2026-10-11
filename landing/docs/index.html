@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>API docs: send and verify OTP | dP Relay</title>
-  <meta name="description" content="Quickstart, OTP send, verify and status endpoints, webhooks, rate limits and error codes for the dP Relay SMS API.">
+  <title>dP Relay API Docs — Send and verify OTPs</title>
+  <meta name="description" content="Get started with the dP Relay API. Learn authentication, OTP sending and verification, status checks, billing, errors and rate limits.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/docs/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,7 +19,7 @@
       <nav aria-label="Main">
         <a href="/pricing/">Pricing</a>
         <a href="/docs/" aria-current="page">Docs</a>
-        <a href="/faq/">FAQ</a>
+        <a href="/help/">Help</a>
         <a href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
         <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a>
       </nav>
@@ -27,179 +28,230 @@
 
   <main class="wrap">
     <section>
-      <h1>API docs: send and verify OTP</h1>
-      <p class="lede muted">Everything an app backend calls, in one place. Device setup lives on <a href="/docs/byod/">Connect your phone</a>, and payment walkthroughs live on <a href="/docs/payments/">Payment guides</a>.</p>
+      <h1>Build SMS into your application</h1>
+      <p>Use the dP Relay API to send OTPs, verify codes and check OTP status. This guide covers authentication, common responses, errors and billing. Device setup and payment instructions have their own guides.</p>
     </section>
 
     <div class="docs-layout">
-      <aside class="docs-sidebar" aria-label="Docs sections">
-        <p class="side-label">On this page</p>
-        <ul>
-          <li><a href="#quickstart">Quickstart</a></li>
-          <li><a href="#authentication">Authentication</a></li>
-          <li><a href="#send-an-otp">Send an OTP</a></li>
-          <li><a href="#verify-a-code">Verify a code</a></li>
-          <li><a href="#check-status">Check status</a></li>
-          <li><a href="#webhooks">Webhooks</a></li>
-          <li><a href="#rate-limits">Rate limits</a></li>
-          <li><a href="#errors">Errors</a></li>
-          <li><a href="#credits-and-billing">Credits and billing</a></li>
-        </ul>
-        <p class="side-label">Guides</p>
-        <ul>
-          <li><a href="/docs/byod/">Connect your phone</a></li>
-          <li><a href="/docs/payments/">Payment guides</a></li>
-        </ul>
+      <aside class="docs-sidebar">
+        <nav aria-label="On this page">
+          <a href="#quickstart">Quickstart</a>
+          <a href="#authentication">Authentication</a>
+          <a href="#send-otp">Send an OTP</a>
+          <a href="#verify-otp">Verify a code</a>
+          <a href="#check-status">Check status</a>
+          <a href="#statuses">Sent, delivered and verified</a>
+          <a href="#webhooks">Webhooks</a>
+          <a href="#rate-limits">Rate limits</a>
+          <a href="#errors">Errors</a>
+          <a href="#billing">Credits and billing</a>
+          <a href="#bulk-sms">Bulk SMS</a>
+          <a href="/docs/byod/">Connect your phone</a>
+        </nav>
       </aside>
 
       <div class="docs-content">
-        <section aria-labelledby="quickstart">
-          <h2 id="quickstart">Quickstart</h2>
-          <p class="muted">Send your first OTP in four steps.</p>
-          <ol class="guide-steps">
-            <li><strong>Create an app.</strong> Sign up, verify your email, then register an app on the Apps screen. Copy the appId and appSecret now; they are shown only once.</li>
-            <li><strong>Pick a track.</strong> Your 20 free messages work on either. To send to Bangladesh numbers, nothing else is needed. To send worldwide, connect your phone first.</li>
-            <li><strong>Send a code.</strong> Call <code>POST /v5/otp/send</code> with the user's phone number in E.164 format.</li>
-            <li><strong>Verify it.</strong> When the user types the code, call <code>POST /v5/otp/verify</code>.</li>
+        <section id="quickstart">
+          <h2>Quickstart</h2>
+          <h3>Send your first OTP</h3>
+          <ol class="steps">
+            <li><strong>Create an app.</strong> Sign up, verify your email and register an app in the dashboard. Store the <code>appId</code> and <code>appSecret</code> securely.</li>
+            <li><strong>Choose an available delivery route.</strong> Enrol your Android phone for the own-phone gateway, or use the managed route if it is enabled for your account and destination. Follow the route-specific setup shown in your dashboard.</li>
+            <li><strong>Send a code.</strong> Call <code>POST /v5/otp/send</code> with the recipient number in E.164 format.</li>
+            <li><strong>Verify the code.</strong> When the user submits the code, call <code>POST /v5/otp/verify</code>.</li>
           </ol>
-          <p class="muted">The base URL is <code>https://[your-api-domain]</code>. All request and response bodies are JSON. Every failure returns <code>{ ok, error, code }</code>, so you can branch on <code>code</code>.</p>
-        </section>
+          <p>The API base URL is provided by dP Relay. All request and response bodies use JSON. Use the error <code>code</code> returned by the API to handle known failures.</p>
+          <h3>Minimal Node.js example</h3>
+          <p>Store credentials in server-side environment variables. Never expose <code>appSecret</code> in browser code or a mobile application.</p>
+<pre class="code"><code>const API_BASE_URL = process.env.DP_RELAY_API_BASE_URL;
+const APP_ID = process.env.DP_RELAY_APP_ID;
+const APP_SECRET = process.env.DP_RELAY_APP_SECRET;
 
-        <section aria-labelledby="authentication">
-          <h2 id="authentication">Authentication</h2>
-          <p class="muted">Send your app's credentials on every request:</p>
-          <pre><code>X-App-Id: &lt;your app id&gt;
+const headers = {
+  "Content-Type": "application/json",
+  "X-App-Id": APP_ID,
+  "X-App-Secret": APP_SECRET,
+};
+
+const sendResponse = await fetch(`${API_BASE_URL}/v5/otp/send`, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ phone: "+14155550100" }),
+});
+
+const sendResult = await sendResponse.json();
+console.log(sendResponse.status, sendResult);
+
+// After the user enters the code:
+const verifyResponse = await fetch(`${API_BASE_URL}/v5/otp/verify`, {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ phone: "+14155550100", otp: "123456" }),
+});
+
+const verifyResult = await verifyResponse.json();
+console.log(verifyResponse.status, verifyResult);</code></pre>
+          <p>The phone number and OTP above are examples only. Handle HTTP errors and API error codes in production; do not assume every response is successful.</p>
+        </section>
+        <section id="authentication">
+          <h2>Authentication</h2>
+          <p>Send the app credentials with each request:</p>
+<pre class="code"><code>X-App-Id: &lt;your app id&gt;
 X-App-Secret: &lt;your app secret&gt;</code></pre>
-          <p class="muted">Keep the appSecret on your server. Never ship it in a mobile app or browser code. If it leaks, rotate it before anything else.</p>
-          <div class="owner-note"><p>rotate it on the Apps screen: confirm this option exists</p></div>
+          <p>Keep <code>appSecret</code> on your server. Do not put it in frontend JavaScript, a mobile app, source control or support messages. If you believe it has been exposed, follow the credential-rotation procedure supported by your account.</p>
         </section>
 
-        <section aria-labelledby="send-an-otp">
-          <h2 id="send-an-otp">Send an OTP</h2>
+        <section id="send-otp">
+          <h2>Send an OTP</h2>
           <p><code>POST /v5/otp/send</code></p>
-          <pre><code>{ "phone": "+8801XXXXXXXXX" }</code></pre>
-          <p class="muted">Success returns <code>201</code>:</p>
-          <pre><code>{ "ok": true, "sessionId": "...", "expiresAt": 1794000000 }</code></pre>
-          <ul class="guide-steps">
-            <li><code>phone</code> must be strict E.164: a plus sign, country code and number, with no spaces or dashes.</li>
-            <li><code>expiresAt</code> is a Unix timestamp in seconds.</li>
-            <li>Each send is charged to your balance at your track's rate. With a zero balance you get <code>402 insufficient_credits</code>.</li>
-            <li>Sending again too soon returns <code>429 resend_cooldown</code>; too many sends to one number returns <code>429 rate_limited</code>.</li>
-            <li>Code length and lifetime apply to every send.</li>
-          </ul>
-          <div class="owner-note"><p>code length and expiry in minutes</p></div>
-        </section>
-
-        <section aria-labelledby="verify-a-code">
-          <h2 id="verify-a-code">Verify a code</h2>
-          <p><code>POST /v5/otp/verify</code></p>
-          <pre><code>{ "phone": "+8801XXXXXXXXX", "otp": "123456" }</code></pre>
-          <p class="muted">Success returns <code>200</code>:</p>
-          <pre><code>{ "ok": true, "verified": true }</code></pre>
-          <ul class="guide-steps">
-            <li><code>400 otp_expired</code>: no active session for that number, or its time ran out. Send a new code.</li>
-            <li><code>423 otp_locked</code>: too many wrong attempts. Wait <code>retryAfterSec</code> seconds before trying again.</li>
-            <li><code>400 invalid_otp_format</code> or <code>invalid_phone</code>: the code or number failed validation.</li>
-          </ul>
-        </section>
-
-        <section aria-labelledby="check-status">
-          <h2 id="check-status">Check status</h2>
-          <p><code>GET /v5/otp/status?phone=%2B8801XXXXXXXXX</code> (URL-encode the plus sign as <code>%2B</code>)</p>
-          <pre><code>{ "ok": true, "status": "pending", "expiresAt": 1794000000,
-  "attemptsLeft": 5, "lockedUntil": null, "verifiedAt": null }</code></pre>
-          <p class="muted"><code>status</code> is <code>pending</code>, <code>verified</code> or <code>expired</code>. If the number has never requested a code, you get <code>404 not_found</code>.</p>
-        </section>
-
-        <section aria-labelledby="webhooks">
-          <h2 id="webhooks">Webhooks</h2>
-          <p class="muted">Set a webhook URL on your app and dP Relay will send events to it.</p>
-          <div class="owner-note"><p>list the event names and show one example JSON body</p></div>
-          <p class="muted">Every request carries <code>X-DP-Signature</code>, the hex HMAC-SHA256 of the raw request body, keyed with your app's webhook secret. Check it before you parse the JSON, using a timing-safe comparison on the raw bytes:</p>
-          <pre><code>import crypto from "node:crypto";
-
-function isValid(rawBody, signature, secret) {
-  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
-  const a = Buffer.from(expected);
-  const b = Buffer.from(signature || "");
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+          <p>Example request:</p>
+<pre class="code"><code>{
+  "phone": "+14155550100"
 }</code></pre>
-          <p class="muted">Reply with a <code>2xx</code> quickly. Failed deliveries are retried.</p>
-          <div class="owner-note"><p>retry schedule</p></div>
+
+          <p>The current reference documents a <code>201</code> success response with a session identifier and expiry timestamp:</p>
+<pre class="code"><code>{
+  "ok": true,
+  "sessionId": "...",
+  "expiresAt": 1794000000
+}</code></pre>
+          <ul>
+            <li><code>phone</code> must use strict E.164 formatting: a plus sign, country code and subscriber number, without spaces or dashes.</li>
+            <li><code>expiresAt</code> is documented as a Unix timestamp in seconds.</li>
+            <li>A send request is not proof that the recipient has received the message. Use only the delivery information actually provided by the API and dashboard.</li>
+            <li>The applicable route and account balance determine how the message is billed.</li>
+            <li>A request that exceeds limits may return <code>429</code> with <code>rate_limited</code> or <code>resend_cooldown</code>.</li>
+          </ul>
         </section>
 
-        <section aria-labelledby="rate-limits">
-          <h2 id="rate-limits">Rate limits</h2>
-          <p class="muted">Two limits protect your users and your deliverability:</p>
+        <section id="verify-otp">
+          <h2>Verify an OTP</h2>
+          <p><code>POST /v5/otp/verify</code></p>
+          <p>Example request:</p>
+<pre class="code"><code>{
+  "phone": "+14155550100",
+  "otp": "123456"
+}</code></pre>
+          <p>Example success response:</p>
+<pre class="code"><code>{
+  "ok": true,
+  "verified": true
+}</code></pre>
+          <p>Documented error behaviours include:</p>
+          <ul>
+            <li><code>otp_expired</code>: the active code has expired or is unavailable.</li>
+            <li><code>otp_locked</code>: too many incorrect verification attempts; follow the returned retry information if provided.</li>
+            <li><code>invalid_otp_format</code> or <code>invalid_phone</code>: the supplied code or phone number failed validation.</li>
+          </ul>
+          <p>Do not expose OTP values in client logs or analytics.</p>
+        </section>
+
+        <section id="check-status">
+          <h2>Check OTP status</h2>
+          <p><code>GET /v5/otp/status?phone=%2B14155550100</code></p>
+          <p>URL-encode the plus sign in the phone number as <code>%2B</code>.</p>
+          <p>The current reference shows a response similar to:</p>
+<pre class="code"><code>{
+  "ok": true,
+  "status": "pending",
+  "expiresAt": 1794000000,
+  "attemptsLeft": 5,
+  "lockedUntil": null,
+  "verifiedAt": null
+}</code></pre>
+          <p>The documentation describes <code>pending</code>, <code>verified</code> and <code>expired</code> statuses and a <code>404 not_found</code> response when no code has been requested for the number.</p>
+        </section>
+
+        <section id="statuses">
+          <h2>Sent, delivered and verified are different</h2>
+          <ul>
+            <li><strong>Accepted/sent:</strong> The API accepted a request or handed it to the applicable sending route, according to the endpoint's documented meaning.</li>
+            <li><strong>Delivered:</strong> The destination network or device reports delivery, only if delivery information is actually available for that route.</li>
+            <li><strong>Verified:</strong> The user supplied the correct OTP and the verify endpoint confirmed it.</li>
+          </ul>
+          <p>Do not represent an accepted request as a delivered SMS. Delivery events, status visibility and webhook support can differ by route.</p>
+        </section>
+
+        <section id="webhooks">
+          <h2>Webhooks</h2>
+          <p>Use webhooks to receive supported event notifications without repeatedly polling the API. Webhook documentation is coming soon: it will be published once event names, payloads and signature details are confirmed.</p>
+        </section>
+
+        <section id="rate-limits">
+          <h2>Rate limits and resend cooldowns</h2>
+          <p>Rate limits help protect accounts and phone numbers from repeated requests. The current API documentation refers to:</p>
           <div class="table-scroll">
             <table>
               <thead>
-                <tr><th scope="col">Code</th><th scope="col">Limit</th><th scope="col">What to do</th></tr>
+                <tr><th>Error code</th><th>Meaning</th><th>Recommended client behaviour</th></tr>
               </thead>
               <tbody>
-                <tr>
-                  <th scope="row"><code>rate_limited</code></th>
-                  <td><span class="owner-note inline">[max sends per number per app per period]</span></td>
-                  <td>Stop and tell the user to try later</td>
-                </tr>
-                <tr>
-                  <th scope="row"><code>resend_cooldown</code></th>
-                  <td><span class="owner-note inline">[seconds between sends to one number]</span></td>
-                  <td>Disable the resend button until the cooldown passes</td>
-                </tr>
+                <tr><td><code>rate_limited</code></td><td>A sending limit was reached</td><td>Stop repeated requests and show a clear retry message</td></tr>
+                <tr><td><code>resend_cooldown</code></td><td>A code was requested too soon</td><td>Disable the resend action until the documented cooldown ends</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The exact thresholds and cooldown duration are published in the running configuration. The client should not retry in a tight loop.</p>
+        </section>
+
+        <section id="errors">
+          <h2>Errors</h2>
+          <p>The current reference lists these error families.</p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr><th>HTTP status</th><th>Error code</th><th>What to do</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>400</td><td><code>invalid_phone</code>, <code>invalid_otp_format</code></td><td>Check the phone number and code format</td></tr>
+                <tr><td>400</td><td><code>otp_expired</code></td><td>Request a new code if the user's session permits it</td></tr>
+                <tr><td>401</td><td>Authentication error</td><td>Check the app ID and app secret; use the exact code returned by the API</td></tr>
+                <tr><td>402</td><td><code>insufficient_credits</code></td><td>Check balance and purchase an eligible package if needed</td></tr>
+                <tr><td>404</td><td><code>not_found</code></td><td>Check the requested session or resource</td></tr>
+                <tr><td>409</td><td><code>trx_id_exists</code></td><td>Check whether the transaction reference has already been submitted</td></tr>
+                <tr><td>423</td><td><code>otp_locked</code></td><td>Follow the retry information returned by the API</td></tr>
+                <tr><td>429</td><td><code>rate_limited</code>, <code>resend_cooldown</code></td><td>Stop retrying and respect the applicable limits</td></tr>
               </tbody>
             </table>
           </div>
         </section>
 
-        <section aria-labelledby="errors">
-          <h2 id="errors">Errors</h2>
+        <section id="billing">
+          <h2>Credits and billing API</h2>
+          <p>The current reference lists these endpoints:</p>
           <div class="table-scroll">
             <table>
               <thead>
-                <tr><th scope="col">Status</th><th scope="col">Code</th><th scope="col">Meaning</th></tr>
+                <tr><th>Method and path</th><th>Purpose</th></tr>
               </thead>
               <tbody>
-                <tr><td>400</td><td><code>invalid_phone</code>, <code>invalid_otp_format</code></td><td>The number or code failed strict validation</td></tr>
-                <tr><td>400</td><td><code>otp_expired</code></td><td>No active session for that number, or its time ran out</td></tr>
-                <tr><td>401</td><td><span class="owner-note inline">[code for wrong appId or appSecret]</span></td><td>Check both headers</td></tr>
-                <tr><td>402</td><td><code>insufficient_credits</code></td><td>Balance is zero; buy a package in the dashboard</td></tr>
-                <tr><td>404</td><td><code>not_found</code></td><td>No such session or resource</td></tr>
-                <tr><td>409</td><td><code>trx_id_exists</code></td><td>That bKash TrxID is already attached to another pending transaction</td></tr>
-                <tr><td>423</td><td><code>otp_locked</code></td><td>Too many verify attempts; retry after <code>retryAfterSec</code></td></tr>
-                <tr><td>429</td><td><code>rate_limited</code>, <code>resend_cooldown</code></td><td>Per-number rate limit or resend cooldown</td></tr>
+                <tr><td><code>GET /v5/billing/credits</code></td><td>Read the account's available balance information</td></tr>
+                <tr><td><code>GET /v5/billing/packages</code></td><td>List currently available packages</td></tr>
+                <tr><td><code>POST /v5/billing/credits/request</code></td><td>Start a package purchase request</td></tr>
+                <tr><td><code>POST /v5/billing/credits/submit-trx</code></td><td>Submit a bKash transaction reference when that method is used</td></tr>
+                <tr><td><code>GET /v5/billing/transactions</code></td><td>Check purchase status</td></tr>
               </tbody>
             </table>
           </div>
-          <p class="muted">Device enrollment errors are listed on <a href="/docs/byod/">Connect your phone</a>.</p>
+          <p>Use the live documentation in your account for request fields and response schemas. Not every purchase method uses a bKash TrxID — see the payment guides for method-specific steps.</p>
+          <p><a href="/help/payments/">Read the payment guides</a></p>
         </section>
 
-        <section aria-labelledby="credits-and-billing">
-          <h2 id="credits-and-billing">Credits and billing</h2>
-          <p class="muted">These endpoints use the same app headers.</p>
-          <div class="table-scroll">
-            <table>
-              <thead>
-                <tr><th scope="col">Call</th><th scope="col">Purpose</th></tr>
-              </thead>
-              <tbody>
-                <tr><td><code>GET /v5/billing/credits</code></td><td>Your balance in both buckets, with expiry dates</td></tr>
-                <tr><td><code>GET /v5/billing/packages</code></td><td>The packages you can buy right now</td></tr>
-                <tr><td><code>POST /v5/billing/credits/request</code> with <code>{ "packageCode" }</code></td><td>Start a purchase; returns the bKash destination and amount</td></tr>
-                <tr><td><code>POST /v5/billing/credits/submit-trx</code> with <code>{ "transactionId", "trxId" }</code></td><td>Submit the bKash TrxID after you send the money</td></tr>
-                <tr><td><code>GET /v5/billing/transactions</code></td><td>Status of every purchase</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <p class="muted">After you submit a TrxID, an operator approves it and your balance updates. Remittance purchases have no bKash TrxID, so they are submitted with the method and reference instead (for example a Western Union or Ria MTCN) or matched by amount. Bulk campaigns are launched from the dashboard. See the <a href="/docs/payments/">payment guides</a> for how to send the money.</p>
-          <div class="owner-note"><p>Define the request fields.</p></div>
-          <div class="owner-note"><p>Add a bulk section here if an endpoint ships.</p></div>
+        <section id="bulk-sms">
+          <h2>Bulk SMS</h2>
+          <p>Bulk campaigns are currently launched from the dashboard. Use the dashboard workflow to create and manage campaigns supported by your account. Follow the consent and acceptable-use rules for every recipient list.</p>
+          <p>A public bulk-send API is not currently available; check the Docs for the endpoints that are.</p>
+        </section>
+
+        <section id="byod-link">
+          <h2>Connect your phone</h2>
+          <p>Set up an Android phone as your SMS gateway: see <a href="/docs/byod/">Connect your phone</a>. Payment steps have their own guide at <a href="/help/payments/">How to add credits</a>.</p>
         </section>
       </div>
     </div>
   </main>
 
-  <footer class="site-footer">
+    <footer class="site-footer">
     <div class="wrap">
       <div class="footer-cols">
         <div class="footer-col">
@@ -207,7 +259,8 @@ function isValid(rawBody, signature, secret) {
           <ul>
             <li><a href="/pricing/">Pricing</a></li>
             <li><a href="/docs/">Docs</a></li>
-            <li><a href="/faq/">FAQ</a></li>
+            <li><a href="/help/">Help</a></li>
+            <li><a href="/docs/byod/">Connect your phone</a></li>
           </ul>
         </div>
         <div class="footer-col">
@@ -226,10 +279,8 @@ function isValid(rawBody, signature, secret) {
         </div>
       </div>
       <p class="footer-line">dP Relay is an SMS gateway by Digital Papyrus. © 2026 Digital Papyrus.</p>
-      <div class="owner-note"><p>legal entity name and registered address</p></div>
+      <div class="owner-note"><p>[legal entity name and registered address]</p></div>
     </div>
   </footer>
-
-  <script src="/site.js" defer></script>
 </body>
 </html>

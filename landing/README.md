@@ -12,18 +12,22 @@ on bare Node). Directory-style clean URLs (`/pricing/` → `pricing/index.html`)
 | `/pricing/` | `pricing/index.html` | tracks & rates, unlimited plans, credit packages, comparison |
 | `/docs/` | `docs/index.html` | API docs: quickstart through credits & billing (sticky sidebar) |
 | `/docs/byod/` | `docs/byod/index.html` | connect your own Android phone as the gateway |
-| `/docs/payments/` | `docs/payments/index.html` | how to pay: bKash + remittance guides (owner-verbatim — see below) |
-| `/faq/` | `faq/index.html` | FAQ, four categories (SMTP-free rule — infrastructure details never appear) |
+| `/help/` | `help/index.html` | help hub: four cards linking to payments, BYOD and contact |
+| `/help/payments/` | `help/payments/index.html` | how to pay: bKash + remittance guides (owner-verbatim — see below) |
+| `/faq/` | `faq/index.html` | FAQ, four categories / 20 questions (SMTP-free rule — infrastructure details never appear) |
 | `/contact/` | `contact/index.html` | how to reach a person |
 | `/terms/` | `terms/index.html` | terms of service (draft — owner notes mark the open facts) |
 | `/privacy/` | `privacy/index.html` | privacy policy (draft — owner notes mark the open facts) |
 | `/acceptable-use/` | `acceptable-use/index.html` | acceptable use + fair-use rules |
 
-`/payment/` is retired: `landing/_redirects` 301s it to `/docs/payments/`, and
-the checker's `PAGES` registry + `sitemap.xml` list exactly the ten live pages.
+`/payment/` and `/docs/payments/` are retired: `landing/_redirects` 301s both
+to `/help/payments/`, and the checker's `PAGES` registry + `sitemap.xml` list
+exactly the eleven live pages.
 
-Shared: `styles.css` (design tokens in `:root`), `site.js` (the only script —
-code tabs + copy buttons, no framework, no bundler), `robots.txt`, `sitemap.xml`.
+Shared: `styles.css` (design tokens in `:root`), `assets/hero.js` (home page
+only — deterministic scroll-driven hero, pure function of scroll progress),
+`robots.txt`, `sitemap.xml`. `site.js` is retired (the code tabs and copy
+buttons it served no longer exist).
 
 **Owner notes**: `[bracketed]` items from the copy doc are facts only the owner
 can supply. They render as visible amber `.owner-note` elements containing the
@@ -46,8 +50,9 @@ publishing".
    checker pins the exact app URL).
 4. Run `node scripts/check-landing.mjs` — it verifies page existence,
    internal link resolution, SEO tags, single-h1, clean URLs, absolute CTAs,
-   owner-verbatim remittance guides (`/docs/payments/`), the four-category /
-   14-question FAQ shape, the SMTP-free FAQ rule, and the AGPL pattern gate.
+   owner-verbatim payment guides (`/help/payments/`), the four-category /
+   20-question FAQ shape, the home hero pins and DOM markers, the
+   BD-number redaction gate over all of landing/, and the AGPL pattern gate.
    CI runs the same script (`landing-checks`).
 
 ## How to add a page
@@ -57,11 +62,11 @@ publishing".
 3. Add it to `sitemap.xml`, link it from the site nav/footer, and re-run the
    checker until exit 0.
 
-**Owner-verbatim content**: the payment guides on `/docs/payments/`
-(TapTap Send / Remitly / Wise / Western Union / WorldRemit) are pinned
-word-for-word (hub event 1243) and asserted by the checker — do not
-paraphrase them. When the guides moved from `/payment/`, the checker's pin
-*path* was retargeted; the pin *text* was never touched.
+**Owner-verbatim content**: the payment guides on `/help/payments/` are
+pinned word-for-word from the copy doc §8 and asserted by the checker — do
+not paraphrase them. When the guides moved (`/payment/` → `/docs/payments/`
+→ `/help/payments/`), the checker's pin *path* was retargeted each time; the
+pin *text* rules never changed: no wallet number is restated anywhere.
 
 ## Accessibility checklist (visual checks — reviewer runs these)
 

@@ -244,53 +244,105 @@ h3 {
   margin: 0 0 0.2rem;
 }
 
-/* ── Hero (flat band — no card chrome) ─────────────────── */
+/* ── Scroll-pinned hero (deterministic, scroll-driven scene) ── */
 
-.hero {
-  padding: 3.25rem 1rem 2rem;
-  text-align: center;
+.hero-pin {
+  position: relative;
+  height: 400vh; /* four viewport-heights of scroll room; p = progress through the pin */
 }
 
-.track-toggle {
-  display: inline-flex;
-  gap: 0.25rem;
-  padding: 0.25rem;
-  margin: 1.25rem auto 0.5rem;
-  background: var(--canvas-soft);
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
+.hero-scene {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
 }
 
-.track-toggle input {
+@supports (height: 100dvh) {
+  .hero-scene { height: 100dvh; }
+}
+
+.hero-canvas,
+.hero-fallback {
   position: absolute;
-  opacity: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-fallback { object-fit: cover; }
+
+.hero-canvas { opacity: 0; }
+.hero-live .hero-fallback { opacity: 0; }
+.hero-live .hero-canvas { opacity: 1; }
+
+.hero-fallback,
+.hero-canvas {
+  transition: opacity 400ms ease;
+}
+
+/* Overlay copy floats over the scene; pointer-events pass through to CTAs. */
+.hero-overlay {
+  position: absolute;
+  top: 14vh;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0 1.5rem;
   pointer-events: none;
-  margin: 0;
 }
 
-.track-toggle label {
-  padding: 0.45rem 1.1rem;
-  border-radius: 999px;
-  cursor: pointer;
+.hero-overlay .actions {
+  pointer-events: auto;
+}
+
+.hero-overlay h1 {
+  max-width: 22ch;
+}
+
+.hero-overlay .hero-sub {
+  max-width: 52ch;
+}
+
+.hero-captions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 7vh;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.hero-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: max-content;
+  max-width: 92vw;
+  opacity: 0;
+  visibility: hidden;
   color: var(--mute);
-  font-weight: 600;
-  font-size: 0.95rem;
-  transition: background 0.18s ease, color 0.18s ease;
+  font-size: 1.05rem;
+  font-weight: 500;
 }
 
-.track-toggle label:hover {
-  color: var(--ink);
+.hero-cta-lit .button:not(.secondary) {
+  box-shadow: 0 0 0 3px rgba(0, 217, 146, 0.22),
+    0 0 24px rgba(0, 217, 146, 0.35);
 }
 
-.track-toggle input:focus-visible + label {
-  outline: 2px solid var(--green-soft);
-  outline-offset: 2px;
-}
+/* ── Two-column card grids ─────────────────────────────── */
 
-.track-toggle input:checked + label {
-  background: var(--green);
-  color: var(--on-green);
-  border: 1px solid var(--green);
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
 }
 
 /* ── Cards ─────────────────────────────────────────────── */
@@ -394,52 +446,6 @@ tr:last-child td {
   border-bottom: 0;
 }
 
-/* ── Code preview grid (cURL / Node / Python) ──────────── */
-
-.code-grid {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
-
-.code-grid figure {
-  margin: 0;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-card);
-  overflow: hidden;
-  background: var(--canvas-soft);
-}
-
-.code-grid figcaption {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.85rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink);
-  border-bottom: 1px solid var(--hairline);
-}
-
-.code-grid figcaption::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 8px var(--green);
-}
-
-.code-grid pre {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: 0.82rem;
-  padding: 0.9rem 0.85rem;
-}
-
 /* ── Buttons ───────────────────────────────────────────── */
 
 .actions {
@@ -505,45 +511,6 @@ tr:last-child td {
   font-style: normal;
 }
 
-/* ── Tier panels (home page track switch) ──────────────── */
-
-.track-panels section {
-  margin-top: 1.25rem;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-card);
-  background: var(--surface);
-  padding: 1.5rem;
-  text-align: left;
-}
-
-.track-panels h2 {
-  margin-top: 0;
-  font-size: 1.2rem;
-}
-
-.track-panels section p:first-of-type strong {
-  color: var(--ink);
-}
-
-.track-panels .actions {
-  justify-content: flex-start;
-  margin-top: 1rem;
-}
-
-/* CSS-only track switch: show the panel matching the checked radio.
-   Browsers without :has() show both panels — graceful fallback. */
-.track-panels #panel-bd {
-  display: none;
-}
-
-.hero:has(#track-bd:checked) #panel-bd {
-  display: block;
-}
-
-.hero:has(#track-bd:checked) #panel-global {
-  display: none;
-}
-
 /* ── Signature dashed divider between sections ─────────── */
 
 main.wrap > section + section {
@@ -558,18 +525,25 @@ main.wrap > section + section h2:first-child {
 /* ── Responsive ────────────────────────────────────────── */
 
 @media (max-width: 640px) {
-  .hero {
-    padding: 2.25rem 1rem 1.5rem;
-  }
-
   nav[aria-label="Main"] {
     gap: 0.8rem;
+  }
+
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-overlay {
+    top: 12vh;
+  }
+
+  .hero-caption {
+    font-size: 0.95rem;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .button,
-  .track-toggle label {
+  .button {
     transition: none;
   }
 }
@@ -649,103 +623,6 @@ main.wrap > section > h3 {
   font-size: 0.9rem;
   color: var(--mute);
   max-width: 72ch;
-}
-
-/* ── Dark code panels + language tabs + copy button ────── */
-
-pre,
-.code-tabs pre,
-.code-grid pre {
-  font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-}
-
-.code-tabs {
-  margin: 1rem 0 0;
-  background: var(--code-bg);
-  border: 1px solid var(--code-bg);
-  border-radius: var(--radius-card);
-  overflow: hidden;
-}
-
-.code-tabs .tab-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.12);
-}
-
-.code-tabs .tab,
-.code-tabs .copy-btn {
-  appearance: none;
-  -webkit-appearance: none;
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  padding: 0.35rem 0.7rem;
-  border-radius: var(--radius-btn);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--code-mute);
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.code-tabs .tab:hover,
-.code-tabs .copy-btn:hover {
-  color: var(--code-ink);
-}
-
-.code-tabs .tab[aria-selected="true"] {
-  background: var(--code-ink);
-  color: var(--code-bg);
-}
-
-.code-tabs .tab:focus-visible,
-.code-tabs .copy-btn:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 2px;
-}
-
-.code-tabs .copy-btn {
-  margin-left: auto;
-  border-color: rgba(226, 232, 240, 0.2);
-}
-
-.code-tabs .copy-btn[data-copied="true"] {
-  background: var(--green);
-  border-color: var(--green);
-  color: var(--on-green);
-}
-
-.code-tabs [data-panel] {
-  display: none;
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 1rem;
-}
-
-.code-tabs [data-panel].is-active {
-  display: block;
-}
-
-.code-grid figure {
-  background: var(--code-bg);
-  border-color: var(--code-bg);
-}
-
-.code-grid figcaption {
-  color: var(--code-ink);
-  border-bottom-color: rgba(226, 232, 240, 0.12);
-}
-
-.code-grid pre {
-  color: var(--code-ink);
 }
 
 /* ── Owner / internal notes ────────────────────────────── */
@@ -1058,9 +935,7 @@ tbody tr:hover {
     scroll-behavior: auto;
   }
 
-  .button,
-  .code-tabs .tab,
-  .code-tabs .copy-btn {
+  .button {
     transition: none;
   }
 }

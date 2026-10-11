@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FAQ: billing, delivery and BYOD | dP Relay</title>
-  <meta name="description" content="Answers on API keys, payments, delivery problems, rate limits and using your own phone as a gateway.">
+  <title>dP Relay FAQ — Pricing, delivery and setup</title>
+  <meta name="description" content="Answers about API credentials, delivery options, charges, payment approval, rate limits and using your own phone.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/faq/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,7 +19,7 @@
       <nav aria-label="Main">
         <a href="/pricing/">Pricing</a>
         <a href="/docs/">Docs</a>
-        <a href="/faq/" aria-current="page">FAQ</a>
+        <a href="/help/">Help</a>
         <a href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
         <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a>
       </nav>
@@ -28,69 +29,57 @@
   <main class="wrap">
     <section>
       <h1>Frequently asked questions</h1>
-      <p class="lede muted">Quick answers on getting started, billing, delivery and using your own phone. Can't find yours? <a href="/contact/">Contact us</a>.</p>
-    </section>
+      <p>Quick answers about getting started, choosing a delivery option, pricing, payments and using the API. If you cannot find your answer, contact support.</p>
 
-    <section class="faq-group" aria-labelledby="faq-getting-started">
       <h2 id="faq-getting-started">Getting started</h2>
+      <h3 id="q-what-is-dp-relay">What is dP Relay?</h3>
+      <p>dP Relay is an SMS gateway for OTP and business messaging. You can send through your own Android phone and SIM, or use managed delivery where available. OTP sending and verification are documented in the API; bulk campaigns are currently managed through the dashboard.</p>
+      <h3 id="q-which-delivery-option">Which delivery option should I choose?</h3>
+      <p>Use your own phone when you want to send through a SIM you control to destinations it can reach. Choose managed Bangladesh delivery if your destination and message type are supported and you do not want to operate an Android gateway.</p>
+      <h3 id="q-api-credentials">How do I get API credentials?</h3>
+      <p>Sign in, create an app in the dashboard and store its credentials securely. Keep the app secret on your server; never put it in browser code or a mobile app.</p>
+      <h3 id="q-bulk-through-api">Can I send bulk SMS through the API?</h3>
+      <p>Bulk campaigns are currently launched from the dashboard. Check the Docs for the endpoints currently available; do not assume that a dashboard feature also has a public API endpoint.</p>
 
-      <h3 id="q-track" class="faq-q">Which delivery track should I choose?</h3>
-      <p class="muted">Choose your own phone for worldwide reach and your own sender number. Choose our dedicated Bangladesh numbers to reach +880 numbers on Grameenphone, Robi, Banglalink and Teletalk without running any hardware. Both use the same API.</p>
+      <h2 id="faq-pricing-payments">Pricing and payments</h2>
+      <h3 id="q-message-cost">What does a message cost?</h3>
+      <p>The own-phone gateway is published at $0.0015 per message, or you can choose a monthly own-phone gateway plan. That price covers the gateway service; your mobile operator may charge separately for each SMS. Managed Bangladesh delivery is published at ৳0.20 per message, with sending included for supported routes.</p>
+      <h3 id="q-unlimited-plan">What is included in an unlimited plan?</h3>
+      <p>An own-phone monthly plan covers the dP Relay gateway service for the plan's phone allowance under its fair-use rules. It does not remove carrier charges, carrier restrictions or device/network dependencies. The managed Bangladesh route is priced separately.</p>
+      <h3 id="q-free-trial-routes">Does the free trial work with every route?</h3>
+      <p>New apps currently receive 20 free messages valid for 30 days. Check the routes and eligibility displayed in your account before relying on the trial for a particular destination or message type.</p>
+      <h3 id="q-pay-for-credits">How do I pay for credits?</h3>
+      <p>Open Buy credits, select an available package and follow the recipient, amount and payment instructions shown there. Payment methods vary by country. See the <a href="/help/payments/">payment guides</a> for the supported steps.</p>
+      <h3 id="q-credits-appear">When will my credits appear?</h3>
+      <p>Credits are added after the purchase is matched and approved. Check your transaction list for the latest status. Any processing-time claim on this page must match the service's real operating practice.</p>
+      <h3 id="q-credits-expire">Do credits expire?</h3>
+      <p>Package validity is shown before purchase. Check the package details in the dashboard to see whether credits expire and when the validity period ends.</p>
+      <h3 id="q-payment-reference-rejected">Why was my payment reference rejected?</h3>
+      <p>It may already be attached to another pending purchase or may not match the selected transaction. Check the purchase and reference, then contact support if the issue persists.</p>
 
-      <h3 id="q-api-keys" class="faq-q">How do I get API keys?</h3>
-      <p class="muted">Sign in with your email, then register an app on the Apps screen. The appId and appSecret are shown once, so store them safely. If an operator issued you an app, use <strong>Link existing app</strong> and enter those credentials.</p>
+      <h2 id="faq-sending-delivery">Sending and delivery</h2>
+      <h3 id="q-phone-stay-online">Does my phone need to stay online?</h3>
+      <p>The Android gateway needs power, mobile service and an internet connection to communicate with dP Relay. If it becomes unavailable, sending through that device may stop until it reconnects.</p>
+      <h3 id="q-own-number-guarantee">Does using my own number guarantee that messages will arrive?</h3>
+      <p>No. Sender presentation and delivery depend on the carrier, destination network, phone, SIM, signal and message content. dP Relay does not guarantee delivery or bypass filtering rules.</p>
+      <h3 id="q-sent-delivered-verified">What is the difference between sent, delivered and verified?</h3>
+      <p>An accepted send request means the API accepted the request according to its response contract. Delivery means a destination system has reported that the message was delivered, when that information is available. Verified means the user entered the correct OTP and the verification endpoint confirmed it. These are separate outcomes.</p>
+      <h3 id="q-429-error">Why did I receive a `429` error?</h3>
+      <p>A <code>rate_limited</code> response means a sending limit was reached. A <code>resend_cooldown</code> response means another code was requested too soon. Respect the response and wait for the documented retry period rather than repeatedly resending.</p>
+      <h3 id="q-otp-attempts">What happens after too many incorrect OTP attempts?</h3>
+      <p>The API may return <code>otp_locked</code> when the verification attempt limit is reached. Follow the retry information returned by the API and the documented verification policy.</p>
+      <h3 id="q-promotional-messages">Can I send promotional messages?</h3>
+      <p>Only send bulk or promotional messages to recipients who have given the required consent, and follow applicable opt-out, carrier and legal requirements. Do not use the service for spam, phishing, impersonation or unsolicited messages.</p>
 
-      <h3 id="q-reset-password" class="faq-q">How do I reset my password?</h3>
-      <p class="muted">On the sign-in screen choose <strong>Forgot password?</strong> and enter your email; a reset link follows. If email isn't enabled yet on this deployment, contact us and we can reset it for you.</p>
-    </section>
-
-    <section class="faq-group" aria-labelledby="faq-billing">
-      <h2 id="faq-billing">Billing and payments</h2>
-
-      <h3 id="q-cost" class="faq-q">What does a message cost?</h3>
-      <p class="muted">On your own phone, $0.0015 per message (USD only), for OTP or bulk, in any country, or unlimited sending from $16 a month. On our dedicated Bangladesh numbers, ৳0.20 per message with sending included. New apps start with 20 free messages valid for 30 days. After that you buy packages; see <a href="/pricing/">pricing</a>.</p>
-
-      <h3 id="q-how-to-pay" class="faq-q">How do I pay?</h3>
-      <p class="muted">Pick a package on the Buy credits screen, send the money to the bKash number shown there, then paste the TrxID. From abroad you can use TapTap Send, Remitly, Wise, Western Union or WorldRemit. The <a href="/docs/payments/">payment guides</a> walk through each.</p>
-
-      <h3 id="q-approval-time" class="faq-q">How long until my credits appear?</h3>
-      <p class="muted">A person on our team confirms every payment. Credits are added as soon as it is approved.</p>
-      <div class="owner-note"><p>typical approval time</p></div>
-
-      <h3 id="q-expiry" class="faq-q">Do credits expire?</h3>
-      <p class="muted">Yes. Each package has a validity window, and unused credits expire when it ends. The validity is shown on the package before you buy.</p>
-
-      <h3 id="q-trxid-rejected" class="faq-q">Why was my TrxID rejected?</h3>
-      <p class="muted">The most common cause is a TrxID already attached to another pending purchase. Check you haven't pasted it twice, and that you used the same package you paid for. If it still fails, contact us with the TrxID.</p>
-    </section>
-
-    <section class="faq-group" aria-labelledby="faq-delivery">
-      <h2 id="faq-delivery">Delivery</h2>
-
-      <h3 id="q-not-arrived" class="faq-q">Why hasn't my SMS arrived?</h3>
-      <p class="muted">Check that the number is strict E.164 (for example +8801XXXXXXXXX) and that the recipient's phone is on and has signal. Failed sends appear in the History screen. If many sends fail together, the sending device is usually offline; on your own phone, check it first, otherwise contact us.</p>
-
-      <h3 id="q-429" class="faq-q">Why am I getting a 429 error?</h3>
-      <p class="muted">You hit a limit that protects deliverability: <code>rate_limited</code> means too many sends to one number, and <code>resend_cooldown</code> means you asked for another code too soon. Wait and retry, and disable your resend button during the cooldown. See <a href="/docs/#rate-limits">rate limits</a>.</p>
-
-      <h3 id="q-wrong-code" class="faq-q">A user typed the wrong code too many times. What now?</h3>
-      <p class="muted">The number is locked and the API returns <code>otp_locked</code> with <code>retryAfterSec</code>. After that time passes, send a new code.</p>
-    </section>
-
-    <section class="faq-group" aria-labelledby="faq-byod">
-      <h2 id="faq-byod">Using your own phone</h2>
-
-      <h3 id="q-own-phone" class="faq-q">Can I use my own phone as the gateway?</h3>
-      <p class="muted">Yes. Enroll any Android phone and messages go out over your SIM, on any carrier, in any country it can reach. Each message is billed at $0.0015. See <a href="/docs/byod/">Connect your phone</a>.</p>
-
-      <h3 id="q-phone-on" class="faq-q">Does the phone need to stay on?</h3>
-      <p class="muted">Yes. Keep it powered, connected and allowed to run the gateway app in the background. If it goes offline, sends fail until it is back.</p>
-
-      <h3 id="q-enrollment-secret" class="faq-q">What if I lose my enrollment secret?</h3>
-      <p class="muted">Enroll the device again to get a new secret and paste it into the gateway app right away. It pairs your phone to your account and is not your password.</p>
+      <h2 id="faq-account-security">Account and security</h2>
+      <h3 id="q-protect-app-secret">How do I protect my app secret?</h3>
+      <p>Keep it on your server, out of browser code and mobile apps. Do not commit it to source control or send it to support. Follow the documented credential recovery or rotation procedure if it is exposed.</p>
+      <h3 id="q-reset-password">How do I reset my password?</h3>
+      <p>Use the password-recovery option on the sign-in page if it is available for your account. If the recovery email does not arrive, contact support using the published support details.</p>
+      <h3 id="q-lost-enrolment-secret">What if I lose my device-enrolment secret?</h3>
+      <p>Follow the supported re-enrolment or recovery process in the dashboard. Do not share device secrets in public or unsecured support channels.</p>
     </section>
   </main>
-
   <footer class="site-footer">
     <div class="wrap">
       <div class="footer-cols">
@@ -99,7 +88,8 @@
           <ul>
             <li><a href="/pricing/">Pricing</a></li>
             <li><a href="/docs/">Docs</a></li>
-            <li><a href="/faq/">FAQ</a></li>
+            <li><a href="/help/">Help</a></li>
+            <li><a href="/docs/byod/">Connect your phone</a></li>
           </ul>
         </div>
         <div class="footer-col">
@@ -118,10 +108,8 @@
         </div>
       </div>
       <p class="footer-line">dP Relay is an SMS gateway by Digital Papyrus. © 2026 Digital Papyrus.</p>
-      <div class="owner-note"><p>legal entity name and registered address</p></div>
+      <div class="owner-note"><p>[legal entity name and registered address]</p></div>
     </div>
   </footer>
-
-  <script src="/site.js" defer></script>
 </body>
 </html>

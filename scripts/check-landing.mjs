@@ -3,19 +3,26 @@
  * STAGE F6 gate for landing/ (ISSUE-86) — zero-dependency structural checks
  * run by the `landing-checks` CI job and locally via `node scripts/check-landing.mjs`.
  *
+ * 2026-10-11: updated for the second-pass copy rewrite
+ * (.kilo/plans/dp-relay-site-copy-full-rewrite.md): payment guides moved from
+ * /docs/payments/ to /help/payments/ with a new Help hub at /help/ (both old
+ * URLs are 301s in landing/_redirects), FAQ regrouped into four categories of
+ * 20 questions, and a redacted-number gate (BD mobile-number regex over the
+ * whole landing/ tree — the wallet digits are never restated in this script).
+ *
  * Why hand-rolled: landing/ is contractually build-free with no package.json,
  * so the gate must run on bare Node. It enforces what the acceptance criteria
  * pin: every page exists, internal links resolve, per-page SEO (title +
  * description + lang + single h1), directory-style clean URLs behind
- * sitemap.xml, absolute app-subdomain CTAs, the owner-verbatim remittance
- * guides, the SMTP-free FAQ rule, and the AGPL identifier gate (agpl-grep.sh
- * does not walk landing/, so the pattern is mirrored here).
+ * sitemap.xml, absolute app-subdomain CTAs, the republished-copy pins, the
+ * SMTP-free FAQ rule, and the AGPL identifier gate (agpl-grep.sh does not
+ * walk landing/, so the pattern is mirrored here).
  *
  * Exit 0 = all checks pass; exit 1 prints every failure (no early exit, so a
  * single CI run shows the full list).
  */
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { dirname, join, resolve, relative, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,14 +30,16 @@ const SITE = join(ROOT, "landing");
 const BASE_URL = "https://dprelay.digital-papyrus.com";
 const APP_URL = "https://app.dprelay.digital-papyrus.com";
 
-/** Every live page the site ships, in site-path form. `/payment/` is a 301
- *  (landing/_redirects) to `/docs/payments/`, so it is deliberately absent. */
+/** Every live page the site ships, in site-path form. `/payment/` and
+ *  `/docs/payments/` are 301s (landing/_redirects) to `/help/payments/`, so
+ *  both are deliberately absent. */
 const PAGES = [
   { path: "/", file: "index.html" },
   { path: "/pricing/", file: "pricing/index.html" },
   { path: "/docs/", file: "docs/index.html" },
   { path: "/docs/byod/", file: "docs/byod/index.html" },
-  { path: "/docs/payments/", file: "docs/payments/index.html" },
+  { path: "/help/", file: "help/index.html" },
+  { path: "/help/payments/", file: "help/payments/index.html" },
   { path: "/faq/", file: "faq/index.html" },
   { path: "/contact/", file: "contact/index.html" },
   { path: "/terms/", file: "terms/index.html" },
@@ -54,35 +63,20 @@ const FAQ_FORBIDDEN = [
 ];
 
 /** AGPL identifier pattern mirrored from scripts/agpl-grep.sh. */
-const AGPL_PATTERN = /com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node/;/** Owner-verbatim pins — exact strings, never paraphrased.
- *
- *  2026-10-11 (owner decision): the two public bKash wallet-number pins that
- *  used to sit here are redacted — the digits are deliberately not restated in
- *  this comment. This supersedes the hub-event-1243 wording: the copy doc's
- *  Payment guides section removes the public number so every guide points at
- *  the bKash number and recipient name shown on the signed-in Buy credits
- *  screen. The pins below are the identical redacted step sentences that now
- *  appear on /docs/payments/, so the check stays byte-identical without
- *  publishing the wallet number.
- *
- *  Gate: a recursive grep of landing/ for the retired wallet number (raw and
- *  +880-prefixed forms) must return zero matches.
- *  (That scope is landing/ only — the digits still appear elsewhere in the
- *  repo, e.g. server and app test fixtures, which this gate does not cover.)
- */
+const AGPL_PATTERN = /com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node/;/** Owner-verbatim pins for /help/payments/ — exact strings, never
+ *  paraphrased. Pins are pattern-based (sentences from the copy doc §8); no
+ *  wallet number or other secret is restated here. */
 const PAYMENT_PINS = [
-  "How to Send Using TapTap Send",
-  "How to Send Using Remitly",
-  "How to Send Using Wise",
-  "How to Send Using Western Union",
-  "How to Send Using WorldRemit",
-  "Best for users in the US, UK, Canada, UAE, and Europe.",
-  "Best for competitive exchange rates and promotional offers.",
-  "Best for getting the mid-market exchange rate with low, transparent fees.",
-  "Best for sending online or paying with cash at a brick-and-mortar location.",
-  "Available in over 50 countries for fast mobile wallet routing.",
-  "Phone Number: Input the bKash number shown on Buy credits.",
-  "Phone Number: Type in the bKash number shown on Buy credits.",
+  "Add credits to your dP Relay account",
+  "Send the exact amount shown.",
+  "Enter the destination number displayed in Buy credits.",
+  "Save the transaction ID (TrxID) shown after the payment.",
+  "Do not assume that a remittance transaction has a bKash TrxID.",
+  "A payment may require manual review before credits are added.",
+  "Do not include your app secret.",
+  "Do not send confidential transfer references outside the official payment form or verified support process.",
+  "If the payment cannot be matched automatically, support may need to review it.",
+  "Availability depends on country, currency and the current purchase flow.",
 ];
 
 const VOID_TAGS = new Set([
@@ -242,6 +236,33 @@ if (home != null) {
   }
 }
 
+// Home hero pins (rewrite doc): the deterministic hero contract markers and
+// the hero copy that the scroll-driven scene overlays.
+const HERO_PINS = [
+  "One SMS gateway. Two ways to send.",
+  "One message.",
+  "Any country your phone can reach.",
+  "From your own number.",
+  "Start sending free",
+];
+if (home != null) {
+  const missingHero = HERO_PINS.filter((pin) => !home.includes(pin));
+  if (missingHero.length > 0) fail(`/: hero pin(s) missing: ${missingHero.join(" | ")}`);
+  else pass(`/: all ${HERO_PINS.length} hero pins present`);
+  const heroMarkers = ["hero-pin", "hero-scene", "hero-canvas", "hero-fallback", "hero-caption"];
+  const missingMarkers = heroMarkers.filter((m) => !home.includes(m));
+  if (missingMarkers.length > 0) fail(`/: hero DOM marker(s) missing: ${missingMarkers.join(", ")}`);
+  else pass("/: all hero DOM markers present");
+  const captionCount = (home.match(/class="hero-caption"/g) ?? []).length;
+  if (captionCount !== 3) fail(`/: expected 3 hero captions, found ${captionCount}`);
+  else pass("/: 3 hero captions present");
+  if (!home.includes('<script src="/assets/hero.js" defer></script>')) {
+    fail("/: hero script tag missing or changed");
+  } else {
+    pass("/: hero script tag present");
+  }
+}
+
 // FAQ: SMTP/infrastructure strings are forbidden (owner flag).
 const faq = htmlByPath.get("/faq/");
 if (faq != null) {
@@ -252,7 +273,7 @@ if (faq != null) {
   // The copy doc regroups the page into four categories of h3 questions; the
   // category ids and the question count are the "must not shrink silently" pins
   // (the old flat `<h2 id="faq-"> x5` shape no longer describes the page).
-  const categories = ["faq-getting-started", "faq-billing", "faq-delivery", "faq-byod"];
+  const categories = ["faq-getting-started", "faq-pricing-payments", "faq-sending-delivery", "faq-account-security"];
   const missingCategories = categories.filter((id) => !faq.includes(`<h2 id="${id}">`));
   if (missingCategories.length > 0) {
     fail(`/faq/: missing category heading(s): ${missingCategories.join(", ")}`);
@@ -260,18 +281,42 @@ if (faq != null) {
     pass("/faq/: all 4 category headings present");
   }
   const questionCount = (faq.match(/<h3 id="q-/g) ?? []).length;
-  if (questionCount !== 14) fail(`/faq/: expected the 14 copy-doc questions, found ${questionCount}`);
-  else pass("/faq/: all 14 questions present");
+  if (questionCount !== 20) fail(`/faq/: expected the 20 copy-doc questions, found ${questionCount}`);
+  else pass("/faq/: all 20 questions present");
 }
 
-// Payment guides: owner-verbatim pins (hub event 1243). The guides moved from
-// /payment/ to /docs/payments/ — the pin PATH was retargeted, never the text.
-const payments = htmlByPath.get("/docs/payments/");
+// Payment guides: owner-verbatim pins. The guides moved /payment/ →
+// /docs/payments/ → /help/payments/ — the pin PATH was retargeted, never the text.
+const payments = htmlByPath.get("/help/payments/");
 if (payments != null) {
   const missing = PAYMENT_PINS.filter((pin) => !payments.includes(pin));
-  if (missing.length > 0) fail(`/docs/payments/: verbatim guide pin(s) missing: ${missing.join(" | ")}`);
-  else pass(`/docs/payments/: all ${PAYMENT_PINS.length} verbatim pins present`);
+  if (missing.length > 0) fail(`/help/payments/: verbatim guide pin(s) missing: ${missing.join(" | ")}`);
+  else pass(`/help/payments/: all ${PAYMENT_PINS.length} verbatim pins present`);
 }
+
+// Redaction gate: the bKash wallet number is retired from the public site.
+// Pattern-based (no digits restated): any Bangladesh mobile number, raw or
+// +880-prefixed, anywhere in landing/ — html, css, js, svg, xml, txt, json.
+const REDACT_SCAN_EXT = new Set([".html", ".css", ".js", ".svg", ".xml", ".txt", ".json"]);
+const REDACT_PATTERN = /(?<![\d.])(?:\+?880|0)1[3-9]\d{8}\b/g;
+function checkRedaction() {
+  const hits = [];
+  function walk(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(p); continue; }
+      if (!REDACT_SCAN_EXT.has(extname(entry.name))) continue;
+      const text = readFileSync(p, "utf8");
+      for (const m of text.matchAll(REDACT_PATTERN)) {
+        hits.push(`${relative(ROOT, p)}: BD mobile pattern found`);
+      }
+    }
+  }
+  walk(SITE);
+  if (hits.length > 0) fail(`redaction gate: ${hits.length} hit(s) — ${hits.join("; ")}`);
+  else pass("redaction gate: no BD mobile-number patterns anywhere in landing/");
+}
+checkRedaction();
 
 // sitemap.xml: exists, lists exactly PAGES, URLs resolve to files.
 const sitemapPath = join(SITE, "sitemap.xml");

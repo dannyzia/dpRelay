@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>dP Relay: worldwide OTP and SMS API on your own Android phone</title>
-  <meta name="description" content="Send OTP and bulk SMS worldwide through your own Android phone, from $0.0015 per SMS, with dedicated Bangladesh numbers at ৳0.20 per SMS. One REST API, 20 free messages.">
+  <title>dP Relay — SMS gateway for your phone and managed delivery</title>
+  <meta name="description" content="Send OTPs and bulk SMS through your own Android phone, or use managed delivery where available. Start with 20 free messages and clear, route-specific pricing.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,223 +19,158 @@
       <nav aria-label="Main">
         <a href="/pricing/">Pricing</a>
         <a href="/docs/">Docs</a>
-        <a href="/faq/">FAQ</a>
+        <a href="/help/">Help</a>
         <a href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
         <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a>
       </nav>
     </div>
   </header>
 
-  <main class="wrap">
-    <section class="hero">
-      <p class="eyebrow">SMS delivery for developers</p>
-      <h1>Send OTP and SMS anywhere in the world, through your own Android phone</h1>
-      <p class="lede muted">dP Relay is an SMS API. You make one REST call, and the message goes out through an Android phone you control, to any country its SIM can reach. In Bangladesh we also run our own dedicated phone numbers, so you can send there without a device of your own. You pay per message, not per month.</p>
-      <p class="table-note">$0.0015 per message on your own phone · ৳0.20 per message on our Bangladesh numbers, sending included · 20 free messages to start · no card required</p>
-      <p class="actions">
-        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Start sending free</a>
-        <a class="button secondary" href="/docs/">Read the docs</a>
-      </p>
-      <div class="chip-row">
-        <span class="chip"><em>Your</em> phone</span>
-        <span class="chip"><em>Our</em> Bangladesh numbers</span>
-        <span class="chip">20 free messages</span>
-        <span class="chip">No card required</span>
-      </div>
-    </section>
-
-    <section aria-labelledby="what-is-it">
-      <h2 id="what-is-it">What is dP Relay?</h2>
-      <p class="muted">dP Relay is an SMS gateway with a REST API for OTP codes and bulk campaigns. Its main idea is simple: your own Android phone and SIM become the gateway, so messages go out from your number to any country the phone can reach, with no carrier contract to negotiate. Bangladesh is a special case: there, dP Relay also runs its own dedicated phone numbers on Grameenphone, Robi, Banglalink and Teletalk, so you can send without owning a device. Both use the same API.</p>
-    </section>
-
-    <section aria-labelledby="how-different">
-      <h2 id="how-different">How it's different</h2>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr><th scope="col"></th><th scope="col">Typical SMS API</th><th scope="col">dP Relay</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th scope="row">Who sends the message</th>
-              <td>The provider, over its own carrier connections</td>
-              <td>Your own Android phone and SIM, anywhere. In Bangladesh only, our own dedicated numbers instead</td>
-            </tr>
-            <tr>
-              <th scope="row">Sender number</th>
-              <td>The provider's number or a registered sender ID</td>
-              <td>Your own number on the phone track</td>
-            </tr>
-            <tr>
-              <th scope="row">Price</th>
-              <td>Per-country rates, often with monthly fees</td>
-              <td>Your own phone: $0.0015 per message, in any country. Our Bangladesh numbers: ৳0.20 per message, sending included. No subscription</td>
-            </tr>
-            <tr>
-              <th scope="row">How you pay</th>
-              <td>Card or invoice</td>
-              <td>USD for the phone track, BDT for our Bangladesh numbers, through bKash or a remittance service</td>
-            </tr>
-            <tr>
-              <th scope="row">Bangladesh</th>
-              <td>Usually an international route</td>
-              <td>Optional dedicated local numbers on Grameenphone, Robi, Banglalink and Teletalk</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="owner-note"><p>confirm the USD payment route</p></div>
-      <p class="table-note">The "typical" column describes how large SMS providers commonly work. Adjust it to match the services your visitors actually compare you with.</p>
-      <div class="owner-note"><p>Confirm each row before publishing.</p></div>
-      <div class="card nested">
-        <h3>Honest limits</h3>
-        <p class="muted">Speed and volume on your own phone depend on that phone, its SIM and your carrier's limits.</p>
-        <div class="owner-note"><p>Say plainly what dP Relay is not built for, such as very high throughput or branded sender names, so the right customers choose you with open eyes.</p></div>
-      </div>
-    </section>
-
-    <section aria-labelledby="why-phone">
-      <h2 id="why-phone">Why use a phone-based SMS gateway</h2>
-      <ol class="legal-list">
-        <li><strong>Trust: your customers recognise you.</strong> A login code from an unknown or random number looks suspicious, and people hesitate to act on it. When the OTP arrives from your own number, it carries your identity, and customers are far more likely to trust it and enter the code.</li>
-        <li><strong>Attention: your promotions get noticed.</strong> Messages from typical bulk-sender IDs blend into the pile, and customers learn to scroll past them. A promotion sent from your own number stands out as a message from someone they know.
-          <div class="owner-note"><p>Marketing messages usually need the recipient's opt-in; say so here.</p></div>
-        </li>
-        <li><strong>Deliverability: you don't look like a bulk sender.</strong> Phones and SMS apps often flag or block numbers known for bulk sending as spam. Your own SIM isn't a bulk sender to your customers, so your messages are less likely to be filtered out before anyone sees them, as long as you send at a normal pace.</li>
-        <li><strong>Right-sized cost: no big packages up front.</strong> Many bulk SMS providers sell packages of thousands of messages, far more than an app needs in its early days. Here you start with 20 free messages and buy only what you will actually use.</li>
-        <li><strong>Local reach: a local number for customers in their home country.</strong> Customers who live abroad or in another country usually get messages from an unfamiliar international number. Put a phone with a local SIM in their country and they get a message from a local number. dP Relay charges only $0.0015 per message for the gateway, and the SMS itself goes out on your local plan, so you avoid international SMS rates. For example, Twilio's published price for one SMS to Bangladesh is $0.5962 plus possible carrier fees, while our Bangladesh numbers charge ৳0.20 per message (about $0.0017 at roughly ৳120 to the dollar; check today's rate).</li>
-      </ol>
-
-      <h3>Where it fits less well</h3>
-      <p class="muted">Phone-based gateways suit steady, moderate volume. For very large bursts or guaranteed uptime, a carrier-grade provider is the safer choice, because one phone's power, connection and carrier limits set the ceiling.</p>
-      <div class="owner-note"><p>Confirm this matches how you want to position dP Relay.</p></div>
-
-      <div class="internal-note">
-        <span class="note-label">Internal — remove before publishing</span>
-        Research sources: <a href="https://textbee.dev/blog/what-is-an-android-sms-gateway">textbee on Android SMS gateways</a> · <a href="https://httpsms.com/">httpSMS</a> · <a href="https://dev.to/nikola_mitrovic_922e2665f/why-im-building-simgate-an-sms-api-without-per-message-fees-16mm">SimGate on DEV</a> · <a href="https://help.dmchamp.com/messaging-channels/android-sms-gateway/">DM Champ's Android gateway notes</a> · <a href="https://www.messagecentral.com/services/sms-gateway">Message Central's SMS gateway use cases</a>
-      </div>
-    </section>
-
-    <section aria-labelledby="who-for">
-      <h2 id="who-for">Who it's for</h2>
-      <ol class="legal-list">
-        <li><strong>Indie developers and small SaaS teams.</strong> You need OTP or 2FA for an MVP or side project, and per-message pricing would eat a small budget.</li>
-        <li><strong>Small businesses and local services.</strong> Clinics, shops and delivery apps that send appointment reminders, order updates and receipts.</li>
-        <li><strong>Ecommerce and app teams.</strong> You add phone verification at signup, login or checkout for users in any country, including Bangladesh through our dedicated numbers.</li>
-        <li><strong>Teams in places big providers serve poorly.</strong> If your country or carrier isn't well covered, a local SIM in your own phone gets you sending.</li>
-        <li><strong>Ops, IoT and internal tools.</strong> Uptime alerts, sensor warnings, deploy notices and test environments that need real SMS.</li>
-      </ol>
-      <h3>Probably not for you</h3>
-      <p class="muted">If you need a guaranteed outcome from dP Relay, read the honest limits above before you start.</p>
-      <div class="owner-note"><p>say who should look elsewhere, for example teams that need guaranteed throughput at very high volume</p></div>
-    </section>
-
-    <section aria-labelledby="why-choose">
-      <h2 id="why-choose">Why choose dP Relay</h2>
-      <ol class="legal-list">
-        <li><strong>Worldwide on your own number.</strong> Messages go out from your own SIM to any country it can reach, so you keep your sender identity and skip carrier contracts and per-country deals.</li>
-        <li><strong>Simple pricing.</strong> $0.0015 per message on your own phone, in any country, with no subscription. Our Bangladesh numbers are ৳0.20 per message, sending included.</li>
-        <li><strong>Pay from anywhere.</strong> Pay in USD for the phone track, or in BDT for our Bangladesh numbers. Top up through bKash or one of five remittance services, with no card form.
-          <div class="owner-note"><p>Confirm the USD payment route.</p></div>
-        </li>
-        <li><strong>Dedicated numbers in Bangladesh.</strong> Don't want to run a device for +880? Use our own numbers on four local carriers.
-          <div class="owner-note"><p>Confirm whether both services share one account and one API.</p></div>
-        </li>
-        <li><strong>Safe by default.</strong> Signed webhooks, strict E.164 validation, per-number rate limits and a resend cooldown, with OTP expiry and lockout built in.</li>
-        <li><strong>Try before you pay.</strong> 20 free messages, valid for 30 days.</li>
-      </ol>
-    </section>
-
-    <section aria-labelledby="how-works">
-      <h2 id="how-works">How it works</h2>
-      <ol class="steps">
-        <li>
-          <strong>Create your app.</strong>
-          <p class="muted">Sign up, verify your email and register an app. Your appId and appSecret are shown once, so store them safely.</p>
-        </li>
-        <li>
-          <strong>Choose a gateway.</strong>
-          <p class="muted">Enroll your own Android phone from the dashboard. To send to Bangladesh, you can use our dedicated numbers instead, with nothing to install.</p>
-        </li>
-        <li>
-          <strong>Send and verify.</strong>
-          <p class="muted">Call <code>POST /v5/otp/send</code> from your backend, then <code>POST /v5/otp/verify</code> with the code your user typed. Launch bulk campaigns from the dashboard.</p>
-        </li>
-      </ol>
-    </section>
-
-    <section aria-labelledby="two-calls">
-      <h2 id="two-calls">Send and verify in two calls</h2>
-      <p class="muted">Replace <code>[your-api-domain]</code> with your API base URL.</p>
-      <div class="code-tabs">
-        <div class="tab-bar" role="tablist" aria-label="Code examples">
-          <button type="button" class="tab" data-tab="curl" role="tab" aria-selected="true">cURL</button>
-          <button type="button" class="tab" data-tab="node" role="tab" aria-selected="false">Node.js</button>
-          <button type="button" class="tab" data-tab="python" role="tab" aria-selected="false">Python</button>
-          <button type="button" class="copy-btn" data-copy>Copy</button>
+  <div class="hero-pin" id="hero">
+    <div class="hero-scene">
+      <img class="hero-fallback" src="/assets/hero-fallback.svg" alt="Static preview of the dP Relay network map">
+      <canvas class="hero-canvas" aria-hidden="true"></canvas>
+      <div class="hero-overlay">
+        <p class="eyebrow">SMS gateway for apps and businesses</p>
+        <h1>One SMS gateway. Two ways to send.</h1>
+        <p class="hero-sub">Send OTPs through one REST API, or launch bulk campaigns from the dashboard. Use your own Android phone and SIM, or choose managed delivery where it is available.</p>
+        <p class="hero-proof">20 free messages to start · No card required · Pay-as-you-go and monthly gateway plans</p>
+        <div class="actions hero-ctas">
+          <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Start sending free</a>
+          <a class="button secondary" href="/docs/">Read the docs</a>
         </div>
-        <pre data-panel="curl" class="is-active"><code>API=https://[your-api-domain]
-
-# 1) Send the code
-curl -X POST "$API/v5/otp/send" \
-  -H "Content-Type: application/json" \
-  -H "X-App-Id: $APP_ID" \
-  -H "X-App-Secret: $APP_SECRET" \
-  -d '{"phone":"+8801XXXXXXXXX"}'
-
-# 2) Verify what the user typed
-curl -X POST "$API/v5/otp/verify" \
-  -H "Content-Type: application/json" \
-  -H "X-App-Id: $APP_ID" \
-  -H "X-App-Secret: $APP_SECRET" \
-  -d '{"phone":"+8801XXXXXXXXX","otp":"123456"}'</code></pre>
-        <pre data-panel="node"><code>const API = "https://[your-api-domain]";
-const headers = {
-  "Content-Type": "application/json",
-  "X-App-Id": APP_ID,
-  "X-App-Secret": APP_SECRET,
-};
-
-// 1) Send the code
-await fetch(`${API}/v5/otp/send`, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ phone: "+8801XXXXXXXXX" }),
-});
-
-// 2) Verify what the user typed
-const res = await fetch(`${API}/v5/otp/verify`, {
-  method: "POST",
-  headers,
-  body: JSON.stringify({ phone: "+8801XXXXXXXXX", otp: "123456" }),
-});
-console.log(await res.json()); // { ok: true, verified: true }</code></pre>
-        <pre data-panel="python"><code>import requests
-
-API = "https://[your-api-domain]"
-H = {"X-App-Id": APP_ID, "X-App-Secret": APP_SECRET}
-
-# 1) Send the code
-requests.post(f"{API}/v5/otp/send", headers=H, json={"phone": "+8801XXXXXXXXX"})
-
-# 2) Verify what the user typed
-r = requests.post(f"{API}/v5/otp/verify", headers=H,
-                  json={"phone": "+8801XXXXXXXXX", "otp": "123456"})
-print(r.json())  # {'ok': True, 'verified': True}</code></pre>
       </div>
-      <p class="actions start">
-        <a class="button secondary" href="/docs/">Full API reference</a>
-      </p>
+      <div class="hero-captions" aria-hidden="false">
+        <p class="hero-caption">One message.</p>
+        <p class="hero-caption">Any country your phone can reach.</p>
+        <p class="hero-caption">From your own number.</p>
+      </div>
+    </div>
+  </div>
+
+  <main class="wrap">
+    <section>
+      <h2>Choose how your messages are sent</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>Your phone. Your SIM.</h3>
+          <p>Connect an Android phone you control and send SMS through its SIM to destinations your mobile operator supports. Use the documented API to integrate OTP messaging into your application, and manage bulk campaigns from the dashboard.</p>
+          <p><strong>Good fit for:</strong> Developers and businesses that want to use a SIM they control and keep their existing sender identity where supported.</p>
+          <p><strong>Gateway price:</strong> $0.0015 per message, or choose an eligible monthly gateway plan.</p>
+          <p>Your mobile operator may charge separately for SMS. Device availability, network coverage, sender display and carrier limits still apply.</p>
+          <p><a class="button secondary" href="/docs/byod/">Connect your phone</a></p>
+        </div>
+        <div class="card">
+          <h3>Managed Bangladesh delivery</h3>
+          <p>Need to send to supported Bangladesh destinations without running an Android phone yourself? Use dP Relay's managed delivery route, which may use dP Relay or delivery-partner sending numbers.</p>
+          <p><strong>Good fit for:</strong> Apps and businesses that send to supported Bangladesh destinations and prefer a managed sending setup.</p>
+          <p><strong>Published price:</strong> ৳0.20 per message, with sending included for supported routes.</p>
+          <p>Coverage, sender details and availability depend on the route enabled for your account. Check the current coverage information before relying on a particular operator or sender.</p>
+          <p><a class="button secondary" href="/pricing/#managed">Explore Bangladesh delivery</a></p>
+        </div>
+      </div>
     </section>
 
-    <section aria-labelledby="closing">
-      <h2 id="closing">From $0.0015 per SMS. Pay for what you send.</h2>
-      <p class="muted">Send through your own phone at $0.0015 per message, or through our dedicated Bangladesh numbers at ৳0.20 per message, sending included. OTP and bulk cost the same. New apps get 20 free messages valid for 30 days, no card needed. Sending a lot? Unlimited messages through your own phone start at $16 a month. Pay in USD or BDT, with bKash or a remittance service.</p>
-      <p class="actions">
+    <section>
+      <h2>What you can build with dP Relay</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>Verify users with OTPs</h3>
+          <p>Add phone verification to registration, sign-in, checkout or sensitive account actions. Generate a code, send it through an eligible route, and verify the code entered by the user.</p>
+        </div>
+        <div class="card">
+          <h3>Send useful business messages</h3>
+          <p>Send reminders, receipts, delivery updates and other transactional messages. For promotions and other marketing messages, contact recipients only where you have the required consent and follow applicable opt-out rules.</p>
+        </div>
+        <div class="card">
+          <h3>Send bulk campaigns from the dashboard</h3>
+          <p>Prepare and manage bulk campaigns in the dashboard using the workflow supported by your account. The current documented bulk workflow is dashboard-based.</p>
+        </div>
+        <div class="card">
+          <h3>Send operational alerts</h3>
+          <p>Use SMS for selected alerts from internal tools, deployments, devices or monitoring systems. For critical alerts, design retries and backup channels rather than relying on a single phone or route.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Why teams choose dP Relay</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>Keep control of your sending setup</h3>
+          <p>With the own-phone route, messages go through a phone and SIM you control. Sender display depends on the destination network and carrier, but you retain control of the sending device and mobile plan.</p>
+        </div>
+        <div class="card">
+          <h3>Start small</h3>
+          <p>Use the free trial to test your integration before committing to a larger plan. Choose pay-as-you-go gateway pricing while volume is low or variable; compare the monthly gateway plans when your usage becomes steady.</p>
+        </div>
+        <div class="card">
+          <h3>Choose the route that fits</h3>
+          <p>Use your own phone for destinations your SIM can reach, or choose managed delivery where supported. The two routes have different requirements and pricing, so compare them before sending.</p>
+        </div>
+        <div class="card">
+          <h3>Integrate the OTP workflow</h3>
+          <p>Use the documented API endpoints to send a code, verify it and check its status. Keep your app secret on your server and follow the documented rate limits and resend cooldowns.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li><strong>Create your app.</strong> Sign up, create an app and keep your API credentials securely on your server.</li>
+        <li><strong>Choose a delivery route.</strong> Enrol an Android phone for the own-phone gateway, or use managed delivery if it is enabled for your account and destination.</li>
+        <li><strong>Send and verify.</strong> Call the documented OTP endpoints from your backend. For bulk campaigns, use the dashboard workflow currently supported by dP Relay.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Start with two API calls</h2>
+      <p>Use <code>POST /v5/otp/send</code> to request an OTP, then <code>POST /v5/otp/verify</code> to check the code entered by the user. See the Quickstart for authentication, request examples, responses and error handling.</p>
+      <div class="actions">
+        <a class="button secondary" href="/docs/#quickstart">Open the API quickstart</a>
+      </div>
+    </section>
+
+    <section id="managed">
+      <h2>Pricing at a glance</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>Own-phone gateway</h3>
+          <p><strong>$0.0015 per message</strong> for the gateway, or monthly gateway plans from <strong>$16/month</strong>. Carrier SMS charges are separate and remain subject to your mobile plan.</p>
+        </div>
+        <div class="card">
+          <h3>Managed Bangladesh delivery</h3>
+          <p><strong>৳0.20 per message</strong> with sending included for supported routes. This route is separate from the own-phone monthly plans.</p>
+        </div>
+        <div class="card">
+          <h3>Try it first</h3>
+          <p>New apps currently receive <strong>20 free messages valid for 30 days</strong>, with no card required. Check the trial terms and available routes in your account.</p>
+        </div>
+      </div>
+      <div class="actions">
         <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Start sending free</a>
         <a class="button secondary" href="/pricing/">See pricing</a>
-      </p>
+      </div>
+    </section>
+
+    <section>
+      <h2>A few things to know</h2>
+      <ul>
+        <li>An API request being accepted does not necessarily mean the SMS was delivered.</li>
+        <li>The own-phone route depends on your Android device, SIM, signal, mobile plan and carrier limits.</li>
+        <li>Managed delivery is available only for supported destinations and routes.</li>
+        <li>Carrier filtering and destination restrictions can apply to any sender. dP Relay does not bypass carrier rules or guarantee delivery.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Ready to send your first message?</h2>
+      <p>Create an app, choose an available delivery route and test the workflow before you scale.</p>
+      <div class="actions">
+        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Start sending free</a>
+        <a class="button secondary" href="/docs/">Read the docs</a>
+      </div>
     </section>
   </main>
 
@@ -246,7 +182,8 @@ print(r.json())  # {'ok': True, 'verified': True}</code></pre>
           <ul>
             <li><a href="/pricing/">Pricing</a></li>
             <li><a href="/docs/">Docs</a></li>
-            <li><a href="/faq/">FAQ</a></li>
+            <li><a href="/help/">Help</a></li>
+            <li><a href="/docs/byod/">Connect your phone</a></li>
           </ul>
         </div>
         <div class="footer-col">
@@ -265,10 +202,10 @@ print(r.json())  # {'ok': True, 'verified': True}</code></pre>
         </div>
       </div>
       <p class="footer-line">dP Relay is an SMS gateway by Digital Papyrus. © 2026 Digital Papyrus.</p>
-      <div class="owner-note"><p>legal entity name and registered address</p></div>
+      <div class="owner-note"><p>[legal entity name and registered address]</p></div>
     </div>
   </footer>
 
-  <script src="/site.js" defer></script>
+  <script src="/assets/hero.js" defer></script>
 </body>
 </html>
