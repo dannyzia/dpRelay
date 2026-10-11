@@ -65,7 +65,8 @@ const AGPL_PATTERN = /com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node/;
  *  appear on /docs/payments/, so the check stays byte-identical without
  *  publishing the wallet number.
  *
- *  Gate: `grep -rn "01613249520\|+8801613249520" landing/` must be empty.
+ *  Gate: a recursive grep of landing/ for the retired wallet number (raw and
+ *  +880-prefixed forms) must return zero matches.
  *  (That scope is landing/ only — the digits still appear elsewhere in the
  *  repo, e.g. server and app test fixtures, which this gate does not cover.)
  */
