@@ -1,5 +1,5 @@
-/* dP Relay web-v5 — hand-rolled theme. VoltAgent system: abyss-black canvas,
-   carbon surfaces, warm-charcoal hairlines, mint/signal-green accent.
+/* dP Relay web-v5 — hand-rolled theme. VoltAgent light adaptation: white canvas,
+   hairline cards, electric-green CTA fills with dark button text.
    No CSS framework in the dependency tree (see the F1 stage report flag). */
 
 :root {
@@ -9,18 +9,19 @@
   --mt-6: 6px;
   --mt-14: 14px;
   --mt-18: 18px;
-  --bg: #050507;
-  --bg-raised: #101010;
-  --bg-inset: #101010;
-  --line: #3d3a39;
-  --text: #f2f2f2;
-  --muted: #8b949e;
-  --accent: #2fd6a1;
+  --bg: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-inset: #f6f8f7;
+  --line: #e2e6e4;
+  --text: #16202c;
+  --muted: #667085;
+  --accent: #047857;
   --accent-strong: #00d992;
-  --error-bg: #2a1417;
-  --error-line: #7f2d33;
-  --error-text: #ff9ba3;
-  --ok: #10b981;
+  --on-accent: #101010;
+  --error-bg: #fdecef;
+  --error-line: #e7b3ba;
+  --error-text: #8f2530;
+  --ok: #047857;
   --radius: 8px;
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
@@ -41,7 +42,7 @@ a {
 }
 
 a:hover {
-  color: var(--accent-strong);
+  color: #065f46;
 }
 
 .shell {
@@ -222,9 +223,9 @@ a:focus-visible {
 }
 
 button {
-  background: var(--bg-raised);
-  color: var(--accent);
-  border: 1px solid var(--accent);
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  border: 1px solid var(--accent-strong);
   border-radius: 8px;
   padding: 10px 16px;
   font-size: 14px;

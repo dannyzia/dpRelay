@@ -111,12 +111,12 @@ is `role="alert"` + `id="form-error"` and the login form points
 - [ ] Contrast ≥ 4.5:1. Measured pairs (WCAG AA — all pass):
   | Pair | Ratio |
   | --- | --- |
-  | `--text #f2f2f2` on `--bg #050507` | 18.19 |
-  | `--text` on `--bg-raised #101010` (cards) | 17.00 |
-  | `--muted #8b949e` on `--bg` / on `--bg-raised` | 6.62 / 6.19 |
-  | `--accent #2fd6a1` on `--bg` / on `--bg-raised` (buttons, button-link) | 10.91 / 10.20 |
-  | `--error-text #ff9ba3` on `--error-bg #2a1417` | 8.65 |
-  | `--ok #10b981` on `--bg` / on `--bg-raised` | 8.03 / 7.50 |
+  | `--text #16202c` on `--bg #ffffff` | 16.44 |
+  | `--muted #667085` on `--bg` / on `--bg-inset #f6f8f7` | 4.97 / 4.66 |
+  | `--accent #047857` on `--bg` (links/nav) / on `--bg-inset` | 5.48 / 5.14 |
+  | `--on-accent #101010` on `--accent-strong #00d992` (button fills) | 10.28 |
+  | `--error-text #8f2530` on `--error-bg #fdecef` | 7.44 |
+  | `--ok #047857` on `--bg` | 5.48 |
 
   Re-check these if any token changes, and check any new color pair the same
   way. *(The issue named a "Kalam-on-pastel" audit — `grep -r Kalam` finds no

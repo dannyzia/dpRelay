@@ -1,30 +1,31 @@
 /* dP Relay marketing site — plain CSS, no framework, no build step.
-   Theme: VoltAgent-inspired. Abyss-black canvas, a single electric-green
-   accent reserved for CTAs and live markers, hairline borders instead of
-   shadows. Colors live in this file only — pages never inline colors.
+   Theme: VoltAgent-inspired light adaptation — white canvas, hairline cards, the
+   single electric-green accent as CTA fills and live markers. Colors live
+   in this file only — pages never inline colors.
    Contrast pairs are measured in README.md. */
 
 :root {
   /* surfaces */
-  --canvas: #050507;
-  --canvas-soft: #101010;
-  --hairline: #3d3a39;
+  --canvas: #ffffff;
+  --canvas-soft: #f6f8f7;
+  --surface: #ffffff;
+  --hairline: #e2e6e4;
   /* text */
-  --ink: #f2f2f2;
-  --ink-strong: #ffffff;
-  --body-text: #b8b3b0;
-  --mute: #8b949e;
+  --ink: #16202c;
+  --ink-strong: #0b1220;
+  --body-text: #3a4657;
+  --mute: #667085;
   /* the one accent */
   --green: #00d992;
-  --green-soft: #2fd6a1;
-  --green-deep: #10b981;
+  --green-soft: #047857;
+  --green-deep: #047857;
   --on-green: #101010;
   /* the one ornament */
-  --line-dash: rgba(79, 93, 117, 0.4);
+  --line-dash: rgba(22, 32, 44, 0.22);
   /* radii: 6px buttons/inputs, 8px cards, pill only for status tags */
   --radius-btn: 6px;
   --radius-card: 8px;
-  --glow: 0 0 15px rgba(92, 88, 85, 0.2);
+  --glow: 0 8px 20px rgba(16, 42, 33, 0.12);
 }
 
 * {
@@ -54,7 +55,7 @@ a {
 }
 
 a:hover {
-  color: #00ffaa;
+  color: #065f46;
 }
 
 code {
@@ -152,9 +153,9 @@ nav[aria-label="Main"] a[aria-current="page"] {
 }
 
 nav[aria-label="Main"] a.cta {
-  color: var(--green-soft);
-  background: var(--canvas-soft);
-  border: 1px solid var(--green-soft);
+  color: var(--on-green);
+  background: var(--green);
+  border: 1px solid var(--green);
   border-radius: var(--radius-btn);
   padding: 0.4rem 0.9rem;
   font-weight: 600;
@@ -162,7 +163,7 @@ nav[aria-label="Main"] a.cta {
 
 nav[aria-label="Main"] a.cta:hover {
   box-shadow: var(--glow);
-  color: var(--green-soft);
+  color: var(--on-green);
 }
 
 .site-footer {
@@ -273,9 +274,9 @@ h3 {
 }
 
 .track-toggle input:checked + label {
-  background: var(--canvas-soft);
-  color: var(--green-soft);
-  border: 1px solid var(--green-soft);
+  background: var(--green);
+  color: var(--on-green);
+  border: 1px solid var(--green);
 }
 
 /* ── Cards ─────────────────────────────────────────────── */
@@ -286,7 +287,7 @@ main.wrap {
 }
 
 .card {
-  background: var(--canvas-soft);
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   padding: 1.5rem;
@@ -315,7 +316,7 @@ main.wrap {
 }
 
 .steps li {
-  background: var(--canvas-soft);
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   padding: 1.25rem;
@@ -343,7 +344,7 @@ main.wrap {
 table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--canvas-soft);
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   overflow: hidden;
@@ -437,20 +438,20 @@ tr:last-child td {
 
 .button {
   display: inline-block;
-  background: var(--canvas-soft);
-  color: var(--green-soft);
+  background: var(--green);
+  color: var(--on-green);
   text-decoration: none;
   font-weight: 600;
   border-radius: var(--radius-btn);
   padding: 0.7rem 1.3rem;
-  border: 1px solid var(--green-soft);
+  border: 1px solid var(--green);
   transition: box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .button:hover {
   box-shadow: var(--glow);
   transform: translateY(-1px);
-  color: var(--green-soft);
+  color: var(--on-green);
 }
 
 .button.secondary {
@@ -496,7 +497,7 @@ tr:last-child td {
   margin-top: 1.25rem;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
-  background: var(--canvas-soft);
+  background: var(--surface);
   padding: 1.5rem;
   text-align: left;
 }
@@ -599,7 +600,7 @@ main.wrap > section + section h2:first-child {
 }
 
 .grid3 li {
-  background: var(--canvas-soft);
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   padding: 1.25rem;

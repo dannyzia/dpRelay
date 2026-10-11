@@ -12,7 +12,7 @@ pool, under one API and one credit balance.
 
 ### Added
 
-- **landing/** — VoltAgent-style retheme (near-black canvas, single green accent, hairline cards, zero JS) and dual-track
+- **landing/** — VoltAgent-style retheme (white canvas, hairline cards, electric-green CTA fills, zero JS) and dual-track
   copy: home tier toggle (Global ⇄ Bangladesh, CSS-only via `:has()`),
   country-wise coverage & rates matrix on pricing, BYOD pairing guide with the
   `POST /v5/device/enroll` contract and device-plane error codes on docs,
@@ -29,5 +29,5 @@ pool, under one API and one credit balance.
 
 ### Changed
 
-- landing README contrast table re-measured for the dark tokens (all pairs
+- landing README contrast table re-measured for the final tokens (all pairs
   ≥ 6.5:1, WCAG AA+); web-v5 README table extended for the new classes.
