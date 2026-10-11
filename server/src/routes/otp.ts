@@ -18,6 +18,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { constantTimeEquals, newId, sha256Hex } from "../services/crypto.js";
 import { asRecord, asString } from "../services/parse.js";
 import { resolveWalletOwner } from "../services/wallet.js";
+import { byodEligible } from "../services/plans.js";
 import { dispatchOtpStatusWebhooks, type OtpWebhookStatus } from "../services/webhooks.js";
 
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
@@ -170,8 +171,18 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
       // STAGE F9 (ISSUE-88) dual-path: a company-backed app draws from the
       // owner's user_credits wallet; an operator-legacy app from app_credits.
       // Same envelope either way — the caller cannot probe which plane it is on.
-      const preCredit =
-        appRow.walletOwnerId === null
+      //
+      // ISSUE-96: an app with an ACTIVE unlimited plan and at least one live
+      // bound BYOD device bypasses the balance pre-check entirely — the
+      // authoritative re-check still runs inside createSession (the plan can
+      // expire between here and there). Apps without that combination fall
+      // through to normal charging, including BD-pool-routed sends of
+      // subscribed apps (route separation: the free-pass only ever covers
+      // messages the app's own phone will carry).
+      const preBypass = byodEligible(app.db, appRow.id, nowSec());
+      const preCredit = preBypass
+        ? null
+        : appRow.walletOwnerId === null
           ? (app.db
               .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
               .get(appRow.id) as
@@ -182,14 +193,14 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
               .get(appRow.walletOwnerId) as
               | { otp_sms_remaining: number; otp_expires_at: number | null }
               | undefined);
-      if (!preCredit || preCredit.otp_sms_remaining < 1) {
+      if (!preBypass && (!preCredit || preCredit.otp_sms_remaining < 1)) {
         return reply.code(402).send({
           ok: false,
           error: "Insufficient OTP SMS credits — buy a package to keep sending",
           code: "insufficient_credits",
         });
       }
-      if (otpCreditsExpired(preCredit.otp_expires_at, nowSec())) {
+      if (!preBypass && otpCreditsExpired(preCredit?.otp_expires_at ?? null, nowSec())) {
         return reply.code(402).send({
           ok: false,
           error: "OTP credits expired — buy a package to refresh them",
@@ -242,37 +253,45 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
       // atomic with the check — the UPDATE below never runs for an expired
       // bucket).
       const createSession = app.db.transaction((): "insufficient_credits" | null => {
+        // ISSUE-96: BYOD free-pass re-derived INSIDE the transaction — the
+        // subscription's clock can pass between the pre-check and here, and
+        // a bypass that evaporates must fall back to charging (fail closed).
+        const bypass = byodEligible(app.db, appRow.id, ts);
         // STAGE F9 (ISSUE-88): wallet resolution re-derived INSIDE the
         // transaction — the authoritative dual-path guard. Balance check +
         // deduct both hit the same bucket, so two concurrent sends still
         // cannot both spend the last credit of either plane.
-        const owner = resolveWalletOwner(app.db, appRow.id);
+        const owner = bypass ? null : resolveWalletOwner(app.db, appRow.id);
         const credit =
           owner === null
-            ? (app.db
-                .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
-                .get(appRow.id) as
-                | { otp_sms_remaining: number; otp_expires_at: number | null }
-                | undefined)
+            ? bypass
+              ? undefined
+              : (app.db
+                  .prepare("SELECT otp_sms_remaining, otp_expires_at FROM app_credits WHERE app_id = ?")
+                  .get(appRow.id) as
+                  | { otp_sms_remaining: number; otp_expires_at: number | null }
+                  | undefined)
             : (app.db
                 .prepare("SELECT otp_sms_remaining, otp_expires_at FROM user_credits WHERE user_id = ?")
                 .get(owner) as
                 | { otp_sms_remaining: number; otp_expires_at: number | null }
                 | undefined);
-        if (!credit || credit.otp_sms_remaining < 1) return "insufficient_credits";
-        if (otpCreditsExpired(credit.otp_expires_at, ts)) return "insufficient_credits";
-        if (owner === null) {
-          app.db
-            .prepare(
-              "UPDATE app_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE app_id = ?",
-            )
-            .run(ts, appRow.id);
-        } else {
-          app.db
-            .prepare(
-              "UPDATE user_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE user_id = ?",
-            )
-            .run(ts, owner);
+        if (!bypass) {
+          if (!credit || credit.otp_sms_remaining < 1) return "insufficient_credits";
+          if (otpCreditsExpired(credit.otp_expires_at, ts)) return "insufficient_credits";
+          if (owner === null) {
+            app.db
+              .prepare(
+                "UPDATE app_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE app_id = ?",
+              )
+              .run(ts, appRow.id);
+          } else {
+            app.db
+              .prepare(
+                "UPDATE user_credits SET otp_sms_remaining = otp_sms_remaining - 1, updated_at = ? WHERE user_id = ?",
+              )
+              .run(ts, owner);
+          }
         }
         app.db
           .prepare(
@@ -282,14 +301,15 @@ const otpRoutes: FastifyPluginAsync = async (app) => {
           .run(appRow.id, phone);
         app.db
           .prepare(
-            "INSERT INTO pending_sms (id, app_id, to_addr, message, status, created_at) " +
-              "VALUES (?, ?, ?, ?, 'pending', ?)",
+            "INSERT INTO pending_sms (id, app_id, to_addr, message, status, unlimited_pass, created_at) " +
+              "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
           )
           .run(
             messageId,
             appRow.appId,
             phone,
             `Your dP Relay verification code is ${otp}. Valid ${Math.round(app.config.otpTtlSec / 60)} minutes.`,
+            bypass ? 1 : 0,
             ts,
           );
         app.db

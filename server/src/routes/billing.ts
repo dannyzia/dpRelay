@@ -25,6 +25,7 @@ import { asRecord, asString } from "../services/parse.js";
 import { newId } from "../services/crypto.js";
 import { awardPendingTransaction, UNIT_PRICE_BDT } from "../services/credits.js";
 import { requireSession } from "../services/session.js";
+import { PLAN_TIERS, activeSubscription, boundDeviceCount, planTier } from "../services/plans.js";
 
 /** Parses an ISO-8601 date/datetime query value into epoch SECONDS (null if absent/invalid). */
 function parseDateBound(value: unknown): number | null {
@@ -52,6 +53,8 @@ interface UpsertPackageBody {
 
 interface ApproveBody {
   transactionId?: unknown;
+  /** ISSUE-96: plan approvals address the subscription row by this id. */
+  subscriptionId?: unknown;
   approve?: unknown;
   rejectReason?: unknown;
   /**
@@ -520,6 +523,216 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true, message: "TrxID submitted. Awaiting operator approval." };
   });
 
+  // ── Unlimited BYOD plans (ISSUE-96) ───────────────────────────────────
+
+  /**
+   * Public plan catalog (same shape as the packages list): the three
+   * unlimited tiers. Prices are whole USD — plan payments arrive as bKash
+   * BDT-equivalents and are reconciled manually at approval (ISSUE-89
+   * paper-trail pattern), so the catalog never converts currencies itself.
+   */
+  app.get("/v5/billing/plans", async () => ({
+    ok: true,
+    plans: PLAN_TIERS.map((t) => ({
+      planCode: t.code,
+      name: t.name,
+      maxDevices: t.maxDevices,
+      priceUsd: t.priceUsd,
+      validityDays: t.validityDays,
+    })),
+  }));
+
+  /**
+   * Current plan + device-slot usage for the authenticated app. Additive
+   * beyond the credits endpoint: subscription state is per-APP (the slots
+   * bind to devices.app_id), so this gates on app credentials like the rest
+   * of the app plane. `devicesActive` counts live bound devices; `limit` is
+   * null while no subscription row exists (legacy apps are unlimited but
+   * also unbypassed).
+   */
+  app.get("/v5/billing/subscription", { preHandler: [app.requireApp] }, async (request) => {
+    const appId = request.appRow?.id ?? "";
+    const nowSec = Math.floor(Date.now() / 1000);
+    const sub = activeSubscription(db, appId);
+    const devicesActive = boundDeviceCount(db, appId);
+    const pending = db
+      .prepare(
+        "SELECT id, plan_code, max_devices, price_usd, trx_id, requested_at " +
+          "FROM app_subscriptions WHERE app_id = ? AND status = 'pending' LIMIT 1",
+      )
+      .get(appId) as
+      | { id: string; plan_code: string; max_devices: number; price_usd: number; trx_id: string | null; requested_at: number }
+      | undefined;
+    const tier = sub === null ? null : planTier(sub.plan_code);
+    // starts_at fetched with the row — the activeSubscription projection
+    // intentionally stays minimal for the hot send-path callers.
+    const startsAt =
+      sub === null
+        ? null
+        : ((db.prepare("SELECT starts_at FROM app_subscriptions WHERE id = ?").get(sub.id) as
+            | { starts_at: number | null }
+            | undefined)?.starts_at ?? null);
+    return {
+      ok: true,
+      subscription:
+        sub === null || sub.expires_at === null
+          ? null
+          : {
+              subscriptionId: sub.id,
+              planCode: sub.plan_code,
+              name: tier?.name ?? sub.plan_code,
+              maxDevices: sub.max_devices,
+              priceUsd: sub.price_usd,
+              startsAt,
+              expiresAt: sub.expires_at,
+              // Explicit clock state: expiresAt <= now is fail-closed for sends.
+              active: sub.expires_at > nowSec,
+            },
+      devices: {
+        active: devicesActive,
+        limit: sub?.max_devices ?? null,
+      },
+      pending:
+        pending === undefined
+          ? null
+          : {
+              subscriptionId: pending.id,
+              planCode: pending.plan_code,
+              maxDevices: pending.max_devices,
+              priceUsd: pending.price_usd,
+              trxId: pending.trx_id,
+              requestedAt: pending.requested_at,
+            },
+    };
+  });
+
+  /**
+   * Initiate a plan purchase (pending row + bKash destination). Mirrors the
+   * credit request's money rules: one pending purchase per app (partial
+   * UNIQUE), fails closed without a payment destination, prices from the
+   * request-time catalog snapshot. Existing ACTIVE subscription does not
+   * block a purchase — it is how renewal/upgrade starts; approval extends
+   * from max(now, current expiry).
+   */
+  app.post("/v5/billing/plans/purchase", { preHandler: [app.requireApp] }, async (request, reply) => {
+    if (app.config.bkashPersonalNumber === "") {
+      return reply.code(503).send({
+        ok: false,
+        error: "Payment destination is not configured",
+        code: "payment_destination_unconfigured",
+      });
+    }
+    const body = (asRecord(request.body) ?? {}) as { planCode?: unknown };
+    const planCode = asString(body.planCode, 32);
+    const tier = planCode === null ? null : planTier(planCode);
+    if (tier === null) {
+      return reply.code(400).send({
+        ok: false,
+        error: "planCode must be one of unlimited_1 | unlimited_5 | unlimited_20",
+        code: "invalid_plan_code",
+      });
+    }
+    const appId = request.appRow!.id;
+    const subscriptionId = newId();
+    try {
+      db.prepare(
+        "INSERT INTO app_subscriptions " +
+          "(id, app_id, plan_code, max_devices, price_usd, status, requested_at) " +
+          "VALUES (?, ?, ?, ?, ?, 'pending', unixepoch())",
+      ).run(subscriptionId, appId, tier.code, tier.maxDevices, tier.priceUsd);
+    } catch (err) {
+      // UNIQUE(app_id) WHERE pending: one open purchase per app.
+      if (err instanceof Error && err.message.includes("UNIQUE constraint failed")) {
+        return reply.code(409).send({
+          ok: false,
+          error: "A plan purchase is already pending — submit its TrxID or wait for the operator",
+          code: "plan_purchase_pending",
+        });
+      }
+      throw err;
+    }
+    app.log.info({ appId: request.appRow?.appId, subscriptionId, planCode: tier.code }, "plan purchase requested");
+    return reply.code(201).send({
+      ok: true,
+      subscriptionId,
+      planCode: tier.code,
+      priceUsd: tier.priceUsd,
+      bkashNumber: app.config.bkashPersonalNumber,
+      bkashNote: "Send Money",
+    });
+  });
+
+  /**
+   * Attach the bKash TrxID to a pending plan purchase. Same immutability /
+   * idempotency semantics as credits/submit-trx; the partial UNIQUE on
+   * app_subscriptions.trx_id makes one TrxID fund exactly one subscription.
+   */
+  app.post("/v5/billing/plans/submit-trx", { preHandler: [app.requireApp] }, async (request, reply) => {
+    const body = (asRecord(request.body) ?? {}) as { subscriptionId?: unknown; trxId?: unknown };
+    const subscriptionId = asString(body.subscriptionId, 64);
+    const trxId = typeof body.trxId === "string" ? body.trxId.trim().toUpperCase() : null;
+    if (subscriptionId === null || trxId === null || !/^[A-Z0-9]{10}$/.test(trxId)) {
+      return reply.code(400).send({
+        ok: false,
+        error: "subscriptionId and trxId (10 uppercase alphanumerics) are required",
+        code: "invalid_request",
+      });
+    }
+    const row = db
+      .prepare("SELECT status, trx_id FROM app_subscriptions WHERE id = ? AND app_id = ?")
+      .get(subscriptionId, request.appRow!.id) as { status: string; trx_id: string | null } | undefined;
+    if (row === undefined) {
+      return reply.code(404).send({ ok: false, error: "Subscription not found", code: "subscription_not_found" });
+    }
+    if (row.trx_id !== null) {
+      if (row.trx_id === trxId) {
+        return { ok: true, message: "TrxID already submitted. Awaiting operator approval." };
+      }
+      return reply.code(409).send({
+        ok: false,
+        error: "A different TrxID is already attached to this purchase",
+        code: "trx_already_submitted",
+      });
+    }
+    if (row.status !== "pending") {
+      return reply.code(409).send({
+        ok: false,
+        error: `Purchase has already been ${row.status}`,
+        code: "subscription_resolved",
+      });
+    }
+    // A TrxID that already funded an ACTIVE subscription gets the clearer
+    // message; any other holder (pending/rejected) falls through to the
+    // partial UNIQUE constraint below → trx_id_exists.
+    const approvedOwner = db
+      .prepare("SELECT 1 FROM app_subscriptions WHERE trx_id = ? AND status = 'active' LIMIT 1")
+      .get(trxId);
+    if (approvedOwner !== undefined) {
+      return reply.code(409).send({
+        ok: false,
+        error: "This TrxID has already been used",
+        code: "trx_id_already_approved",
+      });
+    }
+    try {
+      db.prepare("UPDATE app_subscriptions SET trx_id = ? WHERE id = ? AND status = 'pending'").run(
+        trxId,
+        subscriptionId,
+      );
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("UNIQUE constraint failed")) {
+        return reply.code(409).send({
+          ok: false,
+          error: "This TrxID is already attached to another purchase",
+          code: "trx_id_exists",
+        });
+      }
+      throw err;
+    }
+    app.log.info({ subscriptionId }, "plan trx submitted");
+    return { ok: true, message: "TrxID submitted. Awaiting operator approval." };
+  });
+
   // ── Operator/admin routes (requireOperator) ──────────────────────────────
 
   /** Create or update a package, keyed by packageCode (v4 upsertPackage). */
@@ -972,6 +1185,133 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         requestedAt: t.requested_at,
       })),
     };
+  });
+
+  /** Operator view: pending unlimited-plan purchases (ISSUE-96). */
+  app.get("/v5/admin/billing/plans/queue", { preHandler: [app.requireOperator] }, async () => {
+    const rows = db
+      .prepare(
+        "SELECT s.id, s.app_id, a.app_id AS public_app_id, s.plan_code, s.max_devices, s.price_usd, s.trx_id, s.requested_at " +
+          "FROM app_subscriptions s JOIN apps a ON a.id = s.app_id " +
+          "WHERE s.status = 'pending' ORDER BY s.requested_at ASC",
+      )
+      .all() as {
+      id: string;
+      app_id: string;
+      public_app_id: string;
+      plan_code: string;
+      max_devices: number;
+      price_usd: number;
+      trx_id: string | null;
+      requested_at: number;
+    }[];
+    return {
+      ok: true,
+      pending: rows.map((r) => ({
+        subscriptionId: r.id,
+        appId: r.public_app_id,
+        planCode: r.plan_code,
+        maxDevices: r.max_devices,
+        priceUsd: r.price_usd,
+        trxId: r.trx_id,
+        requestedAt: r.requested_at,
+      })),
+    };
+  });
+
+  /**
+   * Approve or reject a pending plan purchase (ISSUE-96). Award runs in ONE
+   * SQLite transaction that re-checks pending state — a concurrent double-
+   * approve races to a 409, never to a double award. Renewal/upgrade
+   * semantics: the new period extends from max(now, current expiry), so
+   * buying next month early never shortchanges the paid-for days; a tier
+   * change takes effect immediately (the superseded row keeps its history).
+   */
+  app.post("/v5/admin/billing/plans/approve", { preHandler: [app.requireOperator] }, async (request, reply) => {
+    const body = (asRecord(request.body) ?? {}) as ApproveBody;
+    const subscriptionId = asString(body.subscriptionId ?? body.transactionId, 64);
+    if (subscriptionId === null || typeof body.approve !== "boolean") {
+      return reply.code(400).send({
+        ok: false,
+        error: "subscriptionId and approve (boolean) are required",
+        code: "invalid_request",
+      });
+    }
+    const sub = db
+      .prepare("SELECT id, app_id, status, expires_at FROM app_subscriptions WHERE id = ?")
+      .get(subscriptionId) as
+      | { id: string; app_id: string; status: string; expires_at: number | null }
+      | undefined;
+    if (sub === undefined) {
+      return reply.code(404).send({ ok: false, error: "Subscription not found", code: "subscription_not_found" });
+    }
+    if (sub.status !== "pending") {
+      return reply.code(409).send({
+        ok: false,
+        error: `Subscription already resolved with status: ${sub.status}`,
+        code: "already_resolved",
+      });
+    }
+
+    if (body.approve === false) {
+      const reason = asString(body.rejectReason, 512);
+      db.prepare(
+        "UPDATE app_subscriptions SET status = 'rejected', admin_notes = ?, resolved_at = unixepoch() " +
+          "WHERE id = ? AND status = 'pending'",
+      ).run(reason, subscriptionId);
+      app.log.info({ subscriptionId }, "plan purchase rejected");
+      return { ok: true, status: "rejected" };
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const tier = planTier(
+      (db.prepare("SELECT plan_code FROM app_subscriptions WHERE id = ?").get(subscriptionId) as { plan_code: string })
+        .plan_code,
+    );
+    const validitySec = (tier?.validityDays ?? 30) * 24 * 60 * 60;
+    const award = db.transaction((): boolean => {
+      // Renewal/upgrade extension: the new period starts at max(now, current
+      // active expiry) — buying early never shortens the paid-for days.
+      // Read INSIDE the transaction so a concurrent approve cannot double-extend.
+      const previous = db
+        .prepare("SELECT id, expires_at FROM app_subscriptions WHERE app_id = ? AND status = 'active'")
+        .get(sub.app_id) as { id: string; expires_at: number | null } | undefined;
+      const baseSec =
+        previous !== undefined && previous.expires_at !== null && previous.expires_at > nowSec
+          ? previous.expires_at
+          : nowSec;
+      // Supersede BEFORE claiming: the partial UNIQUE (one active per app)
+      // would reject a second active row, and the handover must be atomic.
+      // The claim below is still the linearization point — if it loses the
+      // race (changes !== 1) we THROW, rolling back both statements, so the
+      // supersede can never commit without its claim.
+      if (previous !== undefined) {
+        db.prepare("UPDATE app_subscriptions SET status = 'superseded' WHERE id = ?").run(previous.id);
+      }
+      const claimed = db
+        .prepare(
+          "UPDATE app_subscriptions SET status = 'active', starts_at = ?, " +
+            "expires_at = ?, resolved_at = unixepoch() WHERE id = ? AND status = 'pending'",
+        )
+        .run(nowSec, baseSec + validitySec, subscriptionId);
+      if (claimed.changes !== 1) {
+        throw new Error("subscription_no_longer_pending");
+      }
+      return true;
+    });
+    try {
+      award();
+    } catch (err) {
+      if (err instanceof Error && err.message === "subscription_no_longer_pending") {
+        return reply.code(409).send({ ok: false, error: "Subscription already resolved", code: "already_resolved" });
+      }
+      throw err;
+    }
+    const fresh = db
+      .prepare("SELECT expires_at FROM app_subscriptions WHERE id = ?")
+      .get(subscriptionId) as { expires_at: number | null };
+    app.log.info({ subscriptionId, appId: sub.app_id }, "plan purchase approved");
+    return { ok: true, status: "approved", expiresAt: fresh.expires_at };
   });
 };
 

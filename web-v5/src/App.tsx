@@ -43,6 +43,7 @@ import { LinkApp } from "./screens/LinkApp";
 import { Login } from "./screens/Login";
 import { Operator } from "./screens/Operator";
 import { Payment } from "./screens/Payment";
+import { Plan } from "./screens/Plan";
 import { ResetPassword } from "./screens/ResetPassword";
 import { VerifyEmail } from "./screens/VerifyEmail";
 import "./styles.css";
@@ -166,6 +167,8 @@ export function App(): JSX.Element {
             window.location.hash = hrefFor(["apps"]);
           }}
         />
+      ) : section === "plan" ? (
+        <Plan />
       ) : section === "bulk" ? (
         <Bulk />
       ) : section === "history" ? (

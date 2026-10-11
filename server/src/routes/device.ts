@@ -15,6 +15,7 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { constantTimeEquals, newId } from "../services/crypto.js";
 import { dispatchOtpStatusWebhooks } from "../services/webhooks.js";
+import { activeSubscription, boundDeviceCount } from "../services/plans.js";
 
 interface DeviceRegisterBody {
   label?: unknown;
@@ -66,6 +67,8 @@ const PROVIDERS = new Set(["bkash", "nagad"]);
 const PHONE_NUMBER_PATTERN = /^\+880\d{10}$|^\+\d{8,15}$/;
 /** Cap on messages handed out per fetch — the phone re-fetches; keep responses small. */
 const OUTSTANDING_BATCH_LIMIT = 50;
+/** ISSUE-96: rolling churn window for plan device enrollment (24h). */
+const CHURN_WINDOW_SEC = 24 * 60 * 60;
 const MAX_FCM_TOKEN_LEN = 4096;
 const MAX_ERROR_LEN = 256;
 
@@ -234,12 +237,61 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
 
     const rawKey = app.generateDeviceApiKey();
     const deviceId = newId();
-    app.db
-      .prepare(
-        "INSERT INTO devices (id, user_id, label, phone_number, app_id, api_key_hash, last_seen_at, revocable, revoked_at, created_at) " +
-          "VALUES (?, NULL, ?, ?, ?, ?, NULL, 1, NULL, unixepoch())",
-      )
-      .run(deviceId, label, phoneNumber, boundAppRowId, app.sha256Hex(rawKey));
+    // ISSUE-96: plan slot limit + churn cooldown, checked and inserted in ONE
+    // transaction so two concurrent enrollments can never both take the last
+    // slot, and a delete→enroll pair cannot race past the count. Only bound
+    // enrollments (an app with an active plan) are limited; operator-fleet
+    // enrollment (no bound app) is unchanged.
+    const enrollTx = app.db.transaction((): "device_limit_reached" | "device_churn_limited" | null => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const sub = boundAppRowId === null ? null : activeSubscription(app.db, boundAppRowId);
+      if (sub !== null && boundAppRowId !== null) {
+        // Slot limit: active (unrevoked) devices cannot exceed the plan's cap.
+        if (boundDeviceCount(app.db, boundAppRowId) >= sub.max_devices) {
+          return "device_limit_reached";
+        }
+        // Churn cooldown (ISSUE-96 anti-cycling): enrollments in the rolling
+        // 24h window are capped at max_devices + 1 — a one-phone plan may
+        // replace its phone once a day, never cycle hundreds. Revoked rows
+        // still count (that is the point — delete+re-enroll is the attack).
+        const recent = app.db
+          .prepare("SELECT COUNT(*) AS n FROM devices WHERE app_id = ? AND created_at > ?")
+          .get(boundAppRowId, nowSec - CHURN_WINDOW_SEC) as { n: number };
+        if (recent.n > sub.max_devices) {
+          return "device_churn_limited";
+        }
+      }
+      app.db
+        .prepare(
+          "INSERT INTO devices (id, user_id, label, phone_number, app_id, api_key_hash, last_seen_at, revocable, revoked_at, created_at) " +
+            "VALUES (?, NULL, ?, ?, ?, ?, NULL, 1, NULL, unixepoch())",
+        )
+        .run(deviceId, label, phoneNumber, boundAppRowId, app.sha256Hex(rawKey));
+      return null;
+    });
+    const enrollVerdict = enrollTx.immediate();
+    if (enrollVerdict === "device_limit_reached") {
+      return reply.code(409).send({
+        ok: false,
+        error: "Device slot limit reached for your plan — delete or unenroll a device first",
+        code: "device_limit_reached",
+      });
+    }
+    if (enrollVerdict === "device_churn_limited") {
+      // Retry-After = time until the OLDEST in-window enrollment ages out.
+      const oldest = app.db
+        .prepare("SELECT MIN(created_at) AS t FROM devices WHERE app_id = ? AND created_at > ?")
+        .get(boundAppRowId, Math.floor(Date.now() / 1000) - CHURN_WINDOW_SEC) as { t: number | null };
+      const retryAfterSec = Math.max(1, (oldest.t ?? 0) + CHURN_WINDOW_SEC - Math.floor(Date.now() / 1000));
+      return reply
+        .code(429)
+        .header("Retry-After", String(retryAfterSec))
+        .send({
+          ok: false,
+          error: "Too many devices enrolled for this plan in the last 24 hours",
+          code: "device_churn_limited",
+        });
+    }
 
     // No secret material in the response (F7 order) — the binding is recorded
     // server-side only, so an eavesdropper learns nothing about which app the
@@ -249,6 +301,68 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
       "device enrolled",
     );
     return reply.code(201).send({ ok: true, deviceId, apiKey: rawKey });
+  });
+
+  /**
+   * ISSUE-96: list the calling app's bound devices (the slots view + delete
+   * buttons of the dashboard). Revoked rows are included with their
+   * revoked_at so history is visible, but only live ones consume slots.
+   */
+  app.get("/v5/apps/devices", { onRequest: [app.requireApp] }, async (request) => {
+    const rows = app.db
+      .prepare(
+        "SELECT id, label, phone_number, last_seen_at, created_at, revoked_at " +
+          "FROM devices WHERE app_id = ? ORDER BY created_at ASC",
+      )
+      .all(request.appRow!.id) as {
+      id: string;
+      label: string;
+      phone_number: string | null;
+      last_seen_at: number | null;
+      created_at: number;
+      revoked_at: number | null;
+    }[];
+    return {
+      ok: true,
+      devices: rows.map((r) => ({
+        deviceId: r.id,
+        label: r.label,
+        phoneNumber: r.phone_number,
+        lastSeenAt: r.last_seen_at,
+        enrolledAt: r.created_at,
+        active: r.revoked_at === null,
+      })),
+    };
+  });
+
+  /**
+   * ISSUE-96: delete (revoke) a device bound to the calling app so its slot
+   * frees up for a replacement. Soft revocation (revoked_at) — the API key
+   * dies at requireDevice, and both the slot count and the churn window treat
+   * it correctly (slot freed, churn entry retained). Idempotent: deleting an
+   * already-revoked device answers 200.
+   */
+  app.delete("/v5/apps/devices/:deviceId", { onRequest: [app.requireApp] }, async (request, reply) => {
+    const params = asRecord(request.params) ?? {};
+    const deviceId = asString(params.deviceId, 128);
+    if (deviceId === null) {
+      return reply.code(400).send({ ok: false, error: "deviceId is required", code: "invalid_device_id" });
+    }
+    const row = app.db
+      .prepare("SELECT id, revoked_at FROM devices WHERE id = ? AND app_id = ?")
+      .get(deviceId, request.appRow!.id) as { id: string; revoked_at: number | null } | undefined;
+    if (row === undefined) {
+      // Unknown id and foreign device share one envelope — no id enumeration.
+      return reply.code(404).send({ ok: false, error: "Device not found", code: "device_not_found" });
+    }
+    if (row.revoked_at === null) {
+      app.db
+        .prepare("UPDATE devices SET revoked_at = unixepoch(), fcm_token = NULL WHERE id = ?")
+        .run(deviceId);
+      app.log.info({ deviceId, appId: request.appRow!.appId }, "device deleted (slot freed)");
+    }
+    const remaining = boundDeviceCount(app.db, request.appRow!.id);
+    return reply.code(200).send({ ok: true, deviceId, devicesActive: remaining });
   });
 
   /**
@@ -311,6 +425,12 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
     //  - an UNBOUND device sees messages for apps that have no bound device
     //    (operator-fleet fallback), plus NULL-app legacy rows.
     // A bound device can therefore never learn another app's traffic exists.
+    //
+    // ISSUE-96 route separation: a message released under an unlimited
+    // plan's BYOD free-pass (unlimited_pass = 1) may ONLY be claimed by the
+    // owning app's own bound device — never the BD operator fleet. If the
+    // device is deleted mid-flight the message stays unclaimable (the
+    // requeue keeps it durable) instead of silently riding the paid pool.
     let boundPublicAppId: string | null = null;
     if (request.device!.appRowId !== null) {
       const row = app.db
@@ -321,8 +441,9 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
       // silently claiming nothing — the fleet fallback is the safe default.
     }
     const unboundClause =
-      "(app_id IS NULL OR app_id NOT IN (" +
-      "SELECT a.app_id FROM apps a JOIN devices d ON d.app_id = a.id WHERE d.revoked_at IS NULL))";
+      "(app_id IS NULL OR (app_id NOT IN (" +
+      "SELECT a.app_id FROM apps a JOIN devices d ON d.app_id = a.id WHERE d.revoked_at IS NULL) " +
+      "AND unlimited_pass = 0))";
 
     const claimTx = app.db.transaction((): OutstandingMessage[] => {
       // Requeue stale claims first so they are visible to the SELECT below.

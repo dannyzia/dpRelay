@@ -168,12 +168,20 @@ export type CreditError = "insufficient_bulk_credits" | "credits_expired" | "no_
  * missing row, expired bulk credits (bulk_expires_at in the past), or an
  * insufficient balance. Runs in one transaction with the campaign insert at
  * the call site.
+ *
+ * ISSUE-96: `unlimitedPass` (the caller's byodEligible snapshot, taken in the
+ * SAME transaction) skips the balance check and deduction entirely — the
+ * campaign is stamped unlimited_pass and its sends ride the app's own bound
+ * phones. A subscribed app WITHOUT a bound device gets `false` and is charged
+ * exactly as before (route separation: BD-pool sends always pay).
  */
 export function reserveBulkCredits(
   app: FastifyInstance,
   appRowId: string,
   count: number,
+  unlimitedPass = false,
 ): CreditError | null {
+  if (unlimitedPass) return null;
   const nowSec = Math.floor(Date.now() / 1000);
   const reserve = app.db.transaction((): CreditError | null => {
     // STAGE F9 (ISSUE-88) dual-path: resolution runs INSIDE the transaction —
@@ -215,7 +223,12 @@ export function deductBulkCredits(
   app: FastifyInstance,
   appRowId: string,
   count: number,
+  unlimitedPass = false,
 ): CreditError | null {
+  // ISSUE-96: campaigns created under the free-pass never deducted, so their
+  // retries must not deduct either (the snapshot governs — later plan-state
+  // changes neither mint nor burn credits).
+  if (unlimitedPass) return null;
   const deduct = app.db.transaction((): CreditError | null => {
     // STAGE F9 (ISSUE-88): same dual-path rule as reserve — check and deduct
     // inside one transaction, wallet first when the app resolves to an owner.
@@ -247,9 +260,17 @@ export function deductBulkCredits(
  * Returns `count` bulk credits (cancellation refund). Creates the row if
  * absent. STAGE F9 (ISSUE-88): refunds land in the SAME wallet the deduct
  * left — resolution is derived from the app row, so money never migrates
- * planes mid-flight.
+ * planes mid-flight. ISSUE-96: campaigns created under the BYOD free-pass
+ * never deducted, so their cancels must not refund — callers pass
+ * `charged=false` and no credits are minted.
  */
-export function refundBulkCredits(app: FastifyInstance, appRowId: string, count: number): void {
+export function refundBulkCredits(
+  app: FastifyInstance,
+  appRowId: string,
+  count: number,
+  charged = true,
+): void {
+  if (!charged) return;
   const owner = resolveWalletOwner(app.db, appRowId);
   if (owner === null) {
     app.db
@@ -351,6 +372,7 @@ interface FinalizableCampaign {
   sent_count: number;
   failed_count: number;
   total_recipients: number;
+  unlimited_pass: number;
   webhook_url: string | null;
   webhook_secret: string | null;
 }
@@ -359,7 +381,7 @@ function findFinalizableCampaigns(app: FastifyInstance): FinalizableCampaign[] {
   return app.db
     .prepare(
       "SELECT c.id, c.app_id AS app_row_id, a.app_id AS public_app_id, c.sent_count, c.failed_count, " +
-        "c.total_recipients, a.webhook_url, a.webhook_secret " +
+        "c.total_recipients, c.unlimited_pass, a.webhook_url, a.webhook_secret " +
         "FROM bulk_campaigns c JOIN apps a ON a.id = c.app_id " +
         "WHERE c.status = 'sending' AND NOT EXISTS (" +
         "  SELECT 1 FROM bulk_recipients r WHERE r.campaign_id = c.id AND r.status IN ('pending', 'queued'))",
@@ -431,11 +453,17 @@ export async function runBulkQueueTick(
   if (budget > 0) {
     const campaigns = app.db
       .prepare(
-        "SELECT c.id, c.app_id AS app_row_id, a.app_id AS public_app_id, c.message " +
+        "SELECT c.id, c.app_id AS app_row_id, a.app_id AS public_app_id, c.message, c.unlimited_pass " +
           "FROM bulk_campaigns c JOIN apps a ON a.id = c.app_id " +
           "WHERE c.status IN ('queued', 'sending') ORDER BY c.created_at ASC, c.id ASC",
       )
-      .all() as { id: string; app_row_id: string; public_app_id: string; message: string }[];
+      .all() as {
+      id: string;
+      app_row_id: string;
+      public_app_id: string;
+      message: string;
+      unlimited_pass: number;
+    }[];
     // v4 fair share: at least 1 per active campaign when budget allows.
     const perCampaign = Math.max(1, Math.floor(budget / Math.max(1, campaigns.length)));
 
@@ -462,15 +490,26 @@ export async function runBulkQueueTick(
           .all(campaign.id, nowSec, campaignBudget) as { id: string; phone: string }[];
 
         const insertPending = app.db.prepare(
-          "INSERT INTO pending_sms (id, app_id, to_addr, message, status, created_at) " +
-            "VALUES (?, ?, ?, ?, 'pending', ?)",
+          "INSERT INTO pending_sms (id, app_id, to_addr, message, status, unlimited_pass, created_at) " +
+            "VALUES (?, ?, ?, ?, 'pending', ?, ?)",
         );
         const markQueued = app.db.prepare(
           "UPDATE bulk_recipients SET status = 'queued', pending_sms_id = ? WHERE id = ?",
         );
         for (const recipient of recipients) {
           const pendingId = newId();
-          insertPending.run(pendingId, campaign.public_app_id, recipient.phone, campaign.message, nowSec);
+          // ISSUE-96: the campaign's creation-time snapshot rides along — a
+          // free-pass message may only ever be claimed by the app's own
+          // bound device (outstanding-fetch clause), a paid one stays
+          // fleet-eligible.
+          insertPending.run(
+            pendingId,
+            campaign.public_app_id,
+            recipient.phone,
+            campaign.message,
+            campaign.unlimited_pass,
+            nowSec,
+          );
           markQueued.run(pendingId, recipient.id);
         }
         if (recipients.length > 0) {

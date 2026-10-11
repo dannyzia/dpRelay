@@ -243,6 +243,104 @@ export async function listTransactions(opts: {
   return { transactions: body.transactions, nextCursor: body.nextCursor };
 }
 
+// ── Unlimited BYOD plans (ISSUE-96) ───────────────────────────────
+
+/** One purchasable unlimited tier (GET /v5/billing/plans). */
+export interface PlanTier {
+  planCode: string;
+  name: string;
+  maxDevices: number;
+  /** Whole USD — the bKash BDT-equivalent is reconciled at operator approval. */
+  priceUsd: number;
+  validityDays: number;
+}
+
+/** The app's current subscription + pending purchase (GET /v5/billing/subscription). */
+export interface SubscriptionInfo {
+  subscription: {
+    subscriptionId: string;
+    planCode: string;
+    name: string;
+    maxDevices: number;
+    priceUsd: number;
+    startsAt: number | null;
+    expiresAt: number;
+    /** False once expiresAt <= now — sends fall back to credit charging. */
+    active: boolean;
+  } | null;
+  devices: { active: number; limit: number | null };
+  pending: {
+    subscriptionId: string;
+    planCode: string;
+    maxDevices: number;
+    priceUsd: number;
+    trxId: string | null;
+    requestedAt: number;
+  } | null;
+}
+
+/** One device bound to the connected app (GET /v5/apps/devices). */
+export interface BoundDevice {
+  deviceId: string;
+  label: string;
+  phoneNumber: string | null;
+  lastSeenAt: number | null;
+  enrolledAt: number;
+  active: boolean;
+}
+
+/** A plan purchase that reached the bKash step (POST /v5/billing/plans/purchase). */
+export interface PlanPurchaseAccepted {
+  subscriptionId: string;
+  planCode: string;
+  priceUsd: number;
+  bkashNumber: string;
+  bkashNote: string;
+}
+
+/** GET /v5/billing/plans — public tier catalog. */
+export async function listPlans(): Promise<PlanTier[]> {
+  const body = await request<{ ok: true; plans: PlanTier[] }>("/v5/billing/plans", { method: "GET" });
+  return body.plans;
+}
+
+/** GET /v5/billing/subscription — plan state + device slots for the connected app. */
+export async function getSubscription(): Promise<SubscriptionInfo> {
+  return appFetch<SubscriptionInfo & { ok: true }>("/v5/billing/subscription");
+}
+
+/** POST /v5/billing/plans/purchase — opens a pending purchase + returns the bKash destination. */
+export async function purchasePlan(planCode: string): Promise<PlanPurchaseAccepted> {
+  return appFetch<PlanPurchaseAccepted & { ok: true }>("/v5/billing/plans/purchase", {
+    method: "POST",
+    body: JSON.stringify({ planCode }),
+  });
+}
+
+/** POST /v5/billing/plans/submit-trx — attaches the bKash TrxID (same TrxID is an idempotent no-op). */
+export async function submitPlanTrx(subscriptionId: string, trxId: string): Promise<string> {
+  const body = await appFetch<{ ok: true; message: string }>("/v5/billing/plans/submit-trx", {
+    method: "POST",
+    body: JSON.stringify({ subscriptionId, trxId }),
+  });
+  return body.message;
+}
+
+/** GET /v5/apps/devices — devices bound to the connected app (slots view). */
+export async function listDevices(): Promise<BoundDevice[]> {
+  const body = await appFetch<{ ok: true; devices: BoundDevice[] }>("/v5/apps/devices");
+  return body.devices;
+}
+
+/** DELETE /v5/apps/devices/:deviceId — revoke a device to free its slot (idempotent). */
+export async function deleteDevice(deviceId: string): Promise<{ devicesActive: number }> {
+  const body = await appFetch<{ ok: true; deviceId: string; devicesActive: number }>(
+    `/v5/apps/devices/${encodeURIComponent(deviceId)}`,
+    { method: "DELETE" },
+  );
+  return { devicesActive: body.devicesActive };
+}
+
 /** Maps any thrown error to a user-presentable one-liner including the code. */
 export function describeError(err: unknown): string {
   if (err instanceof ApiError) {

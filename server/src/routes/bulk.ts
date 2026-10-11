@@ -33,6 +33,7 @@ import {
   reserveBulkCredits,
   validateBulkMessage,
 } from "../services/bulk.js";
+import { byodEligible } from "../services/plans.js";
 
 const CAMPAIGN_NAME_MAX = 100;
 /** Failed-recipients listing cap (v4 parity). */
@@ -57,6 +58,8 @@ interface CampaignRow {
   completed_at: number | null;
   source_type: string;
   source_group_ids: string | null;
+  /** ISSUE-96: 1 = created under the BYOD free-pass (never charged, never refunded). */
+  unlimited_pass: number;
 }
 
 function publicCampaign(row: CampaignRow, includeMessage: boolean) {
@@ -72,6 +75,8 @@ function publicCampaign(row: CampaignRow, includeMessage: boolean) {
     createdAt: row.created_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+    // ISSUE-96: additive — true when the campaign rides the BYOD free-pass.
+    unlimitedPass: row.unlimited_pass === 1,
   };
   if (includeMessage) {
     base.message = row.message;
@@ -355,10 +360,15 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     const campaignId = newId();
     const nowSec = Math.floor(Date.now() / 1000);
 
-    // ONE transaction: deduct credits + campaign + recipients + audit rows.
-    const create = app.db.transaction((): string | null =>
-      reserveBulkCredits(app, request.appRow!.id, uniqueCount),
-    );
+    // ONE transaction: decide the BYOD free-pass (ISSUE-96) + reserve
+    // credits. The eligibility read lives inside the reserve transaction so
+    // the stamped snapshot and the money movement can never disagree — a
+    // subscription expiring mid-request fails closed to normal charging.
+    let unlimitedPass = false;
+    const create = app.db.transaction((): string | null => {
+      unlimitedPass = byodEligible(app.db, request.appRow!.id, nowSec);
+      return reserveBulkCredits(app, request.appRow!.id, uniqueCount, unlimitedPass);
+    });
     const creditError = create();
     if (creditError !== null) {
       const status = creditError === "no_credits_row" ? 402 : 402;
@@ -373,8 +383,8 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const insertCampaign = db.prepare(
-      "INSERT INTO bulk_campaigns (id, app_id, name, message, charset, status, total_recipients, created_at, " +
-        "source_type, source_group_ids) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+      "INSERT INTO bulk_campaigns (id, app_id, name, message, charset, status, total_recipients, unlimited_pass, created_at, " +
+        "source_type, source_group_ids) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
     );
     const insertRecipient = db.prepare(
       "INSERT INTO bulk_recipients (id, campaign_id, phone, idx, status) VALUES (?, ?, ?, ?, 'pending')",
@@ -389,6 +399,7 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       body.message,
       messageVerdict.charset,
       uniqueCount,
+      unlimitedPass ? 1 : 0,
       nowSec,
       sourceType,
       sourceType === "contactGroups" ? JSON.stringify(sourceGroupIds) : null,
@@ -406,7 +417,9 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       ok: true,
       campaignId,
       totalRecipients: uniqueCount,
-      creditsReserved: uniqueCount,
+      // ISSUE-96: report what actually moved — free-pass campaigns reserve 0.
+      creditsReserved: unlimitedPass ? 0 : uniqueCount,
+      unlimitedPass,
       charset: messageVerdict.charset,
       status: "queued",
       sourceType,
@@ -448,7 +461,8 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
     const rows = db
       .prepare(
         "SELECT id, name, message, status, total_recipients, sent_count, failed_count, queued_count, " +
-          "created_at, started_at, completed_at, source_type, source_group_ids FROM bulk_campaigns WHERE app_id = ? " +
+          "created_at, started_at, completed_at, source_type, source_group_ids, unlimited_pass " +
+          "FROM bulk_campaigns WHERE app_id = ? " +
           "AND (? IS NULL OR status = ?) " +
           "AND (? IS NULL OR created_at < ? OR (created_at = ? AND id > ?)) " +
           "ORDER BY created_at DESC, id ASC LIMIT ?",
@@ -480,7 +494,7 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       (db
         .prepare(
           "SELECT id, name, message, status, total_recipients, sent_count, failed_count, queued_count, " +
-            "created_at, started_at, completed_at, source_type, source_group_ids " +
+            "created_at, started_at, completed_at, source_type, source_group_ids, unlimited_pass " +
             "FROM bulk_campaigns WHERE id = ? AND app_id = ?",
         )
         .get(campaignId, request.appRow!.id) as CampaignRow | undefined) ?? null
@@ -603,10 +617,14 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       db.prepare(
         "UPDATE bulk_campaigns SET status = 'cancelled', completed_at = ? WHERE id = ?",
       ).run(Math.floor(Date.now() / 1000), campaignId);
-      if (unprocessed > 0) {
+      // ISSUE-96: free-pass campaigns never deducted, so their cancels must
+      // not mint credits — `charged=false` makes the refund a no-op, and the
+      // returned count reflects what actually moved (0), not what would have.
+      if (unprocessed > 0 && row.unlimited_pass === 0) {
         refundBulkCredits(app, request.appRow!.id, unprocessed);
+        return unprocessed;
       }
-      return unprocessed;
+      return 0;
     });
     const refunded = cancel();
 
@@ -639,7 +657,12 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       return { ok: true, retryCount: 0, creditsDeducted: 0 };
     }
 
-    const deduct = db.transaction((): string | null => deductBulkCredits(app, request.appRow!.id, failedCount));
+    // ISSUE-96: the campaign's creation-time snapshot decides — a free-pass
+    // campaign's retry stays free (it never deducted, so re-deducting would
+    // burn credits the campaign never had).
+    const deduct = db.transaction((): string | null =>
+      deductBulkCredits(app, request.appRow!.id, failedCount, row.unlimited_pass === 1),
+    );
     const creditError = deduct();
     if (creditError !== null) {
       return fail(reply, 402, creditError, "Not enough bulk credits.");
@@ -653,8 +676,16 @@ const bulkRoutes: FastifyPluginAsync = async (app) => {
       "UPDATE bulk_campaigns SET status = 'sending', total_recipients = total_recipients + ? WHERE id = ?",
     ).run(failedCount, campaignId);
 
-    app.log.info({ appId: request.appRow!.appId, campaignId, retryCount: failedCount }, "bulk failed recipients retried");
-    return { ok: true, retryCount: failedCount, creditsDeducted: failedCount };
+    app.log.info(
+      { appId: request.appRow!.appId, campaignId, retryCount: failedCount, unlimitedPass: row.unlimited_pass === 1 },
+      "bulk failed recipients retried",
+    );
+    // Report what actually moved, not what would have without the free-pass.
+    return {
+      ok: true,
+      retryCount: failedCount,
+      creditsDeducted: row.unlimited_pass === 1 ? 0 : failedCount,
+    };
   });
 };
 
