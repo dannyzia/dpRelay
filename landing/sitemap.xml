@@ -7,12 +7,27 @@
     <loc>https://dprelay.digital-papyrus.com/pricing/</loc>
   </url>
   <url>
-    <loc>https://dprelay.digital-papyrus.com/payment/</loc>
+    <loc>https://dprelay.digital-papyrus.com/docs/</loc>
+  </url>
+  <url>
+    <loc>https://dprelay.digital-papyrus.com/docs/byod/</loc>
+  </url>
+  <url>
+    <loc>https://dprelay.digital-papyrus.com/docs/payments/</loc>
   </url>
   <url>
     <loc>https://dprelay.digital-papyrus.com/faq/</loc>
   </url>
   <url>
-    <loc>https://dprelay.digital-papyrus.com/docs/</loc>
+    <loc>https://dprelay.digital-papyrus.com/contact/</loc>
+  </url>
+  <url>
+    <loc>https://dprelay.digital-papyrus.com/terms/</loc>
+  </url>
+  <url>
+    <loc>https://dprelay.digital-papyrus.com/privacy/</loc>
+  </url>
+  <url>
+    <loc>https://dprelay.digital-papyrus.com/acceptable-use/</loc>
   </url>
 </urlset>

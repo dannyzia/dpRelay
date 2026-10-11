@@ -3,9 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FAQ — dP Relay SMS API</title>
-  <meta name="description" content="Answers on BYOD gateways, payments, API keys, password resets, OTP pricing, and delivery for the dP Relay dual-track SMS platform.">
+  <title>FAQ: billing, delivery and BYOD | dP Relay</title>
+  <meta name="description" content="Answers on API keys, payments, delivery problems, rate limits and using your own phone as a gateway.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/faq/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -13,66 +16,111 @@
     <div class="wrap">
       <a class="brand" href="/">dP Relay</a>
       <nav aria-label="Main">
-        <a href="/">Home</a>
         <a href="/pricing/">Pricing</a>
-        <a href="/payment/">Payment</a>
-        <a href="/faq/" aria-current="page">FAQ</a>
         <a href="/docs/">Docs</a>
-        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+        <a href="/faq/" aria-current="page">FAQ</a>
+        <a href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a>
       </nav>
     </div>
   </header>
 
   <main class="wrap">
-    <h1>Frequently asked questions</h1>
-    <p class="muted">Two delivery tracks, one platform — the gateway questions sit at the end.</p>
-
-    <section class="card" aria-labelledby="faq-pay">
-      <h2 id="faq-pay">How do I pay?</h2>
-      <p class="muted">Open the <a href="/payment/">payment page</a>: you send money to the bKash number with TapTap Send, Remitly, Wise, Western Union, or WorldRemit, then submit the TrxID on the Buy credits screen.</p>
+    <section>
+      <h1>Frequently asked questions</h1>
+      <p class="lede muted">Quick answers on getting started, billing, delivery and using your own phone. Can't find yours? <a href="/contact/">Contact us</a>.</p>
     </section>
 
-    <section class="card" aria-labelledby="faq-keys">
-      <h2 id="faq-keys">How do I get API keys?</h2>
-      <p class="muted">Sign in with your email, then register an app on the Apps screen — the appId and appSecret are shown <strong>once</strong>; store them safely. If an operator issued you an app instead, use <strong>Link existing app</strong> with those credentials.</p>
+    <section class="faq-group" aria-labelledby="faq-getting-started">
+      <h2 id="faq-getting-started">Getting started</h2>
+
+      <h3 id="q-track" class="faq-q">Which delivery track should I choose?</h3>
+      <p class="muted">Choose your own phone for worldwide reach and your own sender number. Choose our dedicated Bangladesh numbers to reach +880 numbers on Grameenphone, Robi, Banglalink and Teletalk without running any hardware. Both use the same API.</p>
+
+      <h3 id="q-api-keys" class="faq-q">How do I get API keys?</h3>
+      <p class="muted">Sign in with your email, then register an app on the Apps screen. The appId and appSecret are shown once, so store them safely. If an operator issued you an app, use <strong>Link existing app</strong> and enter those credentials.</p>
+
+      <h3 id="q-reset-password" class="faq-q">How do I reset my password?</h3>
+      <p class="muted">On the sign-in screen choose <strong>Forgot password?</strong> and enter your email; a reset link follows. If email isn't enabled yet on this deployment, contact us and we can reset it for you.</p>
     </section>
 
-    <section class="card" aria-labelledby="faq-reset">
-      <h2 id="faq-reset">How do I reset my password?</h2>
-      <p class="muted">On the sign-in screen choose <strong>Forgot password?</strong> and enter your email — a reset link follows. If email is not yet enabled on this deployment, contact the operator and they can reset it for you.</p>
+    <section class="faq-group" aria-labelledby="faq-billing">
+      <h2 id="faq-billing">Billing and payments</h2>
+
+      <h3 id="q-cost" class="faq-q">What does a message cost?</h3>
+      <p class="muted">On your own phone, $0.0015 per message (USD only), for OTP or bulk, in any country, or unlimited sending from $16 a month. On our dedicated Bangladesh numbers, ৳0.20 per message with sending included. New apps start with 20 free messages valid for 30 days. After that you buy packages; see <a href="/pricing/">pricing</a>.</p>
+
+      <h3 id="q-how-to-pay" class="faq-q">How do I pay?</h3>
+      <p class="muted">Pick a package on the Buy credits screen, send the money to the bKash number shown there, then paste the TrxID. From abroad you can use TapTap Send, Remitly, Wise, Western Union or WorldRemit. The <a href="/docs/payments/">payment guides</a> walk through each.</p>
+
+      <h3 id="q-approval-time" class="faq-q">How long until my credits appear?</h3>
+      <p class="muted">A person on our team confirms every payment. Credits are added as soon as it is approved.</p>
+      <div class="owner-note"><p>typical approval time</p></div>
+
+      <h3 id="q-expiry" class="faq-q">Do credits expire?</h3>
+      <p class="muted">Yes. Each package has a validity window, and unused credits expire when it ends. The validity is shown on the package before you buy.</p>
+
+      <h3 id="q-trxid-rejected" class="faq-q">Why was my TrxID rejected?</h3>
+      <p class="muted">The most common cause is a TrxID already attached to another pending purchase. Check you haven't pasted it twice, and that you used the same package you paid for. If it still fails, contact us with the TrxID.</p>
     </section>
 
-    <section class="card" aria-labelledby="faq-cost">
-      <h2 id="faq-cost">What does an OTP cost?</h2>
-      <p class="muted">New apps get free trial credits. After that, each SMS is billed from your credit balance at the package prices shown on the <strong>Buy credits</strong> screen — both OTP and bulk credits are listed there.</p>
+    <section class="faq-group" aria-labelledby="faq-delivery">
+      <h2 id="faq-delivery">Delivery</h2>
+
+      <h3 id="q-not-arrived" class="faq-q">Why hasn't my SMS arrived?</h3>
+      <p class="muted">Check that the number is strict E.164 (for example +8801XXXXXXXXX) and that the recipient's phone is on and has signal. Failed sends appear in the History screen. If many sends fail together, the sending device is usually offline; on your own phone, check it first, otherwise contact us.</p>
+
+      <h3 id="q-429" class="faq-q">Why am I getting a 429 error?</h3>
+      <p class="muted">You hit a limit that protects deliverability: <code>rate_limited</code> means too many sends to one number, and <code>resend_cooldown</code> means you asked for another code too soon. Wait and retry, and disable your resend button during the cooldown. See <a href="/docs/#rate-limits">rate limits</a>.</p>
+
+      <h3 id="q-wrong-code" class="faq-q">A user typed the wrong code too many times. What now?</h3>
+      <p class="muted">The number is locked and the API returns <code>otp_locked</code> with <code>retryAfterSec</code>. After that time passes, send a new code.</p>
     </section>
 
-    <section class="card" aria-labelledby="faq-missing">
-      <h2 id="faq-missing">Why hasn't my SMS arrived?</h2>
-      <p class="muted">Check that the recipient number is in strict E.164 format (e.g. +8801XXXXXXXXX) and that the recipient's device is switched on and reachable. Failed sends show in the <strong>History</strong> screen; repeated failures usually mean the receiving device is offline — contact the operator.</p>
-    </section>
+    <section class="faq-group" aria-labelledby="faq-byod">
+      <h2 id="faq-byod">Using your own phone</h2>
 
-    <section class="card" aria-labelledby="q-byod-own">
-      <h2 id="q-byod-own">Can I use my own phone as the gateway?</h2>
-      <p class="muted">Yes — that's the BYOD track. Enroll any Android phone from the Apps screen: the gateway app registers to your account and messages go out over your SIM, on any carrier, anywhere in the world. Each message still deducts one SMS credit from your balance.</p>
-    </section>
+      <h3 id="q-own-phone" class="faq-q">Can I use my own phone as the gateway?</h3>
+      <p class="muted">Yes. Enroll any Android phone and messages go out over your SIM, on any carrier, in any country it can reach. Each message is billed at $0.0015. See <a href="/docs/byod/">Connect your phone</a>.</p>
 
-    <section class="card" aria-labelledby="q-byod-choose">
-      <h2 id="q-byod-choose">BYOD or the dedicated pool — which track?</h2>
-      <p class="muted">Choose BYOD for worldwide reach and your own sender number; choose the dedicated pool to serve Bangladesh (+880 on Grameenphone, Robi, Banglalink, Teletalk) without running hardware. Both deliver through the identical API and both deduct credits the same way.</p>
-    </section>
+      <h3 id="q-phone-on" class="faq-q">Does the phone need to stay on?</h3>
+      <p class="muted">Yes. Keep it powered, connected and allowed to run the gateway app in the background. If it goes offline, sends fail until it is back.</p>
 
-    <section class="card" aria-labelledby="q-byod-secret">
-      <h2 id="q-byod-secret">What if I lose my enrollment secret?</h2>
-      <p class="muted">Enrollment secrets are shown once when you enroll a device. Lose it? Enroll the device again to issue a fresh secret, then paste it into the gateway app right away — it pairs your phone to your account and is not your password.</p>
+      <h3 id="q-enrollment-secret" class="faq-q">What if I lose my enrollment secret?</h3>
+      <p class="muted">Enroll the device again to get a new secret and paste it into the gateway app right away. It pairs your phone to your account and is not your password.</p>
     </section>
   </main>
 
   <footer class="site-footer">
     <div class="wrap">
-      <span>dP Relay — digital papyrus SMS platform</span>
-      <span><a href="/docs/">API docs</a> · <a href="/faq/">FAQ</a> · <a href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a></span>
+      <div class="footer-cols">
+        <div class="footer-col">
+          <p class="footer-heading">Product</p>
+          <ul>
+            <li><a href="/pricing/">Pricing</a></li>
+            <li><a href="/docs/">Docs</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-heading">Company</p>
+          <ul>
+            <li><a href="/contact/">Contact</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-heading">Legal</p>
+          <ul>
+            <li><a href="/terms/">Terms of service</a></li>
+            <li><a href="/privacy/">Privacy policy</a></li>
+            <li><a href="/acceptable-use/">Acceptable use</a></li>
+          </ul>
+        </div>
+      </div>
+      <p class="footer-line">dP Relay is an SMS gateway by Digital Papyrus. © 2026 Digital Papyrus.</p>
     </div>
   </footer>
+
+  <script src="/site.js" defer></script>
 </body>
 </html>

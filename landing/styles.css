@@ -20,6 +20,20 @@
   --green-soft: #047857;
   --green-deep: #047857;
   --on-green: #101010;
+  /* secondary accent — Bangladesh / dedicated track only (never text on white
+     below AA: --sky-ink is the text-safe dark variant) */
+  --sky: #0ea5e9;
+  --sky-ink: #0369a1;
+  --sky-soft: #e0f2fe;
+  /* dark code panels — the dark-tech nod on an otherwise light page */
+  --code-bg: #0f172a;
+  --code-ink: #e2e8f0;
+  --code-mute: #94a3b8;
+  /* owner-only facts rendered as visible notes, never as invented copy */
+  --note-amber-bg: #fef3c7;
+  --note-amber-ink: #92400e;
+  --note-internal-bg: #f1f5f9;
+  --note-internal-ink: #475569;
   /* the one ornament */
   --line-dash: rgba(22, 32, 44, 0.22);
   /* radii: 6px buttons/inputs, 8px cards, pill only for status tags */
@@ -69,9 +83,9 @@ code {
 
 pre {
   margin: 0;
-  background: var(--canvas-soft);
-  color: var(--ink);
-  border: 1px solid var(--hairline);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border: 1px solid var(--code-bg);
   border-radius: var(--radius-card);
   padding: 1rem;
   overflow-x: auto;
@@ -100,7 +114,7 @@ pre code {
 .site-header .wrap,
 .site-footer .wrap,
 main.wrap {
-  max-width: 1080px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 0 1.25rem;
 }
@@ -282,8 +296,8 @@ h3 {
 /* ── Cards ─────────────────────────────────────────────── */
 
 main.wrap {
-  padding-top: 2.5rem;
-  padding-bottom: 3.5rem;
+  padding-top: 3.5rem;
+  padding-bottom: 5rem;
 }
 
 .card {
@@ -534,7 +548,7 @@ tr:last-child td {
 
 main.wrap > section + section {
   border-top: 1px dashed var(--line-dash);
-  padding-top: 2.25rem;
+  padding-top: clamp(4rem, 6vw, 6rem);
 }
 
 main.wrap > section + section h2:first-child {
@@ -608,4 +622,453 @@ main.wrap > section + section h2:first-child {
 
 .grid3 h3 {
   margin-top: 0;
+}
+
+/* ── Display rhythm (dP Relay landing build prompt) ───── */
+
+html {
+  scroll-behavior: smooth;
+}
+
+h1,
+h2 {
+  text-wrap: balance;
+}
+
+main.wrap > section > h2,
+main.wrap > section > h3 {
+  scroll-margin-top: 5.5rem;
+}
+
+.lede {
+  font-size: 1.1rem;
+  max-width: 68ch;
+}
+
+.table-note {
+  font-size: 0.9rem;
+  color: var(--mute);
+  max-width: 72ch;
+}
+
+/* ── Dark code panels + language tabs + copy button ────── */
+
+pre,
+.code-tabs pre,
+.code-grid pre {
+  font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.code-tabs {
+  margin: 1rem 0 0;
+  background: var(--code-bg);
+  border: 1px solid var(--code-bg);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.code-tabs .tab-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.12);
+}
+
+.code-tabs .tab,
+.code-tabs .copy-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--radius-btn);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--code-mute);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.code-tabs .tab:hover,
+.code-tabs .copy-btn:hover {
+  color: var(--code-ink);
+}
+
+.code-tabs .tab[aria-selected="true"] {
+  background: var(--code-ink);
+  color: var(--code-bg);
+}
+
+.code-tabs .tab:focus-visible,
+.code-tabs .copy-btn:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+.code-tabs .copy-btn {
+  margin-left: auto;
+  border-color: rgba(226, 232, 240, 0.2);
+}
+
+.code-tabs .copy-btn[data-copied="true"] {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--on-green);
+}
+
+.code-tabs [data-panel] {
+  display: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 1rem;
+}
+
+.code-tabs [data-panel].is-active {
+  display: block;
+}
+
+.code-grid figure {
+  background: var(--code-bg);
+  border-color: var(--code-bg);
+}
+
+.code-grid figcaption {
+  color: var(--code-ink);
+  border-bottom-color: rgba(226, 232, 240, 0.12);
+}
+
+.code-grid pre {
+  color: var(--code-ink);
+}
+
+/* ── Owner / internal notes ────────────────────────────── */
+
+.owner-note {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  background: var(--note-amber-bg);
+  color: var(--note-amber-ink);
+  border: 1px solid #fcd34d;
+  border-left: 4px solid #d97706;
+  border-radius: var(--radius-card);
+  padding: 0.75rem 1rem;
+  font-size: 0.92rem;
+}
+
+.owner-note::before {
+  content: "[ ]";
+  flex: none;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-weight: 700;
+}
+
+.owner-note p {
+  margin: 0;
+}
+
+.internal-note {
+  background: var(--note-internal-bg);
+  color: var(--note-internal-ink);
+  border: 1px dashed var(--hairline);
+  border-radius: var(--radius-card);
+  padding: 0.75rem 1rem;
+  font-size: 0.88rem;
+  margin-top: 1rem;
+}
+
+.internal-note .note-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 0.35rem;
+}
+
+.internal-note a {
+  color: var(--sky-ink);
+}
+
+/* ── Two-track accents (sky = Bangladesh / dedicated) ──── */
+
+.badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge.byod {
+  background: var(--canvas-soft);
+  color: var(--green-soft);
+  border: 1px solid var(--hairline);
+}
+
+.badge.bd {
+  background: var(--sky-soft);
+  color: var(--sky-ink);
+  border: 1px solid #bae6fd;
+}
+
+th.track-bd,
+td.track-bd {
+  color: var(--sky-ink);
+}
+
+/* ── Steps, lists, big numbers ─────────────────────────── */
+
+.guide-steps {
+  margin: 0.75rem 0;
+  padding-left: 1.25rem;
+  color: var(--body-text);
+}
+
+.guide-steps li {
+  margin-bottom: 0.5rem;
+}
+
+.guide-steps li::marker {
+  color: var(--green-soft);
+  font-weight: 700;
+}
+
+.big-number {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ink-strong);
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-btn);
+  padding: 0.1rem 0.5rem;
+  white-space: nowrap;
+}
+
+.legal-list {
+  padding-left: 1.25rem;
+  color: var(--body-text);
+}
+
+.legal-list > li {
+  margin-bottom: 0.9rem;
+}
+
+.legal-list > li::marker {
+  color: var(--green-soft);
+  font-weight: 700;
+}
+
+.actions.start {
+  justify-content: flex-start;
+}
+
+/* ── Tables: tabular numerals, hover, sticky head ──────── */
+
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+tbody tr:hover {
+  background: var(--canvas-soft);
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border-radius: var(--radius-card);
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll table {
+  margin: 0;
+  border-radius: 0;
+}
+
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* ── Docs layout: sticky sidebar, 72ch measure ─────────── */
+
+.docs-layout {
+  display: grid;
+  gap: 2.5rem;
+  grid-template-columns: 240px minmax(0, 1fr);
+  align-items: start;
+}
+
+.docs-sidebar {
+  position: sticky;
+  top: 1.5rem;
+}
+
+.docs-sidebar .side-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin: 0 0 0.5rem;
+}
+
+.docs-sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.75rem;
+  border-left: 1px solid var(--hairline);
+  display: grid;
+  gap: 0.15rem;
+}
+
+.docs-sidebar a {
+  display: block;
+  padding: 0.22rem 0 0.22rem 0.6rem;
+  margin-left: -1px;
+  border-left: 2px solid transparent;
+  font-size: 0.9rem;
+  color: var(--body-text);
+  text-decoration: none;
+}
+
+.docs-sidebar a:hover {
+  color: var(--ink-strong);
+  border-left-color: var(--green);
+  background: var(--canvas-soft);
+}
+
+.docs-content {
+  min-width: 0;
+  max-width: 72ch;
+}
+
+/* ── FAQ groups ────────────────────────────────────────── */
+
+.faq-group + .faq-group {
+  margin-top: 2.5rem;
+}
+
+.faq-q {
+  margin-bottom: 0.3rem;
+}
+
+/* ── Footer columns ────────────────────────────────────── */
+
+.site-footer .wrap {
+  display: block;
+}
+
+.footer-cols {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  padding-bottom: 1.25rem;
+}
+
+.footer-heading {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin: 0 0 0.5rem;
+}
+
+.footer-col ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.footer-col a {
+  font-size: 0.92rem;
+}
+
+.footer-line {
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.88rem;
+}
+
+/* ── Interactive states ────────────────────────────────── */
+
+.button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ── Responsive: 390 / 768 / 1440 ──────────────────────── */
+
+@media (max-width: 900px) {
+  .docs-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .docs-sidebar {
+    position: static;
+  }
+}
+
+@media (max-width: 640px) {
+  main.wrap {
+    padding-top: 2.5rem;
+    padding-bottom: 3rem;
+  }
+
+  main.wrap > section + section {
+    padding-top: 2.5rem;
+  }
+
+  .hero {
+    padding: 2.25rem 1rem 1.5rem;
+  }
+
+  nav[aria-label="Main"] {
+    gap: 0.8rem;
+  }
+
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .button {
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .button,
+  .code-tabs .tab,
+  .code-tabs .copy-btn {
+    transition: none;
+  }
+}
+
+/* Compact owner note for use inside table cells (e.g. the [days] validity pins). */
+.owner-note.inline {
+  display: inline-flex;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }

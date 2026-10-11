@@ -23,13 +23,19 @@ const SITE = join(ROOT, "landing");
 const BASE_URL = "https://dprelay.digital-papyrus.com";
 const APP_URL = "https://app.dprelay.digital-papyrus.com";
 
-/** Every page the AC requires, in site-path form. */
+/** Every live page the site ships, in site-path form. `/payment/` is a 301
+ *  (landing/_redirects) to `/docs/payments/`, so it is deliberately absent. */
 const PAGES = [
   { path: "/", file: "index.html" },
   { path: "/pricing/", file: "pricing/index.html" },
-  { path: "/payment/", file: "payment/index.html" },
-  { path: "/faq/", file: "faq/index.html" },
   { path: "/docs/", file: "docs/index.html" },
+  { path: "/docs/byod/", file: "docs/byod/index.html" },
+  { path: "/docs/payments/", file: "docs/payments/index.html" },
+  { path: "/faq/", file: "faq/index.html" },
+  { path: "/contact/", file: "contact/index.html" },
+  { path: "/terms/", file: "terms/index.html" },
+  { path: "/privacy/", file: "privacy/index.html" },
+  { path: "/acceptable-use/", file: "acceptable-use/index.html" },
 ];
 
 /** Owner-approved FAQ set must not leak infrastructure strings (AC). */
@@ -212,8 +218,10 @@ for (const page of PAGES) {
 }
 
 // Home CTAs must be absolute app-subdomain URLs (AC).
+// `!= null` (not `!== null`): a missing page is `undefined` in the map, and
+// dereferencing it below would crash the gate instead of reporting a failure.
 const home = htmlByPath.get("/");
-if (home !== null) {
+if (home != null) {
   if (home.includes(`${APP_URL}/#/signup`) && home.includes(`${APP_URL}/#/signin`)) {
     pass("/: absolute app-subdomain signup + signin CTAs present");
   } else {
@@ -223,25 +231,36 @@ if (home !== null) {
 
 // FAQ: SMTP/infrastructure strings are forbidden (owner flag).
 const faq = htmlByPath.get("/faq/");
-if (faq !== null) {
+if (faq != null) {
   const lower = faq.toLowerCase();
   const hits = FAQ_FORBIDDEN.filter((needle) => lower.includes(needle));
   if (hits.length > 0) fail(`/faq/: forbidden infrastructure string(s): ${hits.join(", ")}`);
   else pass("/faq/: no SMTP/infrastructure strings");
-  // The owner-approved question set must not shrink silently.
-  const questionCount = (faq.match(/<h2 id="faq-/g) ?? []).length;
-  if (questionCount !== 5) fail(`/faq/: expected the 5 owner-approved questions, found ${questionCount}`);
+  // The copy doc regroups the page into four categories of h3 questions; the
+  // category ids and the question count are the "must not shrink silently" pins
+  // (the old flat `<h2 id="faq-"> x5` shape no longer describes the page).
+  const categories = ["faq-getting-started", "faq-billing", "faq-delivery", "faq-byod"];
+  const missingCategories = categories.filter((id) => !faq.includes(`<h2 id="${id}">`));
+  if (missingCategories.length > 0) {
+    fail(`/faq/: missing category heading(s): ${missingCategories.join(", ")}`);
+  } else {
+    pass("/faq/: all 4 category headings present");
+  }
+  const questionCount = (faq.match(/<h3 id="q-/g) ?? []).length;
+  if (questionCount !== 14) fail(`/faq/: expected the 14 copy-doc questions, found ${questionCount}`);
+  else pass("/faq/: all 14 questions present");
 }
 
-// Payment: owner-verbatim guide pins (hub event 1243).
-const payment = htmlByPath.get("/payment/");
-if (payment !== null) {
-  const missing = PAYMENT_PINS.filter((pin) => !payment.includes(pin));
-  if (missing.length > 0) fail(`/payment/: verbatim guide pin(s) missing: ${missing.join(" | ")}`);
-  else pass(`/payment/: all ${PAYMENT_PINS.length} verbatim pins present`);
+// Payment guides: owner-verbatim pins (hub event 1243). The guides moved from
+// /payment/ to /docs/payments/ — the pin PATH was retargeted, never the text.
+const payments = htmlByPath.get("/docs/payments/");
+if (payments != null) {
+  const missing = PAYMENT_PINS.filter((pin) => !payments.includes(pin));
+  if (missing.length > 0) fail(`/docs/payments/: verbatim guide pin(s) missing: ${missing.join(" | ")}`);
+  else pass(`/docs/payments/: all ${PAYMENT_PINS.length} verbatim pins present`);
 }
 
-// sitemap.xml: exists, lists exactly the five pages, URLs resolve to files.
+// sitemap.xml: exists, lists exactly PAGES, URLs resolve to files.
 const sitemapPath = join(SITE, "sitemap.xml");
 if (!existsSync(sitemapPath)) {
   fail("sitemap.xml: missing");

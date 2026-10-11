@@ -3,9 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pricing — dual-track SMS credits | dP Relay</title>
-  <meta name="description" content="BYOD worldwide or a Bangladesh dedicated SIM pool — one ৳0.20-per-SMS credit balance, packages in BDT, USD or EUR, bKash and remittance top-ups.">
+  <title>Pricing: from $0.0015 per SMS, no subscription | dP Relay</title>
+  <meta name="description" content="Your own phone from $0.0015 per SMS, our Bangladesh numbers at ৳0.20. Pay with bKash or a remittance service, with 20 free trial messages for every new app.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/pricing/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -13,85 +16,237 @@
     <div class="wrap">
       <a class="brand" href="/">dP Relay</a>
       <nav aria-label="Main">
-        <a href="/">Home</a>
         <a href="/pricing/" aria-current="page">Pricing</a>
-        <a href="/payment/">Payment</a>
-        <a href="/faq/">FAQ</a>
         <a href="/docs/">Docs</a>
-        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+        <a href="/faq/">FAQ</a>
+        <a href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a>
       </nav>
     </div>
   </header>
 
   <main class="wrap">
-    <h1>Pricing that follows your phone</h1>
-    <p class="muted">Two delivery tracks, one credit balance — pick the reach you need, pay the same platform rate either way.</p>
-    <section aria-labelledby="matrix">
-      <h2 id="matrix">Country-wise coverage &amp; rates</h2>
-      <table>
-        <thead>
-          <tr><th>Track</th><th>Coverage</th><th>Delivery</th><th>Per message</th><th>Currency</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>BYOD gateway</strong></td>
-            <td>Worldwide — any country your SIM can reach</td>
-            <td>Your own Android phone</td>
-            <td>1 SMS credit</td>
-            <td>BDT · USD · EUR</td>
-          </tr>
-          <tr>
-            <td><strong>Dedicated pool</strong></td>
-            <td>Bangladesh <code>+880</code> — Grameenphone, Robi, Banglalink, Teletalk</td>
-            <td>Operator SIM pool</td>
-            <td>1 SMS credit (৳0.20)</td>
-            <td>BDT · USD · EUR</td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="muted">Every message — OTP or bulk, either track — deducts one SMS credit from the same balance at the platform rate of <strong>৳0.20 per credit</strong>. No per-country surcharges; the difference is the delivery infrastructure, not the price.</p>
+    <section>
+      <h1>Pay per message, not per month</h1>
+      <p class="lede muted">Two delivery tracks, two simple prices. Use your own phone for $0.0015 per message worldwide, or our dedicated Bangladesh numbers for ৳0.20 per message with sending included.</p>
     </section>
+
+    <section aria-labelledby="tracks">
+      <h2 id="tracks">Tracks and rates</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Track</th><th scope="col">Coverage</th><th scope="col">Delivered by</th><th scope="col">Cost per message</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row"><span class="badge byod">Your own phone</span></th>
+              <td>Worldwide, any country your SIM can reach</td>
+              <td>Your Android phone</td>
+              <td>$0.0015 (USD only), gateway only</td>
+            </tr>
+            <tr>
+              <th scope="row"><span class="badge bd">Dedicated Bangladesh numbers</span></th>
+              <td class="track-bd">+880 on Grameenphone, Robi, Banglalink, Teletalk</td>
+              <td class="track-bd">dP Relay's own numbers</td>
+              <td class="track-bd">৳0.20, gateway and sending included</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note">OTP and bulk messages cost the same on each track. On your own phone, the $0.0015 covers the gateway only, and any SMS charges from your carrier plan are separate and yours to manage. On our Bangladesh numbers, the ৳0.20 covers the gateway and the sending.</p>
+    </section>
+
+    <section aria-labelledby="start-free">
+      <h2 id="start-free">Start free</h2>
+      <p class="muted">Every new app starts with <strong>20 free messages, valid for 30 days</strong>. No card, no commitment. It's enough to wire up the full send-and-verify flow before you buy anything.</p>
+      <p class="actions start">
+        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Create an account</a>
+      </p>
+    </section>
+
+    <section aria-labelledby="unlimited">
+      <h2 id="unlimited">Unlimited plan (your own phone)</h2>
+      <p class="muted">Unlimited messages through your own Android phone, priced by how many phones you connect. It covers the gateway only; any SMS charges from your carrier plan are separate. It doesn't include our dedicated Bangladesh numbers, which stay at ৳0.20 per message.</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Plan</th><th scope="col">Phones</th><th scope="col">Price per month</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Unlimited 1</th><td>1</td><td>$16</td></tr>
+            <tr><th scope="row">Unlimited 5</th><td>Up to 5</td><td>$49</td></tr>
+            <tr><th scope="row">Unlimited 20</th><td>Up to 20</td><td>$129</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">Fair use applies, as it does on every plan: unlimited means no cap on the number of messages we charge for, for normal business use (see the fair-use rules in our <a href="/acceptable-use/">Acceptable use</a> policy).</p>
+      <div class="owner-note"><p>Optional launch offer, for example the first month free, or a lower price on annual billing.</p></div>
+      <p class="muted"><strong>Paying with TapTap Send?</strong> Take $1 off any unlimited plan. TapTap usually charges about $1 per transfer from the US, UK, Europe and Australia, so what you pay in total is about the same as with another route.</p>
+      <div class="owner-note"><p>Confirm TapTap's fee and how it is added before publishing.</p></div>
+      <p class="muted"><strong>Minimum top-up for message packages:</strong> a person checks every payment, and a fixed transfer fee takes a bigger share of small payments, so very small top-ups cost more than they're worth to everyone.</p>
+      <div class="owner-note"><p>amount, suggested $10</p></div>
+      <div class="owner-note"><p>Optional: add quarterly or yearly prepay, so one transfer fee is spread over a longer period.</p></div>
+    </section>
+
     <section aria-labelledby="packages">
       <h2 id="packages">Credit packages</h2>
-      <p class="muted">
-        Packages are operator-managed plans, so sizes and bonuses change — the dashboard
-        list is the live source of truth. Every package has the same shape:
-      </p>
+      <p class="muted">Credits are sold in packages, and the exact sizes and any bonus credits are managed by the operator, so the live list in your dashboard is always current. Every package has four properties:</p>
       <ul class="guide-steps">
-        <li><strong>Type</strong> — OTP-only, bulk-only, or a combined balance.</li>
-        <li><strong>Credits</strong> — the SMS count added on approval, priced at ৳0.20 per credit in BDT terms.</li>
-        <li><strong>Validity</strong> — a window the credits stay usable for; balances expire per package.</li>
-        <li><strong>Currency</strong> — priced in BDT, USD, or EUR.</li>
+        <li><strong>Type:</strong> OTP-only, bulk-only, or a combined balance.</li>
+        <li><strong>Credits:</strong> the number of messages added when your payment is approved.</li>
+        <li><strong>Validity:</strong> how long those credits stay usable. Unused credits expire when the package window ends.</li>
+        <li><strong>Currency:</strong> priced in USD (phone track) or BDT (Bangladesh numbers).</li>
       </ul>
-      <div class="card nested">
-        <h3>Free trial</h3>
-        <p class="muted">Every new app starts with <strong>20 free messages valid for 30 days</strong> — enough to wire up the OTP flow before spending anything.</p>
+      <p class="muted">Examples at the base rates, before any bonus.</p>
+      <div class="owner-note"><p>Explain how credits work across the two services.</p></div>
+
+      <h3>Bangladesh numbers (BDT, sending included)</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Messages</th><th scope="col">Price</th><th scope="col">Validity</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>500</td><td>৳100</td><td><span class="owner-note inline">[days]</span></td></tr>
+            <tr><td>5,000</td><td>৳1,000</td><td><span class="owner-note inline">[days]</span></td></tr>
+            <tr><td>50,000</td><td>৳10,000</td><td><span class="owner-note inline">[days]</span></td></tr>
+          </tbody>
+        </table>
       </div>
-      <p class="actions">
-        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/buy">See live packages in the dashboard</a>
+
+      <h3>Your own phone (USD, gateway only)</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Messages</th><th scope="col">Price</th><th scope="col">Validity</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1,000</td><td>$1.50</td><td><span class="owner-note inline">[days]</span></td></tr>
+            <tr><td>10,000</td><td>$15</td><td><span class="owner-note inline">[days]</span></td></tr>
+            <tr><td>10,700</td><td>$16, the same as the 1-phone unlimited plan</td><td><span class="owner-note inline">[days]</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note">Illustrative sizes. See the live packages for today's bonuses and validity.</p>
+      <p class="actions start">
+        <a class="button secondary" href="https://app.dprelay.digital-papyrus.com/#/buy">See live packages in the dashboard</a>
       </p>
     </section>
-    <section aria-labelledby="paying">
-      <h2 id="paying">Ways to pay</h2>
+
+    <section aria-labelledby="how-to-pay">
+      <h2 id="how-to-pay">How to pay</h2>
       <ul class="guide-steps">
-        <li><strong>BDT</strong> — bKash Send Money, then submit the TrxID on the Buy credits screen.</li>
-        <li><strong>USD / EUR</strong> — any of five remittance services route to the bKash wallet: TapTap Send, Remitly, Wise, Western Union, WorldRemit.</li>
-        <li>TrxIDs are confirmed by a human operator — credits appear once the match is approved.</li>
+        <li><strong>In BDT:</strong> send money with bKash, then paste the TrxID on the Buy credits screen. The destination number and exact amount are shown there after you pick a package.</li>
+        <li><strong>In USD:</strong> send through TapTap Send, Remitly, Wise, Western Union or WorldRemit. All five deliver to bKash, so the steps after sending are the same.</li>
+        <li><strong>Approval:</strong> a person on our team confirms each payment. You can follow the status in your transaction list.</li>
       </ul>
-      <p class="actions">
-        <a class="button secondary" href="/payment/">Step-by-step payment guides</a>
-        <a class="button secondary" href="/docs/">API documentation</a>
+      <div class="owner-note"><p>typical approval time</p></div>
+      <p class="muted"><strong>About fees:</strong> each remittance service charges its own fee, paid to that service and not to dP Relay, so compare a few before you send. Choose the option where the fee is added on top of the amount, because the amount we receive has to match the package price.</p>
+      <p class="actions start">
+        <a class="button secondary" href="/docs/payments/">Step-by-step payment guides</a>
       </p>
     </section>
 
+    <section aria-labelledby="compare">
+      <h2 id="compare">How dP Relay compares with other phone gateways</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col"></th><th scope="col">dP Relay</th><th scope="col">textbee</th><th scope="col">httpSMS</th><th scope="col">SMS8</th><th scope="col">Twilio</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Price</th>
+              <td>$0.0015 per message, or unlimited from $16 a month</td>
+              <td>Free; $14.99 a month; $29.99 a month</td>
+              <td>Free; $10 a month; $20 a month</td>
+              <td>$29, $89 or $229 a month, by number of phones</td>
+              <td>Per SMS segment; $0.5962 to Bangladesh, plus possible carrier fees</td>
+            </tr>
+            <tr>
+              <th scope="row">Messages included</th>
+              <td>Pay as you go, or unlimited</td>
+              <td>300, 5,000 or 25,000 a month</td>
+              <td>200, 5,000 or 10,000 a month</td>
+              <td>Advertises unlimited SMS credits</td>
+              <td>Pay per message</td>
+            </tr>
+            <tr>
+              <th scope="row">Phones</th>
+              <td>1, 5 or 20, by plan</td>
+              <td>1 on Free, 5 on Pro, 15 on Scale</td>
+              <td>Several, each with its own API key</td>
+              <td>1, 5 or 20 phones</td>
+              <td>Not applicable</td>
+            </tr>
+            <tr>
+              <th scope="row">Carrier SMS charges</th>
+              <td>Separate, on your own plan</td>
+              <td>Separate, on your own plan</td>
+              <td>Separate, on your own plan</td>
+              <td>Separate, on your own plan</td>
+              <td>Included in the price</td>
+            </tr>
+            <tr>
+              <th scope="row">Bangladesh without your own phone</th>
+              <td>Our dedicated numbers, ৳0.20 per message</td>
+              <td>None found</td>
+              <td>None found</td>
+              <td>None found</td>
+              <td>Yes</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note">Prices checked on 11 October 2026 from the competitors' public pages, and they can change. Phone-gateway subscriptions don't include charges from your own mobile carrier. Twilio's Bangladesh rate is per outbound SMS segment, and carrier fees and sender rules may apply. Plans and phone limits vary.</p>
+      <div class="owner-note"><p>Recheck every figure before publishing; httpSMS's prices were not confirmed on its own site.</p></div>
+      <div class="internal-note">
+        <span class="note-label">Internal — remove before publishing</span>
+        Research sources: <a href="https://textbee.dev/pricing">textbee pricing</a> · <a href="https://sms8.io/pricing">SMS8 pricing</a> · <a href="https://freetier.co/directory/products/httpsms">httpSMS listing on freetier.co</a> · <a href="https://www.twilio.com/pt-br/sms/pricing/bd">Twilio Bangladesh pricing</a>
+      </div>
+    </section>
 
+    <section aria-labelledby="closing">
+      <h2 id="closing">Know what a message costs before you send it</h2>
+      <p class="muted">Two clear prices, 20 free messages to start.</p>
+      <p class="actions">
+        <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Create an account</a>
+        <a class="button secondary" href="/docs/">Read the docs</a>
+      </p>
+    </section>
   </main>
 
   <footer class="site-footer">
     <div class="wrap">
-      <span>dP Relay — digital papyrus SMS platform</span>
-      <span><a href="/docs/">API docs</a> · <a href="/faq/">FAQ</a> · <a href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a></span>
+      <div class="footer-cols">
+        <div class="footer-col">
+          <p class="footer-heading">Product</p>
+          <ul>
+            <li><a href="/pricing/">Pricing</a></li>
+            <li><a href="/docs/">Docs</a></li>
+            <li><a href="/faq/">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-heading">Company</p>
+          <ul>
+            <li><a href="/contact/">Contact</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-heading">Legal</p>
+          <ul>
+            <li><a href="/terms/">Terms of service</a></li>
+            <li><a href="/privacy/">Privacy policy</a></li>
+            <li><a href="/acceptable-use/">Acceptable use</a></li>
+          </ul>
+        </div>
+      </div>
+      <p class="footer-line">dP Relay is an SMS gateway by Digital Papyrus. © 2026 Digital Papyrus.</p>
     </div>
   </footer>
+
+  <script src="/site.js" defer></script>
 </body>
 </html>
