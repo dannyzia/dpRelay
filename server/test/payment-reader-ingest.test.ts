@@ -8,12 +8,14 @@
  *   regex failure payload (trxId "", amountBdt 0) is accepted, not 400;
  * - AC4: valid hints ⇒ fast path with ZERO AI calls (fetch never invoked,
  *   works with no GEMINI key at all);
- * - AC5/AC6: invalid/missing hints + rawBody ⇒ Gemini structured output
- *   (responseSchema + application/json asserted on the wire); extraction
- *   fills provider/trxId/amount, provider may be any of the 5 migration-021
- *   values; counterfeit → 200 discarded, legit-but-incomplete → 200
- *   discarded; AI transport/shape failure → 503 ai_unavailable (nothing
- *   persisted, the reader keeps the SMS and retries);
+ * - AC5/AC6: invalid/missing hints + rawBody ⇒ parsePaymentWithAi — Gemini
+ *   structured output (responseSchema + application/json asserted on the
+ *   wire) when GEMINI_API_KEY is set, the server-side regex fallback when
+ *   it is not; extraction fills provider/trxId/amount, provider may be any
+ *   of the 5 migration-021 values; not-a-payment → 200 discarded, counterfeit
+ *   → 200 discarded, legit-but-incomplete → 200 discarded; a CONFIGURED AI
+ *   transport/shape failure → 503 ai_unavailable (nothing persisted, the
+ *   reader keeps the SMS and retries);
  * - AC7: every legitimate insert triggers the shared auto-match rule —
  *   response carries autoMatch.candidates / proposedTransactionId, proven
  *   against a real pending purchase; nothing auto-awards;
@@ -224,24 +226,33 @@ describe("POST /v5/payments/ingest — AC4 fast path (hints present, zero AI)", 
 });
 
 describe("POST /v5/payments/ingest — AC3 optional hints fall back cleanly", () => {
-  it("regex-failure payload (trxId '', amount 0) with no AI key → 503 ai_unavailable, nothing stored", async () => {
+  it("regex-failure payload (trxId '', amount 0) with no AI key → regex fallback parses and inserts (no 503)", async () => {
     const r = await ingest(rawPayload());
-    expect(r.statusCode).toBe(503);
-    expect(r.json()).toMatchObject({ ok: false, code: "ai_unavailable" });
+    expect(r.statusCode).toBe(201);
+    expect(r.json()).toMatchObject({ ok: true, created: true, txnId: "8AC3K2L9P1" });
+    expect(paymentRow("8AC3K2L9P1")).toBeDefined();
+  });
+
+  it("a structure-free rawBody with no AI key → 200 discarded not_payment, nothing stored", async () => {
+    const r = await ingest(rawPayload({ rawBody: "hello world, please check your messages" }));
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ ok: true, created: false, discarded: true, reason: "not_payment" });
     const count = app.db.prepare("SELECT COUNT(*) AS n FROM payment_sms").get() as { n: number };
     expect(count.n).toBe(0);
   });
 
-  it("a malformed trxId hint is not a 400 — it falls through to the AI path", async () => {
+  it("a malformed trxId hint is not a 400 — it falls through to the extraction path", async () => {
+    // No key → the regex fallback re-reads the raw body and inserts.
     const r = await ingest(payload({ trxId: "short" }));
-    expect(r.statusCode).toBe(503);
-    expect(r.json()).toMatchObject({ code: "ai_unavailable" });
+    expect(r.statusCode).toBe(201);
+    expect(r.json()).toMatchObject({ ok: true, created: true, txnId: "8AC3K2L9P1" });
   });
 
-  it("an invalid amount hint (negative) falls through to the AI path too", async () => {
+  it("an invalid amount hint (negative) falls through to the extraction path too", async () => {
     const r = await ingest(payload({ amountBdt: -5 }));
-    expect(r.statusCode).toBe(503);
-    expect(r.json()).toMatchObject({ code: "ai_unavailable" });
+    expect(r.statusCode).toBe(201);
+    expect(r.json()).toMatchObject({ ok: true, created: true, txnId: "8AC3K2L9P1" });
+    expect(paymentRow("8AC3K2L9P1")).toMatchObject({ amount_paisa: 50000 });
   });
 });
 
@@ -253,12 +264,14 @@ describe("POST /v5/payments/ingest — AC5/AC6 AI extraction path", () => {
 
   it("sends Gemini structured output (responseSchema + application/json, temperature 0) and stores the extraction", async () => {
     const fetchMock = stubFetchResponding(200, geminiEnvelope({
+      isPayment: true,
       isLegitimate: true,
       provider: "rocket",
       trxId: "RKT9XY2B1A",
       amountBdt: 750.5,
       senderPhone: "01712345678",
       counterpartyType: "customer",
+      confidence: 0.9,
     }));
 
     const r = await ingest(rawPayload());
@@ -289,12 +302,14 @@ describe("POST /v5/payments/ingest — AC5/AC6 AI extraction path", () => {
 
   it("AC7: a legitimate insert triggers auto-match and proposes the matching pending order", async () => {
     stubFetchResponding(200, geminiEnvelope({
+      isPayment: true,
       isLegitimate: true,
       provider: "bkash",
       trxId: "MATCH00001",
       amountBdt: 500,
       senderPhone: "",
       counterpartyType: "customer",
+      confidence: 0.9,
     }));
     const txnId = await seedPendingPurchase(500);
 
@@ -313,12 +328,14 @@ describe("POST /v5/payments/ingest — AC5/AC6 AI extraction path", () => {
 
   it("AC7 counterfeit/fake SMS → 200 discarded + warning, no row, no auto-match", async () => {
     stubFetchResponding(200, geminiEnvelope({
+      isPayment: true,
       isLegitimate: false,
       provider: "",
       trxId: "",
       amountBdt: 0,
       senderPhone: "",
       counterpartyType: "unknown",
+      confidence: 0.8,
     }));
     const r = await ingest(rawPayload());
     expect(r.statusCode).toBe(200);
@@ -329,12 +346,14 @@ describe("POST /v5/payments/ingest — AC5/AC6 AI extraction path", () => {
 
   it("legit but incomplete extraction (no trxId) → 200 discarded, never fabricates money data", async () => {
     stubFetchResponding(200, geminiEnvelope({
+      isPayment: true,
       isLegitimate: true,
       provider: "bkash",
       trxId: "",
       amountBdt: 0,
       senderPhone: "",
       counterpartyType: "unknown",
+      confidence: 0.7,
     }));
     const r = await ingest(rawPayload());
     expect(r.statusCode).toBe(200);

@@ -7,15 +7,18 @@
  * here. It has no device enrollment, no OTP role, no FCM, no heartbeat — one
  * Bearer secret (PAYMENT_READER_SECRET) gates its one route.
  *
- * ISSUE-98 pipeline (AC3–AC7):
+ * ISSUE-98 pipeline (AC3–AC7, stage order round 2):
  * - hints first: `{ trxId, amountBdt }` are OPTIONAL (AC3) — when both are
  *   valid the row is inserted directly, zero AI calls (AC4's "0ms path");
- * - rawBody fallback: missing/invalid hints with a rawBody present go to the
- *   Gemini structured-output extractor (AC5/AC6);
- * - verdict: counterfeit/spam → warn + discard; legitimate → INSERT OR
- *   IGNORE into payment_sms + the auto-match trigger (AC7);
- * - AI unreachable (no key, timeout, bad response) → 503 ai_unavailable, so
- *   the reader's durable queue keeps the SMS and retries with backoff —
+ * - rawBody fallback: missing/invalid hints with a rawBody present go to
+ *   parsePaymentWithAi — Gemini structured output when GEMINI_API_KEY is
+ *   configured, the server-side Bengali/alternate-format regex fallback
+ *   when it is not (graceful degradation, no 503 just for a missing key);
+ * - verdict: not-a-payment → discard; counterfeit/spam → warn + discard;
+ *   legitimate with trxId.length >= 8 + amount > 0 → INSERT OR IGNORE into
+ *   payment_sms + the auto-match trigger (AC7);
+ * - configured AI unreachable (timeout, bad response) → 503 ai_unavailable,
+ *   so the reader's durable queue keeps the SMS and retries with backoff —
  *   money is never dropped on an infrastructure error.
  *
  * Feeds the SAME payment pipeline as the gateway ingest
@@ -28,8 +31,8 @@
  * the AC5 extraction path.
  */
 import type { FastifyPluginAsync } from "fastify";
+import { parsePaymentWithAi } from "../services/ai-payment-parser.js";
 import { constantTimeEquals, newId } from "../services/crypto.js";
-import { extractPayment } from "../services/payment-extract.js";
 import { autoMatchCandidates } from "./admin-payments.js";
 import { TXN_ID_PATTERN } from "./device.js";
 
@@ -108,7 +111,7 @@ const paymentRoutes: FastifyPluginAsync = async (app) => {
     // --- AC4: fast path — both hints valid ⇒ zero AI calls, same ms as F8. --
     const trxIdHint = typeof body.trxId === "string" ? body.trxId : "";
     const amountHint =
-      typeof body.amountBdt === "number" && Number.isFinite(body.amountBdt) && body.amountBdt >= 0
+      typeof body.amountBdt === "number" && Number.isFinite(body.amountBdt) && body.amountBdt > 0
         ? Math.round(body.amountBdt * 100)
         : null;
     const trxIdValid = trxIdHint !== "" && TXN_ID_PATTERN.test(trxIdHint);
@@ -122,18 +125,14 @@ const paymentRoutes: FastifyPluginAsync = async (app) => {
       txnId = trxIdHint;
       amountPaisa = amountHint as number;
     } else if (rawBody !== "") {
-      // --- AC5: AI extraction path (hints missing or invalid). -------------
-      if (app.config.geminiApiKey === "") {
-        // Fail closed: nothing verified, nothing stored; the reader backs off
-        // and retries — the raw SMS stays in its durable queue.
-        return reply
-          .code(503)
-          .send({ ok: false, error: "AI extraction unavailable (not configured)", code: "ai_unavailable" });
-      }
+      // --- AC5: extraction path (hints missing or invalid). ----------------
+      // parsePaymentWithAi: Gemini when a key is configured, the server-side
+      // regex fallback when it is not (never throws for a missing key).
       let extraction;
       try {
-        extraction = await extractPayment(rawBody, sender, app.config);
+        extraction = await parsePaymentWithAi({ sender, rawBody }, app.config);
       } catch (err) {
+        // Only a CONFIGURED AI call lands here — 503 so the reader retries.
         app.log.warn(
           { sender, reason: err instanceof Error ? err.message : String(err) },
           "AI payment extraction failed — reader will retry",
@@ -143,10 +142,20 @@ const paymentRoutes: FastifyPluginAsync = async (app) => {
           .send({ ok: false, error: "AI extraction unavailable", code: "ai_unavailable" });
       }
 
+      if (!extraction.isPayment) {
+        // Not a payment SMS at all (balance inquiry, spam, unrelated text).
+        app.log.info({ sender, receivedAt }, "non-payment SMS discarded (extraction verdict)");
+        return reply.code(200).send({
+          ok: true,
+          created: false,
+          discarded: true,
+          reason: "not_payment",
+        });
+      }
       if (!extraction.isLegitimate) {
         // AC7: counterfeit/fake SMS — warn and discard (200 so the reader's
         // queue drops it deliberately rather than retrying forever).
-        app.log.warn({ sender, receivedAt }, "counterfeit/fake payment SMS discarded (AI verdict)");
+        app.log.warn({ sender, receivedAt }, "counterfeit/fake payment SMS discarded (extraction verdict)");
         return reply.code(200).send({
           ok: true,
           created: false,
@@ -154,12 +163,13 @@ const paymentRoutes: FastifyPluginAsync = async (app) => {
           reason: "not_legitimate",
         });
       }
-      if (extraction.provider === "" || extraction.trxId === "" || extraction.amountBdt <= 0) {
-        // Legit but uninsertable: payment_sms requires provider + UNIQUE
-        // txn_id + amount. Never fabricate money data — discard loudly.
+      if (extraction.trxId.length < 8 || extraction.amountBdt <= 0) {
+        // Stage order: insert when isPayment && isLegitimate && trxId.length
+        // >= 8 (+ a positive amount for payment_sms). Never fabricate money
+        // data — discard loudly.
         app.log.warn(
           { sender, provider: extraction.provider || "unknown", hasTrxId: extraction.trxId !== "" },
-          "AI extraction incomplete for a legitimate SMS — discarded",
+          "extraction incomplete for a legitimate SMS — discarded",
         );
         return reply.code(200).send({
           ok: true,
@@ -168,17 +178,25 @@ const paymentRoutes: FastifyPluginAsync = async (app) => {
           reason: "extraction_incomplete",
         });
       }
-      rowProvider = extraction.provider;
+      // The AI may report a different service than the sender label (AC6:
+      // rocket/upay/bank rows); the regex fallback cannot infer one, so the
+      // sender-derived provider (bkash/nagad, already validated non-null)
+      // fills the gap — payment_sms's CHECK never sees an empty string.
+      rowProvider = extraction.provider !== "" ? extraction.provider : provider;
       txnId = extraction.trxId;
       amountPaisa = Math.round(extraction.amountBdt * 100);
-      viaAi = true;
+      // viaAi means "the Gemini model was consulted" — the regex fallback
+      // path (no key) is deterministic server-side parsing, not AI.
+      viaAi = app.config.geminiApiKey !== "";
       app.log.info(
         {
           provider: rowProvider,
           counterpartyType: extraction.counterpartyType,
-          hasSenderPhone: extraction.senderPhone !== "",
+          hasSenderPhone: extraction.senderPhone !== null,
+          confidence: extraction.confidence,
+          viaAi,
         },
-        "AI payment extraction succeeded",
+        "payment extraction succeeded",
       );
     } else {
       return reply.code(400).send({
