@@ -2,6 +2,16 @@
  * M1 auth flow tests: register → login → refresh, device registration +
  * heartbeat, and the requireAuth/requireDevice choke points.
  * Uses temp DBs and a test JWT secret; no real network.
+ *
+ * ISSUE-46 (test isolation): every test mints its own user/session fixture
+ * (freshSession/nextEmail/nextLabel) instead of inheriting accessToken,
+ * refreshToken or EMAIL from whichever test ran first — the file used to
+ * fail under `vitest run --sequence.shuffle` because rotation tests consumed
+ * tokens minted by earlier tests. Fixtures come from a monotonic counter:
+ * deterministic (no Date.now/Math.random) yet unique under any execution
+ * order. Register+login calls per run total 23, under the 30/hour per-IP
+ * customer-auth rate limit (AUTH_RATE_MAX_PER_HOUR), so fixture churn can
+ * never trip 429.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { join } from "node:path";
@@ -17,12 +27,56 @@ function makeApp(): FastifyInstance {
   return buildApp({ dbPath, env: { JWT_SECRET: TEST_JWT_SECRET } });
 }
 
-const EMAIL = "taylor@example.com";
 const PASSWORD = "correct-horse-battery";
 
 let app: FastifyInstance;
-let accessToken = "";
-let refreshToken = "";
+
+/**
+ * Monotonic fixture counter: unique under any test order and reproducible
+ * without wall-clock or randomness (test determinism rule).
+ */
+let seq = 0;
+
+/** Unique email per test — no two tests can ever contend for one account. */
+function nextEmail(prefix: string): string {
+  seq += 1;
+  return `${prefix}-${seq}@example.com`;
+}
+
+/** Unique device label per test — keeps per-test DB row lookups unambiguous. */
+function nextLabel(prefix: string): string {
+  seq += 1;
+  return `${prefix}-${seq}`;
+}
+
+interface Session {
+  email: string;
+  accessToken: string;
+  refreshToken: string;
+}
+
+/**
+ * Registers a brand-new user and logs in, returning fresh tokens. Tests that
+ * need auth state call this themselves, so no test depends on another test
+ * having run first (ISSUE-46).
+ */
+async function freshSession(prefix: string): Promise<Session> {
+  const email = nextEmail(prefix);
+  const reg = await app.inject({
+    method: "POST",
+    url: "/v5/auth/register",
+    payload: { email, password: PASSWORD },
+  });
+  expect(reg.statusCode).toBe(201);
+  const login = await app.inject({
+    method: "POST",
+    url: "/v5/auth/login",
+    payload: { email, password: PASSWORD },
+  });
+  expect(login.statusCode).toBe(200);
+  const body = login.json();
+  return { email, accessToken: body.accessToken, refreshToken: body.refreshToken };
+}
 
 beforeAll(async () => {
   app = makeApp();
@@ -37,17 +91,24 @@ describe("POST /v5/auth/register", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v5/auth/register",
-      payload: { email: EMAIL, password: PASSWORD },
+      payload: { email: nextEmail("creates-user"), password: PASSWORD },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json()).toEqual({ ok: true });
   });
 
   it("normalizes email case and rejects duplicates with 409", async () => {
+    const email = nextEmail("dupes");
+    const first = await app.inject({
+      method: "POST",
+      url: "/v5/auth/register",
+      payload: { email, password: PASSWORD },
+    });
+    expect(first.statusCode).toBe(201);
     const res = await app.inject({
       method: "POST",
       url: "/v5/auth/register",
-      payload: { email: EMAIL.toUpperCase(), password: PASSWORD },
+      payload: { email: email.toUpperCase(), password: PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ ok: false, code: "email_taken" });
@@ -76,25 +137,31 @@ describe("POST /v5/auth/register", () => {
 
 describe("POST /v5/auth/login", () => {
   it("returns access + refresh tokens for valid credentials", async () => {
+    const email = nextEmail("valid-creds");
+    const reg = await app.inject({
+      method: "POST",
+      url: "/v5/auth/register",
+      payload: { email, password: PASSWORD },
+    });
+    expect(reg.statusCode).toBe(201);
     const res = await app.inject({
       method: "POST",
       url: "/v5/auth/login",
-      payload: { email: EMAIL, password: PASSWORD },
+      payload: { email, password: PASSWORD },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.ok).toBe(true);
     expect(typeof body.accessToken).toBe("string");
     expect(typeof body.refreshToken).toBe("string");
-    accessToken = body.accessToken;
-    refreshToken = body.refreshToken;
   });
 
   it("rejects wrong password with 401 and never leaks hash material", async () => {
+    const s = await freshSession("wrong-pass");
     const res = await app.inject({
       method: "POST",
       url: "/v5/auth/login",
-      payload: { email: EMAIL, password: "wrong-password" },
+      payload: { email: s.email, password: "wrong-password" },
     });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ ok: false, code: "invalid_credentials" });
@@ -104,7 +171,7 @@ describe("POST /v5/auth/login", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v5/auth/login",
-      payload: { email: "ghost@example.com", password: PASSWORD },
+      payload: { email: nextEmail("ghost"), password: PASSWORD },
     });
     expect(res.statusCode).toBe(401);
     expect(res.json()).toMatchObject({ ok: false, code: "invalid_credentials" });
@@ -113,33 +180,32 @@ describe("POST /v5/auth/login", () => {
 
 describe("POST /v5/auth/refresh", () => {
   it("rotates the refresh token and issues a new access token", async () => {
+    const s = await freshSession("rotate");
     const res = await app.inject({
       method: "POST",
       url: "/v5/auth/refresh",
-      payload: { refreshToken },
+      payload: { refreshToken: s.refreshToken },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.ok).toBe(true);
     expect(typeof body.accessToken).toBe("string");
     expect(typeof body.refreshToken).toBe("string");
-    expect(body.refreshToken).not.toBe(refreshToken); // single-use rotation
-    accessToken = body.accessToken;
-    refreshToken = body.refreshToken;
+    expect(body.refreshToken).not.toBe(s.refreshToken); // single-use rotation
   });
 
   it("rejects reuse of an already-rotated refresh token (single-use)", async () => {
+    const s = await freshSession("reuse");
     const first = await app.inject({
       method: "POST",
       url: "/v5/auth/refresh",
-      payload: { refreshToken },
+      payload: { refreshToken: s.refreshToken },
     });
     expect(first.statusCode).toBe(200);
-    const stale = refreshToken;
     const second = await app.inject({
       method: "POST",
       url: "/v5/auth/refresh",
-      payload: { refreshToken: stale },
+      payload: { refreshToken: s.refreshToken }, // already consumed above
     });
     expect(second.statusCode).toBe(401);
     expect(second.json()).toMatchObject({ ok: false, code: "invalid_refresh_token" });
@@ -157,8 +223,6 @@ describe("POST /v5/auth/refresh", () => {
 });
 
 describe("device registration + heartbeat (device plane)", () => {
-  let deviceApiKey = "";
-
   it("POST /v5/device/register requires a user JWT", async () => {
     const res = await app.inject({
       method: "POST",
@@ -170,25 +234,26 @@ describe("device registration + heartbeat (device plane)", () => {
   });
 
   it("registers a device and returns the raw key exactly once", async () => {
+    const s = await freshSession("dev-register");
+    const label = nextLabel("test phone");
     const res = await app.inject({
       method: "POST",
       url: "/v5/device/register",
-      headers: { authorization: `Bearer ${accessToken}` },
-      payload: { label: "test phone" },
+      headers: { authorization: `Bearer ${s.accessToken}` },
+      payload: { label },
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
     expect(body.ok).toBe(true);
     expect(body.apiKey).toMatch(/^[0-9a-f]{64}$/); // 32 random bytes hex
-    deviceApiKey = body.apiKey;
 
     // Raw key never persisted — only its SHA-256 digest:
-    const digest = Buffer.from(deviceApiKey, "utf8").toString("hex");
     const row = app.db
-      .prepare("SELECT api_key_hash FROM devices WHERE label = 'test phone'")
-      .get() as { api_key_hash: string };
-    expect(row.api_key_hash).not.toBe(deviceApiKey);
+      .prepare("SELECT api_key_hash FROM devices WHERE label = ?")
+      .get(label) as { api_key_hash: string };
+    expect(row.api_key_hash).not.toBe(body.apiKey);
     expect(row.api_key_hash).toHaveLength(64);
+    expect(row.api_key_hash).toBe(app.sha256Hex(body.apiKey));
   });
 
   it("POST /v5/device/heartbeat requires the device key", async () => {
@@ -198,9 +263,20 @@ describe("device registration + heartbeat (device plane)", () => {
   });
 
   it("accepts a valid heartbeat and updates last_seen_at", async () => {
+    const s = await freshSession("heartbeat");
+    const label = nextLabel("heartbeat phone");
+    const reg = await app.inject({
+      method: "POST",
+      url: "/v5/device/register",
+      headers: { authorization: `Bearer ${s.accessToken}` },
+      payload: { label },
+    });
+    expect(reg.statusCode).toBe(201);
+    const deviceApiKey: string = reg.json().apiKey;
+
     const before = app.db
-      .prepare("SELECT last_seen_at FROM devices WHERE label = 'test phone'")
-      .get() as { last_seen_at: number | null };
+      .prepare("SELECT last_seen_at FROM devices WHERE label = ?")
+      .get(label) as { last_seen_at: number | null };
     expect(before.last_seen_at).toBeNull();
 
     const res = await app.inject({
@@ -212,8 +288,8 @@ describe("device registration + heartbeat (device plane)", () => {
     expect(res.json()).toMatchObject({ ok: true });
 
     const after = app.db
-      .prepare("SELECT last_seen_at FROM devices WHERE label = 'test phone'")
-      .get() as { last_seen_at: number | null };
+      .prepare("SELECT last_seen_at FROM devices WHERE label = ?")
+      .get(label) as { last_seen_at: number | null };
     expect(after.last_seen_at).not.toBeNull();
     expect(Math.abs(after.last_seen_at! - Date.now() / 1000)).toBeLessThan(60);
   });
@@ -229,14 +305,15 @@ describe("device registration + heartbeat (device plane)", () => {
   });
 
   it("rejects a revoked device key", async () => {
-    // Register a second device directly in the DB, then revoke it.
+    // Own user + directly-inserted revoked row: no reliance on other tests.
+    const s = await freshSession("revoked");
     const digest = app.sha256Hex("a".repeat(64));
     app.db
       .prepare(
         "INSERT INTO devices (id, user_id, label, api_key_hash, revocable, revoked_at, created_at) " +
-          "VALUES ('dev-revoked', (SELECT id FROM users LIMIT 1), 'revoked', ?, 1, unixepoch(), unixepoch())",
+          "VALUES ('dev-revoked', (SELECT id FROM users WHERE email = ?), ?, ?, 1, unixepoch(), unixepoch())",
       )
-      .run(digest);
+      .run(s.email, nextLabel("revoked"), digest);
     const res = await app.inject({
       method: "POST",
       url: "/v5/device/heartbeat",

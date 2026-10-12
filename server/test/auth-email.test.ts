@@ -54,12 +54,19 @@ async function registerUser(email: string): Promise<string> {
   return match[1];
 }
 
-/** Seeds a configured SMTP row directly (the routes' PUT is covered elsewhere). */
+/**
+ * Seeds a configured SMTP row directly (the routes' PUT is covered
+ * elsewhere). Idempotent upsert so every test can call it itself instead of
+ * relying on the mail-status test having run first (ISSUE-46 shuffle safety).
+ */
 function seedMailConfig(): void {
   app.db
     .prepare(
       "INSERT INTO mail_config (id, host, port, username, password_encrypted, from_address, updated_at) " +
-        "VALUES (1, 'smtp.example.test', 465, 'u@example.test', 'v1:aaaa:bbbb:cccc', 'f@example.test', unixepoch())",
+        "VALUES (1, 'smtp.example.test', 465, 'u@example.test', 'v1:aaaa:bbbb:cccc', 'f@example.test', unixepoch()) " +
+        "ON CONFLICT(id) DO UPDATE SET host = excluded.host, port = excluded.port, " +
+        "username = excluded.username, password_encrypted = excluded.password_encrypted, " +
+        "from_address = excluded.from_address, updated_at = excluded.updated_at",
     )
     .run();
 }
@@ -78,6 +85,9 @@ afterAll(async () => {
 
 describe("mail-status (public feature flag)", () => {
   it("reports configured:false before SMTP setup and true after", async () => {
+    // ISSUE-46: force the unconfigured start state — a prior test in this
+    // file may already have seeded a config (shuffle-safe ordering).
+    app.db.prepare("DELETE FROM mail_config").run();
     const before = await app.inject({ method: "GET", url: "/v5/auth/mail-status" });
     expect(before.json()).toEqual({ ok: true, configured: false });
     seedMailConfig();
@@ -88,6 +98,9 @@ describe("mail-status (public feature flag)", () => {
 
 describe("email verification (soft)", () => {
   it("registers fine with mail unconfigured and verifies via an emailed token once configured", async () => {
+    // ISSUE-46: configured mailer on the shared app — self-sufficient fixture.
+    seedMailConfig();
+
     // Unconfigured app: registration must NOT fail and no email goes out.
     const bare = makeApp({ DASHBOARD_BASE_URL: "" });
     try {
@@ -126,6 +139,7 @@ describe("email verification (soft)", () => {
   });
 
   it("rejects unknown and expired verification tokens", async () => {
+    seedMailConfig(); // ISSUE-46: registerUser below must send the verify mail
     const unknown = await app.inject({ method: "POST", url: "/v5/auth/verify-email", payload: { token: "nope" } });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json()).toMatchObject({ code: "invalid_token" });
@@ -143,6 +157,7 @@ describe("email verification (soft)", () => {
 
 describe("self-service password reset", () => {
   it("forgot is generic, supersession-safe, and reset revokes every session", async () => {
+    seedMailConfig(); // ISSUE-46: forgot mails below need a configured mailer
     const cookie = await registerUser("reset-user@example.test");
     app.db.prepare("UPDATE user_sessions SET expires_at = unixepoch() + 3600").run();
     // The register above sent its own verification mail — reset the capture
