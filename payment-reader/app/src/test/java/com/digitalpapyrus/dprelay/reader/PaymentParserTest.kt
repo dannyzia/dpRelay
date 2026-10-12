@@ -106,4 +106,17 @@ class PaymentParserTest {
         assertNotNull(parsedB)
         assertEquals(120050, parsedB?.amountPaisa)
     }
+
+    @Test
+    fun `providerFor classifies senders without touching the body`() {
+        // ISSUE-98: the unparseable-SMS fallback still knows its provider.
+        assertEquals("bkash", PaymentParser.providerFor("bKash"))
+        assertEquals("bkash", PaymentParser.providerFor("BKASH"))
+        assertEquals("bkash", PaymentParser.providerFor("16247"))
+        assertEquals("nagad", PaymentParser.providerFor("Nagad"))
+        assertEquals("nagad", PaymentParser.providerFor("NAGAD"))
+        assertEquals("nagad", PaymentParser.providerFor("16167"))
+        assertNull(PaymentParser.providerFor("DPRELAY"))
+        assertNull(PaymentParser.providerFor("+8801711000000"))
+    }
 }

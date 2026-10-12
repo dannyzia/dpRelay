@@ -41,10 +41,15 @@ class UploadQueue(
     /**
      * Queues an item unless its TrxID is already waiting. Returns true when
      * the queue changed.
+     *
+     * ISSUE-98 (AC1/AC2): an unparseable SMS queues with `trxId == ""` — it
+     * has no identity to dedupe on yet (the server assigns one after AI
+     * extraction), so EVERY such item must be allowed in; dedupe applies
+     * only to real TrxIDs.
      */
     fun enqueue(item: PendingUpload): Boolean {
         val items = load()
-        if (items.any { it.trxId == item.trxId }) return false
+        if (item.trxId.isNotEmpty() && items.any { it.trxId == item.trxId }) return false
         items.add(item)
         save(items)
         return true

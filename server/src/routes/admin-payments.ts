@@ -27,12 +27,13 @@
  * defining the rule twice.
  */
 import type { FastifyPluginAsync } from "fastify";
+import type { Db } from "../db.js";
 import { asRecord, asString } from "../services/parse.js";
 import { awardPendingTransaction } from "../services/credits.js";
 import { readConfigValue } from "./admin-config.js";
 
 /** Tunable match parameters, resolved at request time. */
-interface MatchConfig {
+export interface MatchConfig {
   windowMin: number;
   windowSec: number;
   toleranceBdt: number;
@@ -58,7 +59,7 @@ interface PaymentRow {
   matched_notes: string | null;
 }
 
-interface PendingTxn {
+export interface PendingTxn {
   id: string;
   app_id: string;
   package_code: string;
@@ -95,43 +96,72 @@ function queryInt(value: unknown, fallback: number, min: number, max: number): n
 
 const PAYMENT_STATUSES = ["unmatched", "matched", "approved", "rejected"] as const;
 
+/** Reads both whitelisted match keys (admin_config) at request time. */
+export function loadMatchConfig(db: Db): MatchConfig {
+  const windowMin = readConfigValue(db, "payment_match_window_min");
+  const toleranceBdt = readConfigValue(db, "payment_match_tolerance_bdt");
+  const row = db
+    .prepare(
+      "SELECT MAX(updated_at) AS updated_at FROM admin_config " +
+        "WHERE key IN ('payment_match_window_min', 'payment_match_tolerance_bdt')",
+    )
+    .get() as { updated_at: number | null } | undefined;
+  return { windowMin, windowSec: windowMin * 60, toleranceBdt, updatedAt: row?.updated_at ?? 0 };
+}
+
+/**
+ * Spec auto-match rule, second half (the TrxID half is the join: a pending
+ * transaction holding this payment's TrxID IS the proposal). A pending
+ * transaction is a candidate when it holds no TrxID yet (one already
+ * committed elsewhere would 409 at attach time, so it is not actionable),
+ * the amount is within tolerance (default 0 = exact), and the SMS arrived
+ * within the window of the request.
+ *
+ * F5 amendment (ISSUE-89): CURRENCY-AWARE — only BDT-package transactions
+ * are auto-match candidates. USD/EUR packages are paid via the remittance
+ * rails as bKash BDT-equivalents, so amount/time arithmetic can never
+ * prove they bought THAT package: they are MANUAL operator approvals by
+ * design (approve with a remittance reference note) and must never be
+ * auto-matched or auto-attached.
+ *
+ * Exported for ISSUE-98 (AC7): the reader ingest route triggers this SAME
+ * rule the moment a row lands — the rule must exist in exactly one place.
+ */
+export function isCandidate(p: { txnId: string; amountPaisa: number; receivedAt: number }, t: PendingTxn, cfg: MatchConfig): boolean {
+  if (t.currency !== "BDT") return false;
+  if (t.trx_id !== null) return false;
+  if (Math.abs(t.amount_bdt * 100 - p.amountPaisa) > cfg.toleranceBdt * 100) return false;
+  return Math.abs(p.receivedAt - t.requested_at) <= cfg.windowSec;
+}
+
+/**
+ * ISSUE-98 (AC7): the ingest-time auto-match trigger — candidates for ONE
+ * freshly ingested payment under the tunable rule the panel also derives at
+ * read time, so the route can log and surface the proposal the instant the
+ * row lands. Nothing is awarded here: the money-safety rule above still
+ * holds (approve is always a human click).
+ *
+ * @param db Open database.
+ * @param payment The just-ingested row's match inputs.
+ * @return Pending BDT transactions that propose a match for this payment.
+ */
+export function autoMatchCandidates(
+  db: Db,
+  payment: { txnId: string; amountPaisa: number; receivedAt: number },
+): PendingTxn[] {
+  const cfg = loadMatchConfig(db);
+  const pending = db
+    .prepare(
+      "SELECT t.id, t.app_id, t.package_code, p.currency, t.amount_bdt, t.requested_at, t.trx_id " +
+        "FROM credit_transactions t JOIN packages p ON p.id = t.package_id " +
+        "WHERE t.status = 'pending' ORDER BY t.requested_at ASC",
+    )
+    .all() as PendingTxn[];
+  return pending.filter((t) => isCandidate(payment, t, cfg));
+}
+
 const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
   const db = app.db;
-
-  /** Reads both whitelisted match keys (admin_config) at request time. */
-  function loadMatchConfig(): MatchConfig {
-    const windowMin = readConfigValue(db, "payment_match_window_min");
-    const toleranceBdt = readConfigValue(db, "payment_match_tolerance_bdt");
-    const row = db
-      .prepare(
-        "SELECT MAX(updated_at) AS updated_at FROM admin_config " +
-          "WHERE key IN ('payment_match_window_min', 'payment_match_tolerance_bdt')",
-      )
-      .get() as { updated_at: number | null } | undefined;
-    return { windowMin, windowSec: windowMin * 60, toleranceBdt, updatedAt: row?.updated_at ?? 0 };
-  }
-
-  /**
-   * Spec auto-match rule, second half (the TrxID half is the join: a pending
-   * transaction holding this payment's TrxID IS the proposal). A pending
-   * transaction is a candidate when it holds no TrxID yet (one already
-   * committed elsewhere would 409 at attach time, so it is not actionable),
-   * the amount is within tolerance (default 0 = exact), and the SMS arrived
-   * within the window of the request.
-   *
-   * F5 amendment (ISSUE-89): CURRENCY-AWARE — only BDT-package transactions
-   * are auto-match candidates. USD/EUR packages are paid via the remittance
-   * rails as bKash BDT-equivalents, so amount/time arithmetic can never
-   * prove they bought THAT package: they are MANUAL operator approvals by
-   * design (approve with a remittance reference note) and must never be
-   * auto-matched or auto-attached.
-   */
-  function isCandidate(p: { txnId: string; amountPaisa: number; receivedAt: number }, t: PendingTxn, cfg: MatchConfig): boolean {
-    if (t.currency !== "BDT") return false;
-    if (t.trx_id !== null) return false;
-    if (Math.abs(t.amount_bdt * 100 - p.amountPaisa) > cfg.toleranceBdt * 100) return false;
-    return Math.abs(p.receivedAt - t.requested_at) <= cfg.windowSec;
-  }
 
   /** The single status rule (see file header). */
   function deriveStatus(row: PaymentRow, candidates: PendingTxn[]): (typeof PAYMENT_STATUSES)[number] {
@@ -273,7 +303,7 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
    * the current tunable config.
    */
   app.get("/v5/admin/payments", { preHandler: [app.requireOperator] }, async (request, reply) => {
-    const cfg = loadMatchConfig();
+    const cfg = loadMatchConfig(db);
     const query = asRecord(request.query) ?? {};
     const limit = queryInt(query.limit, 200, 1, 1000);
 
@@ -392,7 +422,7 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
         code: "payment_rejected",
       });
     }
-    const cfg = loadMatchConfig();
+    const cfg = loadMatchConfig(db);
 
     // Target: the transaction already holding this TrxID, else the single
     // candidate under the current rule (0 → transaction_required, >1 →
@@ -539,7 +569,7 @@ const adminPaymentRoutes: FastifyPluginAsync = async (app) => {
         code: "payment_rejected",
       });
     }
-    const cfg = loadMatchConfig();
+    const cfg = loadMatchConfig(db);
     const outcome = runAction(payment, transactionId, cfg);
     if (!("ok" in outcome)) {
       return reply.code(outcome.status).send({ ok: false, error: outcome.error, code: outcome.code });

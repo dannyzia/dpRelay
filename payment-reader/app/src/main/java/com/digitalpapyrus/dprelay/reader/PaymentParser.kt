@@ -37,10 +37,26 @@ object PaymentParser {
     fun isPaymentSms(sender: String): Boolean = sender in BKASH_SENDERS || sender in NAGAD_SENDERS
 
     /**
+     * Sender-only provider derivation WITHOUT touching the body (ISSUE-98):
+     * lets an unparseable SMS still queue with a meaningful local provider —
+     * the fallback when [parse] returns null.
+     *
+     * @param sender originating address as delivered by the carrier.
+     * @return "bkash" / "nagad", or null for an unclassified sender.
+     */
+    fun providerFor(sender: String): String? =
+        when {
+            sender in BKASH_SENDERS -> "bkash"
+            sender in NAGAD_SENDERS -> "nagad"
+            else -> null
+        }
+
+    /**
      * Extracts TrxID (first \b[A-Z0-9]{10}\b) and amount (first `Tk N(.NN)?`)
      * from a confirmation body. Returns null when either is missing or the
-     * sender is not a known payment sender — the caller logs and drops it
-     * (malformed SMS is ignored-with-log, never uploaded).
+     * sender is not a known payment sender — ISSUE-98 (AC1/AC2): the caller
+     * must NOT drop the SMS in that case, only mark the hints as absent and
+     * forward the rawBody for server-side AI extraction.
      *
      * @param sender originating address as delivered by the carrier.
      * @param body raw SMS body — parsed, never logged.
@@ -50,7 +66,7 @@ object PaymentParser {
         val txnId = TXN_ID_REGEX.find(body)?.value ?: return null
         val amountMatch = AMOUNT_REGEX.find(body) ?: return null
         val amountPaisa = (amountMatch.groupValues[1].toDouble() * 100).roundToInt()
-        val provider = if (sender in BKASH_SENDERS) "bkash" else "nagad"
+        val provider = providerFor(sender) ?: return null
         return ParsedPaymentSms(txnId = txnId, amountPaisa = amountPaisa, provider = provider)
     }
 
