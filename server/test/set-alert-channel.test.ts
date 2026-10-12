@@ -50,7 +50,19 @@ async function startMocks(opts: MockOptions = {}): Promise<{
   const servers: Server[] = [];
 
   const tg = createServer((req, res) => {
-    tgCalls.push({ method: req.method ?? "", path: req.url ?? "" });
+    const path = req.url ?? "";
+    // ISSUE-92: record ONLY the script's Bot API paths (/bot<token>/…).
+    // Vitest runs workers in parallel and ephemeral ports are recycled, so a
+    // stray request from another worker's webhook retry can land on this
+    // mock — recording it would poison assertions like `tgCalls == []`.
+    // A stray is not recorded AND gets no HTTP response (socket destroyed):
+    // the other worker still observes the transport error its own closed-port
+    // test expects, whereas a 404/200 here would fail their assertions.
+    if (!path.startsWith("/bot")) {
+      req.socket.destroy();
+      return;
+    }
+    tgCalls.push({ method: req.method ?? "", path });
     req.resume();
     req.on("end", () => {
       // getMe and sendMessage both answer 200 {ok:true} on success; the test
@@ -61,10 +73,18 @@ async function startMocks(opts: MockOptions = {}): Promise<{
   });
 
   const render = createServer((req, res) => {
-    renderCalls.push({ method: req.method ?? "", path: req.url ?? "" });
+    const url = req.url ?? "";
+    // ISSUE-92: same cross-worker port-recycling race as the tg mock — the
+    // script only ever calls /v1/services/…, so anything else is a stray
+    // (e.g. POST /otp-status from another worker) and must neither be
+    // recorded nor answered (see the tg mock for why it is destroyed).
+    if (!url.startsWith("/v1/services")) {
+      req.socket.destroy();
+      return;
+    }
+    renderCalls.push({ method: req.method ?? "", path: url });
     req.resume();
     req.on("end", () => {
-      const url = req.url ?? "";
       if (req.method === "GET" && url.endsWith("/env-vars")) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify([{ key: "JWT_SECRET", value: "test-only" }]));
@@ -103,7 +123,16 @@ async function startMocks(opts: MockOptions = {}): Promise<{
     renderCalls,
     stop: () =>
       Promise.all(
-        servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+        servers.map(
+          (s) =>
+            new Promise<void>((resolve) => {
+              s.close(() => resolve());
+              // Force-drop stray/keep-alive sockets so the listener (and its
+              // ephemeral port) is released the moment teardown runs — a
+              // bind held past teardown is what enables the next collision.
+              s.closeAllConnections();
+            }),
+        ),
       ).then(() => undefined),
   };
 }
@@ -114,6 +143,50 @@ afterEach(async () => {
     await stopMocks();
     stopMocks = null;
   }
+});
+
+describe("set-alert-channel.cjs mock scope isolation (ISSUE-92)", () => {
+  it("ignores cross-worker stray requests without recording or answering them", async () => {
+    const mocks = await startMocks();
+    stopMocks = mocks.stop;
+
+    // Simulate another vitest worker's lingering webhook retry landing on
+    // these mocks via ephemeral-port recycling (the exact CI failure: a
+    // POST /otp-status recorded on the Render mock, path only the OTP
+    // webhook-dispatch tests use). The stray must not be recorded, and the
+    // socket is destroyed so the other worker still sees a transport error
+    // rather than a response that would fail ITS assertions.
+    for (const [base, path] of [
+      [mocks.renderUrl.replace(/\/v1\/services$/, ""), "/otp-status"],
+      [mocks.tgUrl, "/health"],
+    ] as const) {
+      const res = await fetch(`${base}${path}`, {
+        method: "POST",
+        body: JSON.stringify({ stray: true }),
+        signal: AbortSignal.timeout(2_000),
+      }).catch((err: unknown) => err);
+      // Destroyed socket = fetch rejection, never a recorded call.
+      expect(res, `${path} must not receive an HTTP response`).toBeInstanceOf(Error);
+    }
+
+    expect(mocks.renderCalls).toEqual([]);
+    expect(mocks.tgCalls).toEqual([]);
+  });
+
+  it("still records the script's own paths after scoping", async () => {
+    const mocks = await startMocks();
+    stopMocks = mocks.stop;
+
+    // Positive control: scoping must not swallow the real traffic the
+    // assertions depend on — a Bot API path and a Render API path.
+    const tg = await fetch(`${mocks.tgUrl}/bot${FAKE_TOKEN}/getMe`, { signal: AbortSignal.timeout(2_000) });
+    expect(tg.status).toBe(200);
+    const render = await fetch(`${mocks.renderUrl}/svc_TEST/env-vars`, { signal: AbortSignal.timeout(2_000) });
+    expect(render.status).toBe(200);
+
+    expect(mocks.tgCalls.map((c) => c.path)).toEqual([`/bot${FAKE_TOKEN}/getMe`]);
+    expect(mocks.renderCalls.map((c) => c.path)).toEqual(["/v1/services/svc_TEST/env-vars"]);
+  });
 });
 
 /**

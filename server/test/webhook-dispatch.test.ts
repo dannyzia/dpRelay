@@ -6,7 +6,7 @@
  * failing the phone's POST, and messages without an OTP session or app webhook
  * produce no dispatch at all.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -40,11 +40,84 @@ let app: FastifyInstance;
 
 const cleanup: (() => Promise<void>)[] = [];
 
+/**
+ * Waits until no webhook delivery row is mid-attempt and stays that way for
+ * longer than the longest inter-retry sleep configured in this file
+ * (WEBHOOK_RETRY_DELAYS_MS is at most "40,40", so 150ms of quiet dominates
+ * any sleep a live retry chain could be sitting in).
+ *
+ * Why this exists (ISSUE-92): deliverSigned inserts a 'pending' row BEFORE
+ * each postWebhook, so "no pending row for >quiet window" proves no further
+ * HTTP attempt can be issued — a chain sleeping between attempts wakes within
+ * 40ms, re-inserts, and resets the window. A test that fails or times out
+ * mid-dispatch leaves its 3-attempt chain running in the background; without
+ * this drain those retries fire after teardown and POST /otp-status to a port
+ * that another vitest worker's mock may have since bound (the cross-worker
+ * collision recorded in CI run 38034872850). Once the app's db closes, the
+ * chain dies at its next insert anyway — the drain just makes teardown wait
+ * out the one attempt already on the wire instead of racing it.
+ *
+ * Bounded at 6s (below vitest's 10s hookTimeout): if a foreign server
+ * accept-but-never-responds, attempts time out at WEBHOOK_TIMEOUT_MS each;
+ * past the cap we proceed and rely on the closed-db abort described above.
+ * Never throws — a closed db just means there is nothing left to drain.
+ *
+ * @param a The app whose delivery table to drain; no-op when undefined or
+ *          already closed (e.g. a test that failed before makeApp).
+ */
+async function drainInFlightDispatch(a: FastifyInstance | undefined): Promise<void> {
+  if (!a) return;
+  const quietWindowMs = 150;
+  const pollIntervalMs = 25;
+  const deadline = Date.now() + 6_000;
+  let quietSince: number | null = null;
+  while (Date.now() < deadline) {
+    let counts: { pending: number; total: number };
+    try {
+      counts = a.db
+        .prepare(
+          "SELECT " +
+            "SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, " +
+            "COUNT(*) AS total FROM webhook_deliveries",
+        )
+        .get() as { pending: number | null; total: number };
+    } catch {
+      return; // db closed by teardown — chain can no longer issue requests
+    }
+    const now = Date.now();
+    if (counts.total === 0) return; // no dispatch ever ran — no chain to wait for
+    if (counts.pending > 0) {
+      quietSince = null; // attempt on the wire (or chain mid-retry): keep waiting
+    } else {
+      if (quietSince === null) quietSince = now;
+      else if (now - quietSince >= quietWindowMs) return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
 afterEach(async () => {
+  // Drain BEFORE closing: the db must still be open to observe (and, at the
+  // margin, abort) an orphaned retry chain — see drainInFlightDispatch.
+  await drainInFlightDispatch(app);
   if (app) await app.close();
   while (cleanup.length > 0) {
     await cleanup.pop()!();
   }
+  // postWebhook rides the global agent (keep-alive on since Node 19): purge
+  // pooled sockets to ports this test has just released, so no later test in
+  // this file can reuse a socket into a recycled ephemeral port.
+  http.globalAgent.destroy();
+});
+
+afterAll(async () => {
+  // Final sweep: nothing from this file may keep a listener or socket alive
+  // past the file — a lingering bind is what another worker's dispatch can
+  // collide with (ISSUE-92).
+  while (cleanup.length > 0) {
+    await cleanup.pop()!();
+  }
+  http.globalAgent.destroy();
 });
 
 /**
@@ -135,7 +208,15 @@ async function startSink(
   return {
     url: `http://127.0.0.1:${port}/otp-status`,
     requests,
-    close: () => new Promise((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise((resolve) => {
+        server.close(() => resolve());
+        // Force-drop keep-alive sockets now instead of waiting out the
+        // server's keepAliveTimeout: teardown must release the port
+        // immediately, and a half-open socket here is exactly the kind of
+        // lingering bind other workers collide with (ISSUE-92).
+        server.closeAllConnections();
+      }),
   };
 }
 
@@ -673,5 +754,60 @@ describe("webhook exhaustion alerts", () => {
     rearmSession(app);
     await postVerify(app, "654321");
     expect(exhaustionAlerts(warnings)).toHaveLength(0);
+  });
+});
+
+describe("teardown drain (ISSUE-92)", () => {
+  it("holds teardown while a delivery row is mid-attempt, then releases", async () => {
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, null);
+
+    // Simulate an orphaned retry chain: an attempt whose HTTP request is
+    // still on the wire (deliverSigned inserts 'pending' before postWebhook).
+    app.db
+      .prepare(
+        "INSERT INTO webhook_deliveries (id, session_id, app_id, webhook_url, status, attempt, attempts_max, created_at) " +
+          "VALUES ('drain-1', 'sess-1', 'app-row-1', 'http://127.0.0.1:9/otp-status', 'pending', 1, 3, unixepoch())",
+      )
+      .run();
+
+    let drained = false;
+    const drain = drainInFlightDispatch(app).then(() => {
+      drained = true;
+    });
+
+    // Still mid-attempt: the drain must not have returned after well over a
+    // poll interval + quiet window.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(drained).toBe(false);
+
+    // Attempt settles (failed, as every exhausted attempt does) → no pending
+    // row → quiet window elapses → the drain releases.
+    app.db.prepare("UPDATE webhook_deliveries SET status = 'failed' WHERE id = 'drain-1'").run();
+    await drain;
+    expect(drained).toBe(true);
+  });
+
+  it("returns immediately when no dispatch ever ran", async () => {
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+
+    const started = Date.now();
+    await drainInFlightDispatch(app);
+    // Zero rows → the zero-row fast path, far below the quiet window.
+    expect(Date.now() - started).toBeLessThan(150);
+  });
+
+  it("swallows a closed db instead of failing teardown", async () => {
+    app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
+    seedOtpPending(app, null);
+    await app.close();
+
+    // app.close() in afterEach precedes nothing else that could throw: the
+    // drain must treat a closed db as "nothing left to drain", not propagate.
+    await expect(drainInFlightDispatch(app)).resolves.toBeUndefined();
+  });
+
+  it("is a no-op for an undefined app", async () => {
+    await expect(drainInFlightDispatch(undefined)).resolves.toBeUndefined();
   });
 });
