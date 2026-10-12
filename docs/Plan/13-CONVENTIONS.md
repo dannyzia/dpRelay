@@ -16,8 +16,11 @@ Human reviews this: YES — team must agree on conventions before implementation
 | Formatter | ktlint (Android) / Prettier (JS) | `./gradlew ktlintCheck` / `npx prettier --check .` |
 | Linter | Android Lint / ESLint | `./gradlew lint` / `npx eslint .` |
 | Type checker | Kotlin compiler | `./gradlew compileDebugKotlin` |
+| Runtime | Node.js 20.9.0 (repo-root `.nvmrc`) | `nvm use` |
 
 **Enforce on commit:** All must pass before a commit is accepted.
+
+**Node 20 pin (ISSUE-44):** The server's `better-sqlite3` dependency is a native addon prebuilt for Node ABI 115 (Node 20). Running `npm run dev` / `npm run build` / `npm test` under a Node with a different ABI dies at import time with `ERR_DLOPEN_FAILED` (observed as an ABI 115 vs 109 mismatch) before any code runs. A repo-root `.nvmrc` pins `20.9.0` to match `server/package.json` engines — run `nvm use` at the repo root before any server command.
 
 ## Naming conventions
 | Thing | Convention | Example |
