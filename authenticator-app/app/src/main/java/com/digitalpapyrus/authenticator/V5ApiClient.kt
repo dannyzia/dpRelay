@@ -32,6 +32,38 @@ data class V5MessageResult(
 )
 
 /**
+ * ISSUE-97 verdict of the first-launch onboarding enroll (AC4–AC6): the
+ * server must verify the gateway number (uniqueness), the plan slot count and
+ * the anti-churn window BEFORE any service starts, so both the exact human
+ * error and "no verdict at all" have to reach the wizard intact.
+ */
+sealed interface V5EnrollOutcome {
+  /** Server answered 201 with a freshly minted device API key (AC6). */
+  data class Accepted(val apiKey: String) : V5EnrollOutcome
+
+  /** Server rejected — `serverError` is its own `error` text, verbatim (AC5). */
+  data class Rejected(val httpCode: Int, val code: String, val serverError: String) : V5EnrollOutcome
+
+  /** Transport failure or unparsable body: no server verdict exists. */
+  object Unreachable : V5EnrollOutcome
+}
+
+/**
+ * ISSUE-97 AC7 verdict of a phone-number re-verification push: Settings may
+ * only persist the number once the server has accepted it.
+ */
+sealed interface V5PhonePushOutcome {
+  /** Server verified and stored the number. */
+  object Verified : V5PhonePushOutcome
+
+  /** Server rejected — `serverError` is its own `error` text, verbatim. */
+  data class Rejected(val httpCode: Int, val code: String, val serverError: String) : V5PhonePushOutcome
+
+  /** Transport failure, unparsable body, or no stored device key. */
+  object Unreachable : V5PhonePushOutcome
+}
+
+/**
  * REST client for the dP Relay v5 server device plane (M2, PLAN §7).
  *
  * Clean-room implementation on HttpURLConnection + org.json — no new runtime
@@ -112,6 +144,58 @@ object V5ApiClient {
     true
   }
 
+  /**
+   * First-launch onboarding enroll (ISSUE-97 AC4): takes EXPLICIT inputs —
+   * nothing is read from, or written to, the stored prefs — so the wizard
+   * persists credentials only after a 201 (AC6) and a rejection leaves no
+   * trace on the device. Bearer is the App Enrollment Secret; the body is
+   * built by GatewayIdentity.enrollFields (label + validated E.164 number).
+   *
+   * @param context Application context
+   * @param phoneNumber E.164 gateway number, already validated client-side (AC3)
+   * @param appSecret App Enrollment Secret copied from the customer dashboard
+   * @return Accepted(201 + apiKey), Rejected(exact server error), or Unreachable
+   */
+  suspend fun enrollForOnboarding(
+    context: Context,
+    phoneNumber: String,
+    appSecret: String,
+  ): V5EnrollOutcome = withContext(Dispatchers.IO) {
+    val fields = GatewayIdentity.enrollFields(
+      label = android.os.Build.MODEL,
+      phoneNumber = phoneNumber,
+    )
+    val body = JSONObject()
+    for ((key, value) in fields) {
+      body.put(key, value)
+    }
+    val response = request(
+      context,
+      path = "/v5/device/enroll",
+      method = "POST",
+      body = body,
+      bearer = appSecret,
+    ) ?: return@withContext V5EnrollOutcome.Unreachable
+
+    if (response.isSuccessful) {
+      val apiKey = try {
+        JSONObject(response.body).optString("apiKey", "")
+      } catch (e: Exception) {
+        ""
+      }
+      if (apiKey.isEmpty()) {
+        Log.e(TAG, "v5 onboarding enroll response missing apiKey")
+        return@withContext V5EnrollOutcome.Unreachable
+      }
+      return@withContext V5EnrollOutcome.Accepted(apiKey)
+    }
+
+    val (code, serverError) = parseRejection(response)
+    // Status + machine code only — the body may echo request-derived data.
+    Log.w(TAG, "v5 onboarding enroll rejected: HTTP ${response.code} code=$code")
+    V5EnrollOutcome.Rejected(response.code, code, serverError)
+  }
+
   /** POST /v5/device/heartbeat — feeds the watchdog, doubles as keep-alive (R1). */
   suspend fun heartbeat(context: Context): Boolean = withContext(Dispatchers.IO) {
     val key = deviceKey(context) ?: return@withContext false
@@ -120,32 +204,46 @@ object V5ApiClient {
   }
 
   /**
-   * POST /v5/device/phone-number (STAGE F7) — pushes the gateway number to
-   * the server for an ALREADY-enrolled device, so the live fleet gains its
-   * identity without re-enrolling. Called from Settings whenever the stored
-   * number changes; a failed push leaves the local value intact for the next
-   * attempt (the server route is idempotent on the same number).
+   * POST /v5/device/phone-number (STAGE F7 → ISSUE-97 AC7): pushes an
+   * EXPLICIT number for the CALLING already-enrolled device so Settings can
+   * RE-VERIFY it with the server BEFORE persisting locally. The route is
+   * strict (400 on malformed) and idempotent for an unchanged number; a
+   * rejection carries the server's exact human error for display.
    *
    * @param context Application context
-   * @return true when the server accepted the number
+   * @param number E.164 number to re-verify server-side
+   * @return Verified, Rejected(exact server error), or Unreachable (incl. no stored key)
    */
-  suspend fun postPhoneNumber(context: Context): Boolean = withContext(Dispatchers.IO) {
-    val key = deviceKey(context) ?: return@withContext false
-    val number = EncryptedPrefsHelper.getGatewayNumber(context)
-      ?.takeIf { GatewayIdentity.isValidE164(it) }
-      ?: return@withContext false
-    val response = request(
-      context,
-      "/v5/device/phone-number",
-      "POST",
-      JSONObject().put("phoneNumber", number),
-      key,
-    )
-    if (response == null || !response.isSuccessful) {
-      Log.w(TAG, "v5 phone-number push failed${response?.let { ": HTTP ${it.code}" } ?: " (no response)"}")
+  suspend fun postPhoneNumber(context: Context, number: String): V5PhonePushOutcome =
+    withContext(Dispatchers.IO) {
+      val key = deviceKey(context) ?: return@withContext V5PhonePushOutcome.Unreachable
+      val response = request(
+        context,
+        "/v5/device/phone-number",
+        "POST",
+        JSONObject().put("phoneNumber", number),
+        key,
+      ) ?: return@withContext V5PhonePushOutcome.Unreachable
+      if (response.isSuccessful) {
+        return@withContext V5PhonePushOutcome.Verified
+      }
+      val (code, serverError) = parseRejection(response)
+      Log.w(TAG, "v5 phone-number push rejected: HTTP ${response.code} code=$code")
+      V5PhonePushOutcome.Rejected(response.code, code, serverError)
     }
-    response != null && response.isSuccessful
-  }
+
+  /**
+   * Extracts the structured {code, error} pair from a rejection body; a blank
+   * pair when the body is missing or unparsable (callers then fall back to
+   * GatewayIdentity.serverFailureMessage's mirror table).
+   */
+  private fun parseRejection(response: ApiResponse): Pair<String, String> =
+    try {
+      val json = JSONObject(response.body)
+      json.optString("code", "") to json.optString("error", "")
+    } catch (e: Exception) {
+      "" to ""
+    }
 
   /** GET /v5/device/outstanding — claims pending messages (at-least-once server-side). */
   suspend fun fetchOutstanding(context: Context): List<V5OutstandingMessage>? = withContext(Dispatchers.IO) {

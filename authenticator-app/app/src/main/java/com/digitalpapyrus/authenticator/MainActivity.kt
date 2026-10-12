@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
  * - Request SMS permissions
  * - Show battery optimization dialog
  * - Show auto-start dialog for Chinese ROMs
- * - Prompt for enrollment secret on first run (ADR-016)
+ * - Gate first run on a server-verified onboarding wizard (ISSUE-97, ADR-016)
  * - Start the foreground service
  */
 class MainActivity : AppCompatActivity() {
@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var statusText: TextView
   private lateinit var autoStartButton: Button
   private lateinit var settingsButton: Button
+  private lateinit var gatewayNumberText: TextView
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -52,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     setContentView(R.layout.activity_main)
 
     statusText = findViewById(R.id.statusText)
+    gatewayNumberText = findViewById(R.id.gatewayNumberText)
     autoStartButton = findViewById(R.id.autoStartButton)
     settingsButton = findViewById(R.id.settingsButton)
 
@@ -67,13 +69,17 @@ class MainActivity : AppCompatActivity() {
     // Initialize encrypted prefs
     EncryptedPrefsHelper.initialize(this)
 
-    // Check for enrollment secret
-    if (!EncryptedPrefsHelper.hasEnrollmentSecret(this)) {
-      showEnrollmentSecretDialog()
+    // ISSUE-97 (AC1): no device API key = first launch. The wizard GATES the
+    // whole setup chain — no permission prompts, no background service —
+    // until POST /v5/device/enroll has verified the gateway number (plan
+    // slots, uniqueness, anti-churn) and answered 201 (AC6).
+    if (EncryptedPrefsHelper.getDeviceApiKey(this) == null) {
+      showOnboardingWizard()
+    } else {
+      updateDashboardNumber()
+      // Request permissions and start service
+      requestSmsPermissions()
     }
-
-    // Request permissions and start service
-    requestSmsPermissions()
   }
 
   /**
@@ -139,27 +145,69 @@ class MainActivity : AppCompatActivity() {
   }
 
   /**
-   * Persists both fields and, when this device is already enrolled, pushes a
-   * changed number to the server (F7 no-re-enroll path for the live fleet).
+   * ISSUE-97 (AC7): verifies a changed number with the server BEFORE
+   * persisting. A changed number on an enrolled device goes to
+   * POST /v5/device/phone-number first; only a verified number (or an
+   * unchanged/cleared one, which needs no verification) is written to
+   * EncryptedSharedPreferences. The old F7 "save locally, push later"
+   * behavior is deliberately reversed by this AC: an unverifiable number
+   * must never reach the prefs.
    *
    * @param number Valid E.164 number or blank (clears the stored identity)
    * @param appSecret Per-app enrollment secret, or blank (global/fleet secret)
    */
   private fun saveSettings(number: String, appSecret: String) {
-    EncryptedPrefsHelper.storeGatewayNumber(this, number)
-    EncryptedPrefsHelper.storeAppEnrollmentSecret(this, appSecret)
+    val storedNumber = EncryptedPrefsHelper.getGatewayNumber(this) ?: ""
+    val enrolled = EncryptedPrefsHelper.getDeviceApiKey(this) != null
 
-    if (EncryptedPrefsHelper.getDeviceApiKey(this) != null && number.isNotEmpty()) {
-      lifecycleScope.launch {
-        val pushed = V5ApiClient.postPhoneNumber(this@MainActivity)
-        if (!pushed) {
+    // Blank = clearing the local identity; unchanged = nothing to verify;
+    // unenrolled = the wizard (not Settings) owns first verification.
+    if (number.isEmpty() || number == storedNumber || !enrolled) {
+      persistSettings(number, appSecret)
+      return
+    }
+
+    lifecycleScope.launch {
+      when (val outcome = V5ApiClient.postPhoneNumber(this@MainActivity, number)) {
+        V5PhonePushOutcome.Verified -> persistSettings(number, appSecret)
+        is V5PhonePushOutcome.Rejected -> {
+          // Exact human error (AC5-style); NOTHING was persisted.
           android.widget.Toast.makeText(
             this@MainActivity,
-            "Saved locally — number will be pushed when the connection allows",
+            GatewayIdentity.serverFailureMessage(outcome.httpCode, outcome.code, outcome.serverError)
+              ?: getString(R.string.settings_verify_failed),
+            android.widget.Toast.LENGTH_LONG,
+          ).show()
+        }
+        V5PhonePushOutcome.Unreachable -> {
+          android.widget.Toast.makeText(
+            this@MainActivity,
+            getString(R.string.settings_verify_failed_network),
             android.widget.Toast.LENGTH_LONG,
           ).show()
         }
       }
+    }
+  }
+
+  /** Writes the wizard/settings inputs to EncryptedSharedPreferences (AC6). */
+  private fun persistSettings(number: String, appSecret: String) {
+    EncryptedPrefsHelper.storeGatewayNumber(this, number)
+    EncryptedPrefsHelper.storeAppEnrollmentSecret(this, appSecret)
+    updateDashboardNumber()
+  }
+
+  /**
+   * ISSUE-97 (AC6): surfaces the server-verified gateway number on the
+   * dashboard; hidden until a number is stored.
+   */
+  private fun updateDashboardNumber() {
+    val number = EncryptedPrefsHelper.getGatewayNumber(this)
+    if (number.isNullOrEmpty()) {
+      gatewayNumberText.visibility = android.view.View.GONE
+    } else {
+      gatewayNumberText.text = getString(R.string.dashboard_gateway_number, number)
+      gatewayNumberText.visibility = android.view.View.VISIBLE
     }
   }
 
@@ -350,27 +398,152 @@ class MainActivity : AppCompatActivity() {
     startService()
   }
 
-  private fun showEnrollmentSecretDialog() {
-    val input = android.widget.EditText(this).apply {
-      inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-      hint = getString(R.string.enrollment_hint)
+  /**
+   * ISSUE-97 (AC1): first-launch onboarding wizard — shown when no device
+   * API key exists instead of silently starting the background service.
+   *
+   * Two mandatory fields (AC2): the gateway phone number (prefilled — SIM
+   * number when readable, else the +880 carrier prefix) and the App
+   * Enrollment Secret from the customer dashboard. The positive button's
+   * default dismiss is replaced with an in-dialog listener, so the dialog
+   * survives both an AC3 input error and an AC5 server rejection with the
+   * user's inputs intact; nothing is persisted until a 201 (AC6).
+   */
+  private fun showOnboardingWizard() {
+    val density = resources.displayMetrics.density
+    fun dp(v: Int): Int = (v * density).toInt()
+
+    val container = android.widget.LinearLayout(this).apply {
+      orientation = android.widget.LinearLayout.VERTICAL
+      setPadding(dp(24), dp(8), dp(24), 0)
     }
 
-    AlertDialog.Builder(this)
-      .setTitle(getString(R.string.enrollment_dialog_title))
-      .setMessage(getString(R.string.enrollment_dialog_message))
-      .setView(input)
-      .setPositiveButton(getString(R.string.dialog_button_save)) { _, _ ->
-        val secret = input.text.toString()
-        if (secret.length >= 32) {
-          EncryptedPrefsHelper.storeEnrollmentSecret(this, secret)
-          startService()
-        } else {
-          showEnrollmentSecretDialog()
+    val numberLabel = TextView(this).apply {
+      text = getString(R.string.onboarding_number_label)
+    }
+    val numberInput = android.widget.EditText(this).apply {
+      hint = getString(R.string.onboarding_number_hint)
+      // AC2: prefilled with the carrier prefix; the SIM number is used when
+      // the optional permission already granted it (usually not on launch 1).
+      setText(readSimNumber()?.takeIf { GatewayIdentity.isValidE164(it) } ?: "+880")
+      inputType = android.text.InputType.TYPE_CLASS_TEXT
+    }
+    val secretLabel = TextView(this).apply {
+      text = getString(R.string.onboarding_secret_label)
+    }
+    val secretInput = android.widget.EditText(this).apply {
+      hint = getString(R.string.onboarding_secret_hint)
+      // Secrets are never prefilled onto the screen.
+      inputType = android.text.InputType.TYPE_CLASS_TEXT or
+        android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+    }
+    val errorText = TextView(this).apply {
+      setTextColor(android.graphics.Color.rgb(200, 40, 40))
+      visibility = android.view.View.GONE
+    }
+    container.addView(numberLabel)
+    container.addView(numberInput)
+    container.addView(secretLabel)
+    container.addView(secretInput)
+    container.addView(
+      errorText,
+      android.widget.LinearLayout.LayoutParams(
+        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+      ),
+    )
+
+    val dialog = AlertDialog.Builder(this)
+      .setTitle(getString(R.string.onboarding_title))
+      .setMessage(getString(R.string.onboarding_message))
+      .setView(container)
+      .setPositiveButton(getString(R.string.onboarding_connect), null)
+      .setCancelable(false)
+      .create()
+
+    dialog.setOnShowListener {
+      val connectButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+      connectButton.setOnClickListener {
+        val number = numberInput.text.toString().trim()
+        val secret = secretInput.text.toString().trim()
+        // AC3: client-side E.164 + mandatory-field gate BEFORE any network call.
+        val inputError = GatewayIdentity.validateOnboarding(number, secret)
+        if (inputError != null) {
+          errorText.text = getString(
+            when (inputError) {
+              GatewayIdentity.OnboardingError.EMPTY_NUMBER -> R.string.onboarding_number_required
+              GatewayIdentity.OnboardingError.INVALID_NUMBER -> R.string.onboarding_invalid_number
+              GatewayIdentity.OnboardingError.EMPTY_SECRET -> R.string.onboarding_secret_required
+            },
+          )
+          errorText.visibility = android.view.View.VISIBLE
+          return@setOnClickListener
+        }
+        connectGateway(dialog, connectButton, errorText, number, secret)
+      }
+    }
+    dialog.show()
+  }
+
+  /**
+   * ISSUE-97 (AC4–AC6): runs POST /v5/device/enroll with the wizard inputs.
+   * A 201 persists the credentials, shows the verified number and continues
+   * the setup chain (which ends in the foreground service); any rejection
+   * stays in the dialog showing the server's exact human error (AC5) and
+   * never starts the service.
+   *
+   * @param dialog The still-open wizard
+   * @param connectButton Its positive button, re-enabled on failure
+   * @param errorText Inline error line inside the dialog
+   * @param number Client-validated E.164 gateway number
+   * @param secret App Enrollment Secret from the customer dashboard
+   */
+  private fun connectGateway(
+    dialog: AlertDialog,
+    connectButton: Button,
+    errorText: TextView,
+    number: String,
+    secret: String,
+  ) {
+    errorText.visibility = android.view.View.GONE
+    connectButton.isEnabled = false
+    connectButton.text = getString(R.string.onboarding_connecting)
+
+    lifecycleScope.launch {
+      val outcome = V5ApiClient.enrollForOnboarding(this@MainActivity, number, secret)
+      // Rotation/finish may have destroyed the dialog; onCreate re-runs and
+      // re-shows the wizard (still unenrolled), so dropping this is safe.
+      if (!dialog.isShowing) return@launch
+      when (outcome) {
+        is V5EnrollOutcome.Accepted -> {
+          // AC6: persist → show verified number → continue into the chain
+          // that starts the foreground service.
+          EncryptedPrefsHelper.storeDeviceApiKey(this@MainActivity, outcome.apiKey)
+          EncryptedPrefsHelper.storeGatewayNumber(this@MainActivity, number)
+          EncryptedPrefsHelper.storeAppEnrollmentSecret(this@MainActivity, secret)
+          updateDashboardNumber()
+          dialog.dismiss()
+          requestSmsPermissions()
+        }
+        is V5EnrollOutcome.Rejected -> {
+          // AC5: exact human error inline; inputs kept; no service start.
+          errorText.text = GatewayIdentity.serverFailureMessage(
+            outcome.httpCode,
+            outcome.code,
+            outcome.serverError,
+          ) ?: getString(R.string.onboarding_enroll_failed, outcome.code.ifEmpty { "HTTP ${outcome.httpCode}" })
+          errorText.visibility = android.view.View.VISIBLE
+          connectButton.isEnabled = true
+          connectButton.text = getString(R.string.onboarding_connect)
+        }
+        V5EnrollOutcome.Unreachable -> {
+          errorText.text = getString(R.string.onboarding_unreachable)
+          errorText.visibility = android.view.View.VISIBLE
+          connectButton.isEnabled = true
+          connectButton.text = getString(R.string.onboarding_connect)
         }
       }
-      .setCancelable(false)
-      .show()
+    }
   }
 
   private fun startService() {

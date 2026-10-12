@@ -16,6 +16,16 @@
         android:gravity="center"
         android:layout_marginBottom="20dp" />
 
+    <!-- ISSUE-97 (AC6): the server-verified gateway phone number. -->
+    <TextView
+        android:id="@+id/gatewayNumberText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="16sp"
+        android:gravity="center"
+        android:layout_marginBottom="20dp"
+        android:visibility="gone" />
+
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

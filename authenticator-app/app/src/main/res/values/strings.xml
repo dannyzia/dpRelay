@@ -79,5 +79,23 @@
     <string name="settings_app_secret_label">App enrollment secret (optional)</string>
     <string name="settings_app_secret_hint">Leave empty for the operator fleet (global secret)</string>
     <string name="settings_invalid_number">Enter a valid E.164 number (e.g. +8801613249520) or leave the field blank</string>
+    <string name="settings_verify_failed">Number not verified by the server — nothing was saved</string>
+    <string name="settings_verify_failed_network">Could not reach the server to verify the number — nothing was saved</string>
+    
+    <!-- ISSUE-97: first-launch onboarding wizard (AC1–AC6) -->
+    <string name="onboarding_title">Connect gateway phone</string>
+    <string name="onboarding_message">This phone must be verified by the server before it starts listening.\n\n1. Enter this gateway\'s phone number in E.164 format.\n2. Paste the App enrollment secret from your customer dashboard.</string>
+    <string name="onboarding_number_label">Gateway phone number (E.164)</string>
+    <string name="onboarding_number_hint">e.g. +8801613249520</string>
+    <string name="onboarding_secret_label">App enrollment secret</string>
+    <string name="onboarding_secret_hint">Copied from the customer dashboard</string>
+    <string name="onboarding_connect">Connect Gateway</string>
+    <string name="onboarding_connecting">Connecting…</string>
+    <string name="onboarding_number_required">Gateway phone number is required</string>
+    <string name="onboarding_invalid_number">Enter a valid E.164 number (e.g. +8801613249520)</string>
+    <string name="onboarding_secret_required">App enrollment secret is required</string>
+    <string name="onboarding_enroll_failed">Server rejected the setup (%1$s)</string>
+    <string name="onboarding_unreachable">Could not reach the server — check the connection and try again</string>
+    <string name="dashboard_gateway_number">Verified gateway: %1$s</string>
     
 </resources>
