@@ -97,5 +97,10 @@
     <string name="onboarding_enroll_failed">Server rejected the setup (%1$s)</string>
     <string name="onboarding_unreachable">Could not reach the server — check the connection and try again</string>
     <string name="dashboard_gateway_number">Verified gateway: %1$s</string>
-    
+
+    <!-- ISSUE-16: in-app enrollment-secret reset (rotation / typo recovery) -->
+    <string name="reset_enrollment_title">Reset Enrollment Secret?</string>
+    <string name="reset_enrollment_message">This will clear the stored secret and device key, requiring re-enrollment.</string>
+    <string name="reset_enrollment_confirm">Reset</string>
+
 </resources>

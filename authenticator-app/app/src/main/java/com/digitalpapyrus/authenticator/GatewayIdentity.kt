@@ -103,4 +103,15 @@ object GatewayIdentity {
         // No code to go on: a bare 401 can only be the secret being refused.
         else -> if (httpCode == 401) "Invalid enrollment secret" else null
       }
+
+  /**
+   * ISSUE-16: the enrollment gate shared by first launch (MainActivity
+   * onCreate) and the in-app credential reset — no stored device API key
+   * means (re-)enrollment must run before anything else. Pure so the JVM
+   * tests pin the reprompt contract.
+   *
+   * @param deviceApiKey Stored v5 device API key, or null after a reset.
+   * @return true when the onboarding wizard must be shown.
+   */
+  fun needsEnrollment(deviceApiKey: String?): Boolean = deviceApiKey == null
 }

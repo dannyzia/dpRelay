@@ -61,3 +61,32 @@ The keystore **alias is shared with the payment reader** (`dprelay-release`
 on one keystore) — no separate `gateway` alias exists. Both apps therefore
 carry the same certificate SHA-1, which is what gets registered on the
 Firebase Android key.
+
+## Operator: secret rotation / typo recovery (ISSUE-16)
+
+To re-enter or rotate the enrollment secret **on the phone itself** — no
+`adb shell pm clear`, no reinstall:
+
+1. **Long-press the status card**: the "✅ Phone Authenticator / RUNNING
+   24/7" line, or the "Verified gateway: +880…" line beneath it.
+2. A **"Reset Enrollment Secret?"** confirmation explains the consequence
+   (the stored secret and device key are cleared; re-enrollment is
+   required). Tap **Reset** to proceed, **Cancel** to back out.
+3. On confirmation the app erases the stored credentials from
+   EncryptedSharedPreferences — both the per-app enrollment secret and the
+   legacy global one (otherwise the background self-heal enrollment would
+   silently reuse the old secret), plus the v5 device API key — and the
+   onboarding wizard opens immediately so the new secret can be entered.
+   The gateway number is kept and prefills the wizard.
+4. Submit the new secret; the server answers 201 and the device enrolls
+   with a **fresh device row**.
+
+Notes:
+
+- The background v5 self-heal loop has no credential to authenticate with
+  between step 3 and step 4 — it retries harmlessly until the new secret is
+  submitted (no restart needed).
+- The old server-side device row is *not* deleted by this client-side
+  reset; delete it from the operator console if you need the slot back.
+- Unit coverage: `EncryptedPrefsHelperTest` (clear-and-reprompt path) and
+  `GatewayIdentityTest.needsEnrollment` (the gate that reopens the wizard).

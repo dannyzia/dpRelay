@@ -159,4 +159,13 @@ class GatewayIdentityTest {
     // generic fallback (with the raw code) instead of inventing a verdict.
     assertNull(GatewayIdentity.serverFailureMessage(500, "internal_error", "  "))
   }
+
+  @Test
+  fun `needsEnrollment gates on a missing device API key only (ISSUE-16 reprompt contract)`() {
+    // After clearDeviceCredentials the key is gone → the wizard reopens.
+    assertTrue(GatewayIdentity.needsEnrollment(null))
+    // Any stored key (enrolled, or mid re-enrollment) keeps the gate shut.
+    assertFalse(GatewayIdentity.needsEnrollment("0123456789abcdef"))
+    assertFalse(GatewayIdentity.needsEnrollment("a".repeat(64)))
+  }
 }
