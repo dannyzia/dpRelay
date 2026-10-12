@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect your Android phone — dP Relay</title>
+  <meta name="description" content="Set up an Android phone as your SMS gateway, enrol your device, send a test message and troubleshoot common connection issues.">
+  <link rel="canonical" href="https://dprelay.digital-papyrus.com/docs/byod/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/">dP Relay</a>
+      <nav aria-label="Main">
+        <a href="/pricing/">Pricing</a>
+        <a href="/docs/" aria-current="page">Docs</a>
+        <a href="/help/">Help</a>
+        <a href="https://app.dprelay.digital-papyrus.com/#/signin">Sign in</a>
+        <a class="cta" href="https://app.dprelay.digital-papyrus.com/#/signup">Get started</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h1>Turn your Android phone into an SMS gateway</h1>
+      <p>Connect a compatible Android phone and an active SMS-capable SIM to dP Relay. Once enrolled, the phone can send messages through its mobile connection to destinations supported by the SIM and carrier.</p>
+    </section>
+
+    <section id="what-you-need">
+      <h2>What you need</h2>
+      <ul>
+        <li>An Android phone compatible with the current dP Relay gateway app.</li>
+        <li>An active SIM and a mobile plan that permits the SMS activity you intend to send.</li>
+        <li>Internet access on the phone so the gateway app can communicate with dP Relay.</li>
+        <li>A dP Relay account with an app created in the dashboard.</li>
+      </ul>
+    </section>
+
+    <section id="set-up">
+      <h2>Set up your phone</h2>
+      <ol class="steps">
+        <li><strong>Install the gateway app.</strong> Download it using the official link supplied by dP Relay.
+          <div class="owner-note"><p>[app download link or store listing]</p></div>
+        </li>
+        <li><strong>Create or select an app.</strong> Open the Apps screen in your dashboard.</li>
+        <li><strong>Enrol your device.</strong> Choose the enrolment action, give the phone a label, and copy the enrolment secret shown by the dashboard.</li>
+        <li><strong>Pair the phone.</strong> Enter the enrolment secret in the gateway app and follow the app's on-screen instructions.</li>
+        <li><strong>Confirm the SIM.</strong> Check the sender number and selected SIM if the phone supports more than one SIM.</li>
+        <li><strong>Send a test message.</strong> Use the Quickstart to send a test to a number you control, then check the result in the dashboard.</li>
+      </ol>
+      <p>The enrolment secret pairs the phone with your account. Keep it private and do not confuse it with your account password or app secret.</p>
+    </section>
+
+    <section id="keep-available">
+      <h2>Keep the gateway available</h2>
+      <ul>
+        <li>Keep the phone powered and connected to mobile service.</li>
+        <li>Keep internet access available so the gateway app can communicate with dP Relay.</li>
+        <li>Allow the gateway app to send SMS and run in the background according to the instructions for your Android version and phone manufacturer.
+          <div class="owner-note"><p>[add the exact Android permission and battery-setting steps]</p></div>
+        </li>
+        <li>Check your mobile plan's SMS allowance, fair-use rules, destination restrictions and charges before sending at scale.</li>
+        <li>If the phone goes offline or cannot send, messages through that device may fail until it is available again.</li>
+      </ul>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>Troubleshooting</h2>
+      <h3>My message did not arrive</h3>
+      <p>Check the recipient number format, the phone's signal, the selected SIM and the mobile plan. Then check message history and the status information actually available in your dashboard. A send request does not by itself prove that an SMS reached the recipient.</p>
+      <h3>The phone keeps going offline</h3>
+      <p>Check internet access, background permissions and battery restrictions for the gateway app. Follow the tested instructions for your Android version and manufacturer.</p>
+      <h3>I lost the enrolment secret</h3>
+      <p>Use the device recovery or re-enrolment process provided in the dashboard. Do not invent a replacement secret or share one through a public support channel.</p>
+      <h3>I use a dual-SIM phone</h3>
+      <p>Follow the confirmed instructions for choosing the sending SIM.</p>
+      <div class="owner-note"><p>[state which SIM sends and whether users can choose]</p></div>
+    </section>
+
+    <section id="custom-client">
+      <h2>For developers building a custom client</h2>
+      <p>The standard gateway app should handle enrolment for most users. Developers building their own client should use the official device-enrolment API reference, including the current authentication scheme and all error responses.</p>
+      <p>The gateway app makes this call for you. You only need it if you are building your own client.</p>
+<pre><code>POST /v5/device/enroll
+Authorization: Bearer &lt;enrollment secret&gt;
+{ "label": "my office phone" }
+
+201 { "ok": true, "deviceId": "...", "apiKey": "..." }</code></pre>
+      <p>To add or correct the SIM's number afterwards:</p>
+<pre><code>POST /v5/device/phone-number
+{ "phoneNumber": "+8801XXXXXXXXX" }</code></pre>
+      <p>A malformed number sent at enrolment is ignored rather than stored, so a carrier-formatted typo can never block pairing.</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Status</th><th scope="col">Code</th><th scope="col">Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>400</td><td><code>invalid_phone_number</code></td><td>The number was not strict E.164</td></tr>
+            <tr><td>401</td><td><code>invalid_enrollment_secret</code></td><td>The bearer secret is wrong</td></tr>
+            <tr><td>403</td><td><code>enrollment_disabled</code></td><td>Enrolment is switched off for this deployment</td></tr>
+            <tr><td>409</td><td><code>phone_number_exists</code></td><td>That number is registered to another device</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-cols">
+        <div class="footer-col">
+          <p class="footer-heading">Product</p>
+          <ul>
+            <li><a href="/pricing/">Pricing</a></li>
+            <li><a href="/docs/">Docs</a></li>
+            <li><a href="/help/">Help</a></li>
+            <li><a href="/docs/byod/">Connect your phone</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-heading">Company</p>
+          <ul>
+            <li><a href="/contact/">Contact</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <p class="footer-heading">Legal</p>
+          <ul>
+            <li><a href="/terms/">Terms of service</a></li>
+            <li><a href="/privacy/">Privacy policy</a></li>
+            <li><a href="/acceptable-use/">Acceptable use</a></li>
+          </ul>
+        </div>
+      </div>
+      <p class="footer-line">dP Relay is an SMS gateway by Digital Papyrus. © 2026 Digital Papyrus.</p>
+      <div class="owner-note"><p>[legal entity name and registered address]</p></div>
+    </div>
+  </footer>
+</body>
+</html>

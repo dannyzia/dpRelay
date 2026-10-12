@@ -1,0 +1,27 @@
+{
+  "generatedAt": "2026-10-11T14:33:31.440Z",
+  "target": "http://127.0.0.1:8123/ (local static server, unminified assets, no cache headers — dev-condition audit, not a production claim)",
+  "chrome": "playwright chromium-1223, headless",
+  "categories": {
+    "performance": 98,
+    "accessibility": 100,
+    "best-practices": 100,
+    "seo": 100
+  },
+  "vitals": {
+    "lcp": "2.1 s",
+    "cls": "0.026",
+    "tbt": "0 ms",
+    "speedIndex": "1.6 s"
+  },
+  "subThresholdAudits": [
+    "mainthread-work-breakdown",
+    "unminified-css",
+    "unminified-javascript",
+    "cache-insight",
+    "document-latency-insight",
+    "lcp-discovery-insight",
+    "network-dependency-tree-insight",
+    "render-blocking-insight"
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "generatedAt": "2026-10-12T03:55:33.139Z",
+  "base": "http://127.0.0.1:8123",
+  "note": "Rendered-pixel verification of the hero phase boundaries. Real scrolls (behavior instant), two rAFs between scroll and capture. Diff = channel delta > 8 on any of RGB.",
+  "boundaries": {
+    "geometry": {
+      "wrapTop": 65,
+      "span": 2700,
+      "canvasW": 1440,
+      "canvasH": 900
+    },
+    "boundaries": {
+      "0.45": {
+        "from": 0.449,
+        "to": 0.451,
+        "d_approach": {
+          "pixels": 2365,
+          "bbox": [
+            30,
+            78,
+            1409,
+            626
+          ]
+        },
+        "d_leave": {
+          "pixels": 0,
+          "bbox": null
+        }
+      },
+      "0.75": {
+        "from": 0.749,
+        "to": 0.751,
+        "d_approach": {
+          "pixels": 3813,
+          "bbox": [
+            140,
+            234,
+            1300,
+            723
+          ]
+        },
+        "d_leave": {
+          "pixels": 6891,
+          "bbox": [
+            140,
+            228,
+            1300,
+            743
+          ]
+        }
+      },
+      "0.9": {
+        "from": 0.899,
+        "to": 0.901,
+        "d_approach": {
+          "pixels": 7589,
+          "bbox": [
+            148,
+            228,
+            1305,
+            743
+          ]
+        },
+        "d_leave": {
+          "pixels": 5711,
+          "bbox": [
+            145,
+            228,
+            1305,
+            743
+          ]
+        }
+      }
+    }
+  },
+  "screenshots": [
+    "d-p000.png",
+    "d-p020.png",
+    "d-p045.png",
+    "d-p075.png",
+    "d-p100.png",
+    "m-p000.png",
+    "m-p045.png",
+    "m-p100.png",
+    "js-off.png"
+  ],
+  "identityForwardBackward": {
+    "digestForward": -682068829,
+    "digestAfterReset": -370650041,
+    "digestForwardAgain": -682068829,
+    "identical": true
+  },
+  "reducedMotion": {
+    "matches": true,
+    "digestAtIconScroll": 237705466,
+    "digestAtEnd": 237705466,
+    "staticFinaleAtEveryScroll": true
+  },
+  "jsDisabled": {
+    "present": true,
+    "naturalWidth": 267,
+    "renderedW": 1440,
+    "renderedH": 900,
+    "visible": true
+  },
+  "overflow390": {
+    "scrollWidth": 390,
+    "innerWidth": 390,
+    "horizontalOverflow": false
+  },
+  "consoleProblems": [
+    "warning: Canvas2D: Multiple readback operations using getImageData are faster with the willReadFrequently attribute set to true. See: https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently"
+  ],
+  "fps": {
+    "samples": 90,
+    "medianFrameMs": 16.69999999999891,
+    "p95FrameMs": 16.700000000000728,
+    "caveat": "headless software-rendered rAF cadence during a scripted 90-frame scroll of the full hero; not a device FPS claim"
+  }
+}

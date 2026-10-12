@@ -3,19 +3,26 @@
  * STAGE F6 gate for landing/ (ISSUE-86) — zero-dependency structural checks
  * run by the `landing-checks` CI job and locally via `node scripts/check-landing.mjs`.
  *
+ * 2026-10-11: updated for the second-pass copy rewrite
+ * (.kilo/plans/dp-relay-site-copy-full-rewrite.md): payment guides moved from
+ * /docs/payments/ to /help/payments/ with a new Help hub at /help/ (both old
+ * URLs are 301s in landing/_redirects), FAQ regrouped into four categories of
+ * 20 questions, and a redacted-number gate (BD mobile-number regex over the
+ * whole landing/ tree — the wallet digits are never restated in this script).
+ *
  * Why hand-rolled: landing/ is contractually build-free with no package.json,
  * so the gate must run on bare Node. It enforces what the acceptance criteria
  * pin: every page exists, internal links resolve, per-page SEO (title +
  * description + lang + single h1), directory-style clean URLs behind
- * sitemap.xml, absolute app-subdomain CTAs, the owner-verbatim remittance
- * guides, the SMTP-free FAQ rule, and the AGPL identifier gate (agpl-grep.sh
- * does not walk landing/, so the pattern is mirrored here).
+ * sitemap.xml, absolute app-subdomain CTAs, the republished-copy pins, the
+ * SMTP-free FAQ rule, and the AGPL identifier gate (agpl-grep.sh does not
+ * walk landing/, so the pattern is mirrored here).
  *
  * Exit 0 = all checks pass; exit 1 prints every failure (no early exit, so a
  * single CI run shows the full list).
  */
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { dirname, join, resolve, relative, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,13 +30,21 @@ const SITE = join(ROOT, "landing");
 const BASE_URL = "https://dprelay.digital-papyrus.com";
 const APP_URL = "https://app.dprelay.digital-papyrus.com";
 
-/** Every page the AC requires, in site-path form. */
+/** Every live page the site ships, in site-path form. `/payment/` and
+ *  `/docs/payments/` are 301s (landing/_redirects) to `/help/payments/`, so
+ *  both are deliberately absent. */
 const PAGES = [
   { path: "/", file: "index.html" },
   { path: "/pricing/", file: "pricing/index.html" },
-  { path: "/payment/", file: "payment/index.html" },
-  { path: "/faq/", file: "faq/index.html" },
   { path: "/docs/", file: "docs/index.html" },
+  { path: "/docs/byod/", file: "docs/byod/index.html" },
+  { path: "/help/", file: "help/index.html" },
+  { path: "/help/payments/", file: "help/payments/index.html" },
+  { path: "/faq/", file: "faq/index.html" },
+  { path: "/contact/", file: "contact/index.html" },
+  { path: "/terms/", file: "terms/index.html" },
+  { path: "/privacy/", file: "privacy/index.html" },
+  { path: "/acceptable-use/", file: "acceptable-use/index.html" },
 ];
 
 /** Owner-approved FAQ set must not leak infrastructure strings (AC). */
@@ -48,22 +63,20 @@ const FAQ_FORBIDDEN = [
 ];
 
 /** AGPL identifier pattern mirrored from scripts/agpl-grep.sh. */
-const AGPL_PATTERN = /com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node/;
-
-/** Owner-verbatim (hub event 1243) pins — exact strings, never paraphrased. */
+const AGPL_PATTERN = /com\.httpsms|NdoleStudio|HttpSms|httpsms-go|httpsms-node/;/** Owner-verbatim pins for /help/payments/ — exact strings, never
+ *  paraphrased. Pins are pattern-based (sentences from the copy doc §8); no
+ *  wallet number or other secret is restated here. */
 const PAYMENT_PINS = [
-  "01613249520",
-  "+8801613249520",
-  "How to Send Using TapTap Send",
-  "How to Send Using Remitly",
-  "How to Send Using Wise",
-  "How to Send Using Western Union",
-  "How to Send Using WorldRemit",
-  "Best for users in the US, UK, Canada, UAE, and Europe.",
-  "Best for competitive exchange rates and promotional offers.",
-  "Best for getting the mid-market exchange rate with low, transparent fees.",
-  "Best for sending online or paying with cash at a brick-and-mortar location.",
-  "Available in over 50 countries for fast mobile wallet routing.",
+  "Add credits to your dP Relay account",
+  "Send the exact amount shown.",
+  "Enter the destination number displayed in Buy credits.",
+  "Save the transaction ID (TrxID) shown after the payment.",
+  "Do not assume that a remittance transaction has a bKash TrxID.",
+  "A payment may require manual review before credits are added.",
+  "Do not include your app secret.",
+  "Do not send confidential transfer references outside the official payment form or verified support process.",
+  "If the payment cannot be matched automatically, support may need to review it.",
+  "Availability depends on country, currency and the current purchase flow.",
 ];
 
 const VOID_TAGS = new Set([
@@ -212,8 +225,10 @@ for (const page of PAGES) {
 }
 
 // Home CTAs must be absolute app-subdomain URLs (AC).
+// `!= null` (not `!== null`): a missing page is `undefined` in the map, and
+// dereferencing it below would crash the gate instead of reporting a failure.
 const home = htmlByPath.get("/");
-if (home !== null) {
+if (home != null) {
   if (home.includes(`${APP_URL}/#/signup`) && home.includes(`${APP_URL}/#/signin`)) {
     pass("/: absolute app-subdomain signup + signin CTAs present");
   } else {
@@ -221,27 +236,149 @@ if (home !== null) {
   }
 }
 
+// Home hero pins (rewrite doc): the deterministic hero contract markers and
+// the hero copy that the scroll-driven scene overlays.
+const HERO_PINS = [
+  "One SMS gateway. Two ways to send.",
+  "One message.",
+  "Any country your phone can reach.",
+  "From your own number.",
+  "Start sending free",
+];
+if (home != null) {
+  const missingHero = HERO_PINS.filter((pin) => !home.includes(pin));
+  if (missingHero.length > 0) fail(`/: hero pin(s) missing: ${missingHero.join(" | ")}`);
+  else pass(`/: all ${HERO_PINS.length} hero pins present`);
+  const heroMarkers = ["hero-pin", "hero-scene", "hero-canvas", "hero-fallback", "hero-caption"];
+  const missingMarkers = heroMarkers.filter((m) => !home.includes(m));
+  if (missingMarkers.length > 0) fail(`/: hero DOM marker(s) missing: ${missingMarkers.join(", ")}`);
+  else pass("/: all hero DOM markers present");
+  const captionCount = (home.match(/class="hero-caption"/g) ?? []).length;
+  if (captionCount !== 3) fail(`/: expected 3 hero captions, found ${captionCount}`);
+  else pass("/: 3 hero captions present");
+  if (!home.includes('<script src="/assets/hero.js" defer></script>')) {
+    fail("/: hero script tag missing or changed");
+  } else {
+    pass("/: hero script tag present");
+  }
+  // Spec section 8: the hero loads its seeded data from the committed static
+  // world-dots.js (defer = document order, before hero.js) — no runtime fetch.
+  const worldDotsAt = home.indexOf('<script src="/assets/world-dots.js" defer></script>');
+  const heroTagAt = home.indexOf('<script src="/assets/hero.js" defer></script>');
+  if (worldDotsAt === -1 || worldDotsAt > heroTagAt) {
+    fail("/: world-dots.js script tag missing or not before hero.js");
+  } else {
+    pass("/: world-dots.js script tag present and before hero.js");
+  }
+}
+
 // FAQ: SMTP/infrastructure strings are forbidden (owner flag).
 const faq = htmlByPath.get("/faq/");
-if (faq !== null) {
+if (faq != null) {
   const lower = faq.toLowerCase();
   const hits = FAQ_FORBIDDEN.filter((needle) => lower.includes(needle));
   if (hits.length > 0) fail(`/faq/: forbidden infrastructure string(s): ${hits.join(", ")}`);
   else pass("/faq/: no SMTP/infrastructure strings");
-  // The owner-approved question set must not shrink silently.
-  const questionCount = (faq.match(/<h2 id="faq-/g) ?? []).length;
-  if (questionCount !== 5) fail(`/faq/: expected the 5 owner-approved questions, found ${questionCount}`);
+  // The copy doc regroups the page into four categories of h3 questions; the
+  // category ids and the question count are the "must not shrink silently" pins
+  // (the old flat `<h2 id="faq-"> x5` shape no longer describes the page).
+  const categories = ["faq-getting-started", "faq-pricing-payments", "faq-sending-delivery", "faq-account-security"];
+  const missingCategories = categories.filter((id) => !faq.includes(`<h2 id="${id}">`));
+  if (missingCategories.length > 0) {
+    fail(`/faq/: missing category heading(s): ${missingCategories.join(", ")}`);
+  } else {
+    pass("/faq/: all 4 category headings present");
+  }
+  const questionCount = (faq.match(/<h3 id="q-/g) ?? []).length;
+  if (questionCount !== 20) fail(`/faq/: expected the 20 copy-doc questions, found ${questionCount}`);
+  else pass("/faq/: all 20 questions present");
 }
 
-// Payment: owner-verbatim guide pins (hub event 1243).
-const payment = htmlByPath.get("/payment/");
-if (payment !== null) {
-  const missing = PAYMENT_PINS.filter((pin) => !payment.includes(pin));
-  if (missing.length > 0) fail(`/payment/: verbatim guide pin(s) missing: ${missing.join(" | ")}`);
-  else pass(`/payment/: all ${PAYMENT_PINS.length} verbatim pins present`);
+// Payment guides: owner-verbatim pins. The guides moved /payment/ →
+// /docs/payments/ → /help/payments/ — the pin PATH was retargeted, never the text.
+const payments = htmlByPath.get("/help/payments/");
+if (payments != null) {
+  const missing = PAYMENT_PINS.filter((pin) => !payments.includes(pin));
+  if (missing.length > 0) fail(`/help/payments/: verbatim guide pin(s) missing: ${missing.join(" | ")}`);
+  else pass(`/help/payments/: all ${PAYMENT_PINS.length} verbatim pins present`);
 }
 
-// sitemap.xml: exists, lists exactly the five pages, URLs resolve to files.
+// Redaction gate: the bKash wallet number is retired from the public site.
+// Pattern-based (no digits restated): any Bangladesh mobile number, raw or
+// +880-prefixed, anywhere in landing/ — html, css, js, svg, xml, txt, json.
+// Support WhatsApp channel: published deliberately by the owner (on-the-record
+// decision, 2026-10-12) — the release hold applies to the draft markers only;
+// this channel is intentionally final and un-held. Owner-confirmed distinct
+// from the retired bKash wallet number. Exemption is deliberately narrow:
+// exactly three match-shapes of one number; every other BD mobile number
+// still trips the gate.
+const REDACT_SCAN_EXT = new Set([".html", ".css", ".js", ".svg", ".xml", ".txt", ".json"]);
+const REDACT_PATTERN = /(?<![\d.])(?:\+?880|0)1[3-9]\d{8}\b/g;
+const SUPPORT_WHATSAPP_EXEMPTIONS = [
+  /https:\/\/wa\.me\/8801713249520/g,
+  /\+880\s?1713[- ]?249520/g,
+  /\+8801713249520/g,
+];
+function checkRedaction() {
+  const hits = [];
+  function walk(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(p); continue; }
+      if (!REDACT_SCAN_EXT.has(extname(entry.name))) continue;
+      let text = readFileSync(p, "utf8");
+      for (const rx of SUPPORT_WHATSAPP_EXEMPTIONS) {
+        text = text.replace(rx, "");
+      }
+      for (const m of text.matchAll(REDACT_PATTERN)) {
+        hits.push(`${relative(ROOT, p)}: BD mobile pattern found`);
+      }
+    }
+  }
+  walk(SITE);
+  if (hits.length > 0) fail(`redaction gate: ${hits.length} hit(s) — ${hits.join("; ")}`);
+  else pass("redaction gate: no BD mobile-number patterns anywhere in landing/");
+}
+checkRedaction();
+
+// Release gate (parallax.md §15): owner-note markup and bracketed editorial
+// placeholders are draft-only. With RELEASE_GATE=1 the gate fails on them so
+// a release cannot ship unresolved notes; draft mode reports the count and
+// passes. The bracket pattern covers every placeholder form currently in the
+// tree ([legal …], [country], [add …], [state …], [app …]) plus common forms.
+const NOTE_CLASS_NEEDLES = ['class="owner-note"', 'class="internal-note"'];
+const NOTE_BRACKET_RE = /\[(?:legal|country|add|state|app|insert|todo|draft|verify|optional)\b[^\]]*\]/gi;
+function checkReleaseGate() {
+  const hits = [];
+  function walk(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(p); continue; }
+      if (!REDACT_SCAN_EXT.has(extname(entry.name))) continue;
+      const text = readFileSync(p, "utf8");
+      for (const needle of NOTE_CLASS_NEEDLES) {
+        if (text.includes(needle)) hits.push(`${relative(ROOT, p)}: owner-note markup`);
+      }
+      for (const m of text.matchAll(NOTE_BRACKET_RE)) {
+        hits.push(`${relative(ROOT, p)}: bracketed editorial note "${m[0]}"`);
+        break; // one report per file is enough to locate it
+      }
+    }
+  }
+  walk(SITE);
+  if (process.env.RELEASE_GATE === "1") {
+    if (hits.length > 0) {
+      fail(`release gate: ${hits.length} draft marker(s) — ${hits.join("; ")}`);
+    } else {
+      pass("release gate: no draft markers (RELEASE_GATE=1)");
+    }
+  } else {
+    pass(`release gate: draft mode — ${hits.length} draft marker(s) present (set RELEASE_GATE=1 to fail on these)`);
+  }
+}
+checkReleaseGate();
+
+// sitemap.xml: exists, lists exactly PAGES, URLs resolve to files.
 const sitemapPath = join(SITE, "sitemap.xml");
 if (!existsSync(sitemapPath)) {
   fail("sitemap.xml: missing");

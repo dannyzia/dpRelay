@@ -20,6 +20,20 @@
   --green-soft: #047857;
   --green-deep: #047857;
   --on-green: #101010;
+  /* secondary accent — Bangladesh / dedicated track only (never text on white
+     below AA: --sky-ink is the text-safe dark variant) */
+  --sky: #0ea5e9;
+  --sky-ink: #0369a1;
+  --sky-soft: #e0f2fe;
+  /* dark code panels — the dark-tech nod on an otherwise light page */
+  --code-bg: #0f172a;
+  --code-ink: #e2e8f0;
+  --code-mute: #94a3b8;
+  /* owner-only facts rendered as visible notes, never as invented copy */
+  --note-amber-bg: #fef3c7;
+  --note-amber-ink: #92400e;
+  --note-internal-bg: #f1f5f9;
+  --note-internal-ink: #475569;
   /* the one ornament */
   --line-dash: rgba(22, 32, 44, 0.22);
   /* radii: 6px buttons/inputs, 8px cards, pill only for status tags */
@@ -69,9 +83,9 @@ code {
 
 pre {
   margin: 0;
-  background: var(--canvas-soft);
-  color: var(--ink);
-  border: 1px solid var(--hairline);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border: 1px solid var(--code-bg);
   border-radius: var(--radius-card);
   padding: 1rem;
   overflow-x: auto;
@@ -100,7 +114,7 @@ pre code {
 .site-header .wrap,
 .site-footer .wrap,
 main.wrap {
-  max-width: 1080px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 0 1.25rem;
 }
@@ -230,60 +244,112 @@ h3 {
   margin: 0 0 0.2rem;
 }
 
-/* ── Hero (flat band — no card chrome) ─────────────────── */
+/* ── Scroll-pinned hero (deterministic, scroll-driven scene) ── */
 
-.hero {
-  padding: 3.25rem 1rem 2rem;
-  text-align: center;
+.hero-pin {
+  position: relative;
+  height: 400vh; /* four viewport-heights of scroll room; p = progress through the pin */
 }
 
-.track-toggle {
-  display: inline-flex;
-  gap: 0.25rem;
-  padding: 0.25rem;
-  margin: 1.25rem auto 0.5rem;
-  background: var(--canvas-soft);
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
+.hero-scene {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
 }
 
-.track-toggle input {
+@supports (height: 100dvh) {
+  .hero-scene { height: 100dvh; }
+}
+
+.hero-canvas,
+.hero-fallback {
   position: absolute;
-  opacity: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-fallback { object-fit: cover; }
+
+.hero-canvas { opacity: 0; }
+.hero-live .hero-fallback { opacity: 0; }
+.hero-live .hero-canvas { opacity: 1; }
+
+.hero-fallback,
+.hero-canvas {
+  transition: opacity 400ms ease;
+}
+
+/* Overlay copy floats over the scene; pointer-events pass through to CTAs. */
+.hero-overlay {
+  position: absolute;
+  top: 14vh;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0 1.5rem;
   pointer-events: none;
-  margin: 0;
 }
 
-.track-toggle label {
-  padding: 0.45rem 1.1rem;
-  border-radius: 999px;
-  cursor: pointer;
+.hero-overlay .actions {
+  pointer-events: auto;
+}
+
+.hero-overlay h1 {
+  max-width: 22ch;
+}
+
+.hero-overlay .hero-sub {
+  max-width: 52ch;
+}
+
+.hero-captions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 7vh;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.hero-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: max-content;
+  max-width: 92vw;
+  opacity: 0;
+  visibility: hidden;
   color: var(--mute);
-  font-weight: 600;
-  font-size: 0.95rem;
-  transition: background 0.18s ease, color 0.18s ease;
+  font-size: 1.05rem;
+  font-weight: 500;
 }
 
-.track-toggle label:hover {
-  color: var(--ink);
+.hero-cta-lit .button:not(.secondary) {
+  box-shadow: 0 0 0 3px rgba(0, 217, 146, 0.22),
+    0 0 24px rgba(0, 217, 146, 0.35);
 }
 
-.track-toggle input:focus-visible + label {
-  outline: 2px solid var(--green-soft);
-  outline-offset: 2px;
-}
+/* ── Two-column card grids ─────────────────────────────── */
 
-.track-toggle input:checked + label {
-  background: var(--green);
-  color: var(--on-green);
-  border: 1px solid var(--green);
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
 }
 
 /* ── Cards ─────────────────────────────────────────────── */
 
 main.wrap {
-  padding-top: 2.5rem;
-  padding-bottom: 3.5rem;
+  padding-top: 3.5rem;
+  padding-bottom: 5rem;
 }
 
 .card {
@@ -380,52 +446,6 @@ tr:last-child td {
   border-bottom: 0;
 }
 
-/* ── Code preview grid (cURL / Node / Python) ──────────── */
-
-.code-grid {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
-
-.code-grid figure {
-  margin: 0;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-card);
-  overflow: hidden;
-  background: var(--canvas-soft);
-}
-
-.code-grid figcaption {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.85rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink);
-  border-bottom: 1px solid var(--hairline);
-}
-
-.code-grid figcaption::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 8px var(--green);
-}
-
-.code-grid pre {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: 0.82rem;
-  padding: 0.9rem 0.85rem;
-}
-
 /* ── Buttons ───────────────────────────────────────────── */
 
 .actions {
@@ -491,50 +511,11 @@ tr:last-child td {
   font-style: normal;
 }
 
-/* ── Tier panels (home page track switch) ──────────────── */
-
-.track-panels section {
-  margin-top: 1.25rem;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-card);
-  background: var(--surface);
-  padding: 1.5rem;
-  text-align: left;
-}
-
-.track-panels h2 {
-  margin-top: 0;
-  font-size: 1.2rem;
-}
-
-.track-panels section p:first-of-type strong {
-  color: var(--ink);
-}
-
-.track-panels .actions {
-  justify-content: flex-start;
-  margin-top: 1rem;
-}
-
-/* CSS-only track switch: show the panel matching the checked radio.
-   Browsers without :has() show both panels — graceful fallback. */
-.track-panels #panel-bd {
-  display: none;
-}
-
-.hero:has(#track-bd:checked) #panel-bd {
-  display: block;
-}
-
-.hero:has(#track-bd:checked) #panel-global {
-  display: none;
-}
-
 /* ── Signature dashed divider between sections ─────────── */
 
 main.wrap > section + section {
   border-top: 1px dashed var(--line-dash);
-  padding-top: 2.25rem;
+  padding-top: clamp(4rem, 6vw, 6rem);
 }
 
 main.wrap > section + section h2:first-child {
@@ -544,18 +525,25 @@ main.wrap > section + section h2:first-child {
 /* ── Responsive ────────────────────────────────────────── */
 
 @media (max-width: 640px) {
-  .hero {
-    padding: 2.25rem 1rem 1.5rem;
-  }
-
   nav[aria-label="Main"] {
     gap: 0.8rem;
+  }
+
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-overlay {
+    top: 12vh;
+  }
+
+  .hero-caption {
+    font-size: 0.95rem;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .button,
-  .track-toggle label {
+  .button {
     transition: none;
   }
 }
@@ -608,4 +596,354 @@ main.wrap > section + section h2:first-child {
 
 .grid3 h3 {
   margin-top: 0;
+}
+
+/* ── Display rhythm (dP Relay landing build prompt) ───── */
+
+html {
+  scroll-behavior: smooth;
+}
+
+h1,
+h2 {
+  text-wrap: balance;
+}
+
+main.wrap > section > h2,
+main.wrap > section > h3 {
+  scroll-margin-top: 5.5rem;
+}
+
+.lede {
+  font-size: 1.1rem;
+  max-width: 68ch;
+}
+
+.table-note {
+  font-size: 0.9rem;
+  color: var(--mute);
+  max-width: 72ch;
+}
+
+/* ── Owner / internal notes ────────────────────────────── */
+
+.owner-note {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  background: var(--note-amber-bg);
+  color: var(--note-amber-ink);
+  border: 1px solid #fcd34d;
+  border-left: 4px solid #d97706;
+  border-radius: var(--radius-card);
+  padding: 0.75rem 1rem;
+  font-size: 0.92rem;
+}
+
+.owner-note::before {
+  content: "[ ]";
+  flex: none;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-weight: 700;
+}
+
+.owner-note p {
+  margin: 0;
+}
+
+.internal-note {
+  background: var(--note-internal-bg);
+  color: var(--note-internal-ink);
+  border: 1px dashed var(--hairline);
+  border-radius: var(--radius-card);
+  padding: 0.75rem 1rem;
+  font-size: 0.88rem;
+  margin-top: 1rem;
+}
+
+.internal-note .note-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 0.35rem;
+}
+
+.internal-note a {
+  color: var(--sky-ink);
+}
+
+/* ── Two-track accents (sky = Bangladesh / dedicated) ──── */
+
+.badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge.byod {
+  background: var(--canvas-soft);
+  color: var(--green-soft);
+  border: 1px solid var(--hairline);
+}
+
+.badge.bd {
+  background: var(--sky-soft);
+  color: var(--sky-ink);
+  border: 1px solid #bae6fd;
+}
+
+th.track-bd,
+td.track-bd {
+  color: var(--sky-ink);
+}
+
+/* ── Steps, lists, big numbers ─────────────────────────── */
+
+.guide-steps {
+  margin: 0.75rem 0;
+  padding-left: 1.25rem;
+  color: var(--body-text);
+}
+
+.guide-steps li {
+  margin-bottom: 0.5rem;
+}
+
+.guide-steps li::marker {
+  color: var(--green-soft);
+  font-weight: 700;
+}
+
+.big-number {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ink-strong);
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-btn);
+  padding: 0.1rem 0.5rem;
+  white-space: nowrap;
+}
+
+.legal-list {
+  padding-left: 1.25rem;
+  color: var(--body-text);
+}
+
+.legal-list > li {
+  margin-bottom: 0.9rem;
+}
+
+.legal-list > li::marker {
+  color: var(--green-soft);
+  font-weight: 700;
+}
+
+.actions.start {
+  justify-content: flex-start;
+}
+
+/* ── Tables: tabular numerals, hover, sticky head ──────── */
+
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+tbody tr:hover {
+  background: var(--canvas-soft);
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border-radius: var(--radius-card);
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll table {
+  margin: 0;
+  border-radius: 0;
+}
+
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+/* ── Docs layout: sticky sidebar, 72ch measure ─────────── */
+
+.docs-layout {
+  display: grid;
+  gap: 2.5rem;
+  grid-template-columns: 240px minmax(0, 1fr);
+  align-items: start;
+}
+
+.docs-sidebar {
+  position: sticky;
+  top: 1.5rem;
+}
+
+.docs-sidebar .side-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin: 0 0 0.5rem;
+}
+
+.docs-sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.75rem;
+  border-left: 1px solid var(--hairline);
+  display: grid;
+  gap: 0.15rem;
+}
+
+.docs-sidebar a {
+  display: block;
+  padding: 0.22rem 0 0.22rem 0.6rem;
+  margin-left: -1px;
+  border-left: 2px solid transparent;
+  font-size: 0.9rem;
+  color: var(--body-text);
+  text-decoration: none;
+}
+
+.docs-sidebar a:hover {
+  color: var(--ink-strong);
+  border-left-color: var(--green);
+  background: var(--canvas-soft);
+}
+
+.docs-content {
+  min-width: 0;
+  max-width: 72ch;
+}
+
+/* ── FAQ groups ────────────────────────────────────────── */
+
+.faq-group + .faq-group {
+  margin-top: 2.5rem;
+}
+
+.faq-q {
+  margin-bottom: 0.3rem;
+}
+
+/* ── Footer columns ────────────────────────────────────── */
+
+.site-footer .wrap {
+  display: block;
+}
+
+.footer-cols {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  padding-bottom: 1.25rem;
+}
+
+.footer-heading {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin: 0 0 0.5rem;
+}
+
+.footer-col ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.footer-col a {
+  font-size: 0.92rem;
+}
+
+.footer-line {
+  margin: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.88rem;
+}
+
+/* ── Interactive states ────────────────────────────────── */
+
+.button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ── Responsive: 390 / 768 / 1440 ──────────────────────── */
+
+@media (max-width: 900px) {
+  .docs-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .docs-sidebar {
+    position: static;
+  }
+}
+
+@media (max-width: 640px) {
+  main.wrap {
+    padding-top: 2.5rem;
+    padding-bottom: 3rem;
+  }
+
+  main.wrap > section + section {
+    padding-top: 2.5rem;
+  }
+
+  .hero {
+    padding: 2.25rem 1rem 1.5rem;
+  }
+
+  nav[aria-label="Main"] {
+    gap: 0.8rem;
+  }
+
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .button {
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .button {
+    transition: none;
+  }
+}
+
+/* Compact owner note for use inside table cells (e.g. the [days] validity pins). */
+.owner-note.inline {
+  display: inline-flex;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
