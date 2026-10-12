@@ -66,6 +66,17 @@ class MainActivity : AppCompatActivity() {
       showSettingsDialog()
     }
 
+    // ISSUE-16 (AC1): long-press on the status card opens the enrollment
+    // secret reset — rotation and typo recovery without adb or reinstall.
+    statusText.setOnLongClickListener {
+      showResetEnrollmentDialog()
+      true
+    }
+    gatewayNumberText.setOnLongClickListener {
+      showResetEnrollmentDialog()
+      true
+    }
+
     // Initialize encrypted prefs
     EncryptedPrefsHelper.initialize(this)
 
@@ -73,7 +84,7 @@ class MainActivity : AppCompatActivity() {
     // whole setup chain — no permission prompts, no background service —
     // until POST /v5/device/enroll has verified the gateway number (plan
     // slots, uniqueness, anti-churn) and answered 201 (AC6).
-    if (EncryptedPrefsHelper.getDeviceApiKey(this) == null) {
+    if (GatewayIdentity.needsEnrollment(EncryptedPrefsHelper.getDeviceApiKey(this))) {
       showOnboardingWizard()
     } else {
       updateDashboardNumber()
@@ -211,6 +222,31 @@ class MainActivity : AppCompatActivity() {
     }
   }
 
+  // ISSUE-16 (AC1/AC2): in-app enrollment-secret reset (rotation and typo
+  // recovery without adb or reinstall). Confirmation first: the confirm
+  // handler clearAndRepromptEnrollment() wipes BOTH stored secrets — the
+  // wizard's per-app one and the legacy global one the background self-heal
+  // enrollment (V5ApiClient.enrollIfNeeded) would otherwise fall back to —
+  // plus the v5 device API key, so the next enroll creates a fresh device
+  // row, then reopens the wizard immediately. The gateway number is kept
+  // and prefills the wizard.
+  private fun showResetEnrollmentDialog() {
+    AlertDialog.Builder(this)
+      .setTitle(getString(R.string.reset_enrollment_title))
+      .setMessage(getString(R.string.reset_enrollment_message))
+      .setPositiveButton(getString(R.string.reset_enrollment_confirm)) { _, _ ->
+        clearAndRepromptEnrollment()
+      }
+      .setNegativeButton(getString(R.string.dialog_button_cancel)) { _, _ -> }
+      .show()
+  }
+
+  /** ISSUE-16 (AC2): clears the stored credentials, then reopens the wizard. */
+  private fun clearAndRepromptEnrollment() {
+    EncryptedPrefsHelper.clearDeviceCredentials(this)
+    showOnboardingWizard()
+  }
+
   /**
    * Best-effort SIM number for prefilling the settings field. Frequently
    * empty or carrier-restricted (SecurityException on API 29+ without
@@ -223,7 +259,7 @@ class MainActivity : AppCompatActivity() {
   private fun readSimNumber(): String? {
     if (
       ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) !=
-        PackageManager.PERMISSION_GRANTED
+      PackageManager.PERMISSION_GRANTED
     ) {
       return null
     }
@@ -244,7 +280,7 @@ class MainActivity : AppCompatActivity() {
   private fun requestPhoneNumberPermission() {
     if (
       ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) ==
-        PackageManager.PERMISSION_GRANTED
+      PackageManager.PERMISSION_GRANTED
     ) {
       return
     }

@@ -130,6 +130,42 @@ object EncryptedPrefsHelper {
   }
 
   /**
+   * ISSUE-16: erases every stored credential so the device re-enrolls
+   * against the server for a fresh row.
+   *
+   * Clears BOTH secrets — the per-app one the wizard collects and the legacy
+   * global one the background self-heal enrollment (V5ApiClient.enrollIfNeeded
+   * via GatewayIdentity.selectEnrollmentBearer) would otherwise silently fall
+   * back to — plus the v5 device API key. The gateway NUMBER is deliberately
+   * kept: it is identity, not a credential, and it prefills the wizard.
+   *
+   * @param context Application context
+   */
+  fun clearDeviceCredentials(context: Context) {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    encryptedPrefs?.edit()
+      ?.remove(KEY_ENROLLMENT_SECRET)
+      ?.remove(KEY_APP_ENROLLMENT_SECRET)
+      ?.remove(KEY_DEVICE_API_KEY)
+      ?.apply()
+  }
+
+  /**
+   * Test seam (ISSUE-16): injects a pre-built prefs instance so JVM unit
+   * tests can exercise the store/get/clear contract against a fake
+   * SharedPreferences (the Android Keystore path is untestable without
+   * Robolectric). No production call site uses this.
+   *
+   * @param prefs Fake or real SharedPreferences backing the helper
+   */
+  internal fun initializeForTest(prefs: SharedPreferences) {
+    encryptedPrefs = prefs
+  }
+
+  /**
    * Stores the v5 device API key (issued by POST /v5/device/enroll).
    * Per ADR-016 this lives in EncryptedSharedPreferences, never in BuildConfig.
    *
