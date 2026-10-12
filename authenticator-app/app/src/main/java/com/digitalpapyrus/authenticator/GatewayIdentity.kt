@@ -54,4 +54,53 @@ object GatewayIdentity {
       put("phoneNumber", phoneNumber)
     }
   }
+
+  /** ISSUE-97 first-launch wizard input verdicts (AC2/AC3). */
+  enum class OnboardingError { EMPTY_NUMBER, INVALID_NUMBER, EMPTY_SECRET }
+
+  /**
+   * Validates the first-launch wizard inputs BEFORE any network call (AC3),
+   * enforcing the two mandatory fields of AC2. Fields are trimmed first so a
+   * copy-paste with stray whitespace still matches the E.164 rule.
+   *
+   * @param number Raw gateway phone number field
+   * @param secret Raw app enrollment secret field
+   * @return null when both fields are usable, otherwise the first problem found
+   */
+  fun validateOnboarding(number: String, secret: String): OnboardingError? {
+    val trimmedNumber = number.trim()
+    if (trimmedNumber.isEmpty()) return OnboardingError.EMPTY_NUMBER
+    if (!isValidE164(trimmedNumber)) return OnboardingError.INVALID_NUMBER
+    if (secret.trim().isEmpty()) return OnboardingError.EMPTY_SECRET
+    return null
+  }
+
+  /**
+   * Exact human error for a rejected identity call (ISSUE-97 AC5/AC7).
+   *
+   * The server's own `error` string wins verbatim — that is the "exact human
+   * error" the dialog must display. The code table below mirrors
+   * server/src/routes/device.ts so a body-less rejection (or one that carries
+   * only a `code`) still reads correctly; note the AC's shorthand differs
+   * from the deployed contract in two places: the server sends 409 (not 403)
+   * for device_limit_reached, 429 (not 403) for device_churn_limited, and
+   * invalid_enrollment_secret (not invalid_secret) — both spellings are
+   * accepted here so either shape renders human text.
+   *
+   * @param httpCode HTTP status of the rejection
+   * @param code Machine-readable `code` field from the response body (may be empty)
+   * @param serverError Human-readable `error` field from the response body (may be blank)
+   * @return The message to display, or null when nothing usable is available
+   */
+  fun serverFailureMessage(httpCode: Int, code: String, serverError: String): String? =
+    serverError.trim().takeIf { it.isNotEmpty() }
+      ?: when (code) {
+        "phone_number_exists" -> "Phone number is already registered to another device"
+        "device_limit_reached" -> "Device slot limit reached for your plan — delete or unenroll a device first"
+        "device_churn_limited" -> "Too many devices enrolled for this plan in the last 24 hours"
+        "invalid_enrollment_secret", "invalid_secret" -> "Invalid enrollment secret"
+        "enrollment_disabled" -> "Device enrollment is disabled"
+        // No code to go on: a bare 401 can only be the secret being refused.
+        else -> if (httpCode == 401) "Invalid enrollment secret" else null
+      }
 }
