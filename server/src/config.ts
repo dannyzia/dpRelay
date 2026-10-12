@@ -148,6 +148,18 @@ export interface Config {
   operatorSecret: string;
   /** STAGE F8: Bearer secret for the Payment Reader APK ingest (POST /v5/payments/ingest). Empty = ingest disabled. */
   paymentReaderSecret: string;
+  /**
+   * ISSUE-98: Gemini API key for the AI payment extractor (AC5/AC6). Empty =
+   * the AI path fails closed with 503 ai_unavailable — the reader's queue
+   * keeps the raw SMS and retries with backoff instead of losing it.
+   */
+  geminiApiKey: string;
+  /** ISSUE-98: Gemini model id used for structured extraction (AC5). */
+  geminiModel: string;
+  /** Google GenAI API base (v1beta); overridable for proxies/Vertex adapters. */
+  geminiApiBase: string;
+  /** ISSUE-98: AI extraction HTTP timeout in milliseconds. */
+  geminiTimeoutMs: number;
   /** bKash destination shown to customers on credit request. Empty = requests fail fast. */
   bkashPersonalNumber: string;
 
@@ -350,6 +362,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ),
     operatorSecret: env.OPERATOR_SECRET ?? "",
     paymentReaderSecret: env.PAYMENT_READER_SECRET ?? "",
+    geminiApiKey: env.GEMINI_API_KEY ?? "",
+    geminiModel: env.GEMINI_MODEL ?? "gemini-2.0-flash",
+    geminiApiBase: (env.GEMINI_API_BASE ?? "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, ""),
+    geminiTimeoutMs: parsePositiveInt(env.GEMINI_TIMEOUT_MS, "GEMINI_TIMEOUT_MS", 15_000),
     bkashPersonalNumber: env.BKASH_PERSONAL_NUMBER ?? "",
 
     // Bulk campaign plane: defaults mirror v4 (functions/src/bulk/*).

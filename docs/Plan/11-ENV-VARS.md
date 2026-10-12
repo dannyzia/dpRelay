@@ -63,6 +63,10 @@ Human reviews this: NO — but every variable must be accounted for here before 
 | WAKE_IDLE_THRESHOLD_SEC | no | 900 | Idle seconds before the next request counts as a wake (R5 catch-up sweep). | — |
 | DEVICE_ENROLLMENT_SECRET | for M2 | — (empty = enrollment disabled) | Enrollment secret for `POST /v5/device/enroll` (ADR-016 exchange → device API key). Compared in constant time. | `openssl rand -base64 32` |
 | PAYMENT_READER_SECRET | for F8 | — (empty = ingest disabled) | Bearer secret for the dedicated Payment Reader APK's `POST /v5/payments/ingest` (ISSUE-90). Compared in constant time; the route 403s while unset (fail-closed). Operator-only: never expose to clients. | `openssl rand -base64 32` |
+| GEMINI_API_KEY | no (ISSUE-98) | — (empty = server-side regex fallback) | Gemini API key for the AI payment-extraction path of `POST /v5/payments/ingest` (AC5): raw reader SMS bodies are sent to this endpoint when local hints are missing. Unset degrades gracefully to the server-side regex parser (known Bengali & alternate formats); a configured-but-failing call answers `ai_unavailable` and the reader's queue retries — never a dropped payment. Never logged. | Google AI Studio key |
+| GEMINI_MODEL | no | `gemini-2.0-flash` | Model id used for structured payment extraction (AC5/AC6). | — |
+| GEMINI_API_BASE | no | `https://generativelanguage.googleapis.com/v1beta` | Google GenAI API base; override for a Vertex-compatible proxy or tests. | — |
+| GEMINI_TIMEOUT_MS | no | `15000` | AI extraction HTTP timeout; an expiry is treated as AI-unavailable (503 → reader retries). | — |
 | OUTSTANDING_REQUEUE_SEC | no | 120 | Claimed `pending_sms` older than this are re-offered to the next fetch (at-least-once delivery). | — |
 | ENROLL_RATE_MAX_PER_HOUR | no | 10 | Max `/v5/device/enroll` attempts per client IP inside the sliding window (brute-force guard; counts failures too). | server |
 | ENROLL_RATE_WINDOW_SEC | no | 3600 | Sliding window for the enrollment rate limiter, in seconds. | server |

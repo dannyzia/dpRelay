@@ -64,6 +64,28 @@ class UploadQueueTest {
     }
 
     @Test
+    fun `enqueue allows every unparseable item — empty TrxID never dedupes`() {
+        // ISSUE-98 (AC1/AC2): regex failures queue with trxId = "" and
+        // amountBdt = 0 so the rawBody reaches the server's AI extractor;
+        // they have no identity to dedupe on yet, so each must be allowed
+        // in — dropping the second would silently lose a payment.
+        val first = PendingUpload.from(sender = "16247", parsed = null, rawBody = "unparseable 1", nowMs = now)
+        val second = PendingUpload.from(sender = "16247", parsed = null, rawBody = "unparseable 2", nowMs = now)
+        assertEquals("", first.trxId)
+        assertEquals(0.0, first.amountBdt, 0.0)
+        assertEquals("bkash", first.provider)
+        assertTrue(queue.enqueue(first))
+        assertTrue(queue.enqueue(second))
+        assertEquals(2, queue.pendingCount())
+
+        // Real TrxIDs keep their dedupe contract (and the empty-TrxID items
+        // above do not shadow it): first join succeeds, the repeat is deduped.
+        assertTrue(queue.enqueue(item()))
+        assertFalse(queue.enqueue(item()))
+        assertEquals(3, queue.pendingCount())
+    }
+
+    @Test
     fun `a failed upload backs off 30s and the item is not due before the window`() {
         queue.enqueue(item())
         val id = queue.dueItems().first().id

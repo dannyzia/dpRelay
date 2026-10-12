@@ -32,23 +32,29 @@ data class PendingUpload(
          * the parsed paisa amount (exact 2-decimal round-trip through the
          * server's `Math.round(amountBdt * 100)` back to the same paisa).
          *
+         * ISSUE-98 (AC1/AC2): `parsed` is NULLABLE — when the local regex
+         * fails the item is still queued with `trxId = ""` and
+         * `amountBdt = 0.0` (hints absent) so the rawBody reaches the
+         * server's AI extractor instead of being dropped. The local
+         * provider falls back to the sender-only classification.
+         *
          * @param sender originating address (a payment sender — checked upstream).
-         * @param parsed parser output for this SMS.
-         * @param rawBody raw SMS body, retained only for the spec payload.
+         * @param parsed parser output for this SMS, or null when parsing failed.
+         * @param rawBody raw SMS body, retained for the spec payload (the AI path needs it).
          * @param nowMs epoch ms of receipt (injected clock, never read inline).
          */
         fun from(
             sender: String,
-            parsed: ParsedPaymentSms,
+            parsed: ParsedPaymentSms?,
             rawBody: String,
             nowMs: Long,
         ): PendingUpload =
             PendingUpload(
                 id = java.util.UUID.randomUUID().toString(),
                 sender = sender,
-                provider = parsed.provider,
-                trxId = parsed.txnId,
-                amountBdt = parsed.amountPaisa / 100.0,
+                provider = parsed?.provider ?: PaymentParser.providerFor(sender) ?: "unknown",
+                trxId = parsed?.txnId ?: "",
+                amountBdt = parsed?.amountPaisa?.div(100.0) ?: 0.0,
                 receivedAtMs = nowMs,
                 rawBody = rawBody,
                 nextAttemptAtMs = nowMs,
