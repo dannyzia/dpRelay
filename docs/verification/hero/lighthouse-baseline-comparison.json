@@ -1,0 +1,66 @@
+{
+  "generatedAt": "2026-10-12T04:05:33.207Z",
+  "conditions": "identical local conditions: same machine, headless chromium-1223, Lighthouse 12.8.2, static python http.server (no compression, no cache headers), home page / only; single run per cell — dev-condition comparison, not a production claim",
+  "baseline": {
+    "source": "git archive master:landing (pre-redesign site)",
+    "mobile": {
+      "categories": {
+        "performance": 100,
+        "accessibility": 100,
+        "best-practices": 96,
+        "seo": 100
+      },
+      "vitals": {
+        "lcp": "0.9 s",
+        "cls": "0",
+        "tbt": "10 ms",
+        "si": "0.8 s"
+      }
+    },
+    "desktop": {
+      "categories": {
+        "performance": 100,
+        "accessibility": 100,
+        "best-practices": 96,
+        "seo": 100
+      },
+      "vitals": {
+        "lcp": "0.2 s",
+        "cls": "0",
+        "tbt": "0 ms",
+        "si": "0.2 s"
+      }
+    }
+  },
+  "current": {
+    "source": "redesign/light-theme landing/ (this branch)",
+    "mobile": {
+      "categories": {
+        "performance": 99,
+        "accessibility": 100,
+        "best-practices": 100,
+        "seo": 100
+      },
+      "vitals": {
+        "lcp": "2.0 s",
+        "cls": "0.026",
+        "tbt": "0 ms",
+        "si": "1.5 s"
+      }
+    },
+    "desktop": {
+      "categories": {
+        "performance": 100,
+        "accessibility": 100,
+        "best-practices": 100,
+        "seo": 100
+      },
+      "vitals": {
+        "lcp": "0.5 s",
+        "cls": "0.001",
+        "tbt": "0 ms",
+        "si": "0.6 s"
+      }
+    }
+  }
+}

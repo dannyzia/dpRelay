@@ -1,0 +1,9 @@
+{
+  "generatedAt": "2026-10-12T04:08:12.640Z",
+  "setup": "mobile viewport 390x844 DSR1, CPU throttled 4x via CDP, headless chromium-1223; scripted instant-scroll sweep p=0..1 over ~9s",
+  "frames": 677,
+  "medianFrameMs": 16.699999999999818,
+  "p95FrameMs": 16.799999999999272,
+  "framesOver34ms": 4,
+  "caveat": "emulated 4x CPU throttling on a desktop machine - an approximation of a mid-range phone, NOT a physical device measurement"
+}

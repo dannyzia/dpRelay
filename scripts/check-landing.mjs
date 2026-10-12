@@ -306,7 +306,12 @@ if (payments != null) {
 // Redaction gate: the bKash wallet number is retired from the public site.
 // Pattern-based (no digits restated): any Bangladesh mobile number, raw or
 // +880-prefixed, anywhere in landing/ — html, css, js, svg, xml, txt, json.
-// Official support WhatsApp channel (+8801713249520) is exempt.
+// Support WhatsApp channel: published deliberately by the owner (on-the-record
+// decision, 2026-10-12) — the release hold applies to the draft markers only;
+// this channel is intentionally final and un-held. Owner-confirmed distinct
+// from the retired bKash wallet number. Exemption is deliberately narrow:
+// exactly three match-shapes of one number; every other BD mobile number
+// still trips the gate.
 const REDACT_SCAN_EXT = new Set([".html", ".css", ".js", ".svg", ".xml", ".txt", ".json"]);
 const REDACT_PATTERN = /(?<![\d.])(?:\+?880|0)1[3-9]\d{8}\b/g;
 const SUPPORT_WHATSAPP_EXEMPTIONS = [

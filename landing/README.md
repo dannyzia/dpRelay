@@ -102,3 +102,14 @@ single h1, links). Contrast/keyboard are checked by hand:
   headings run h1 → h2 in order; images (if any) have alt text.
 - [ ] 200% zoom: no clipped text or horizontal scrolling on `/` and
   `/pricing/`.
+
+## Verification artifacts
+
+All hero verification artifacts live in `docs/verification/hero/`:
+
+- `hero-verification.json` — rendered-pixel boundary checks (d_approach / d_leave at p=0.45 / 0.75 / 0.90), identity scroll, reduced-motion, 390px overflow, js-off fallback, headless rAF cadence with its caveat.
+- `lighthouse-baseline-comparison.json` — Lighthouse 12.8.2, `master:landing` (git archive) vs this branch, mobile + desktop, identical local dev conditions, single run per cell.
+- `hero-fps-throttled.json` — 4× CPU-throttled mobile-viewport scroll sweep (emulated, labeled as such — not a device).
+- `device-fps-probe.md` — LAN serve + paste-in console snippet for the physical-device number (the remaining §12 item; number pending an owner device run).
+- `lighthouse-summary.json` — the original single desktop run.
+- PNGs — 5 desktop + 3 mobile states and the js-off fallback.
