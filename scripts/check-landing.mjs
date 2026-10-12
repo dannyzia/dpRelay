@@ -306,8 +306,14 @@ if (payments != null) {
 // Redaction gate: the bKash wallet number is retired from the public site.
 // Pattern-based (no digits restated): any Bangladesh mobile number, raw or
 // +880-prefixed, anywhere in landing/ — html, css, js, svg, xml, txt, json.
+// Official support WhatsApp channel (+8801713249520) is exempt.
 const REDACT_SCAN_EXT = new Set([".html", ".css", ".js", ".svg", ".xml", ".txt", ".json"]);
 const REDACT_PATTERN = /(?<![\d.])(?:\+?880|0)1[3-9]\d{8}\b/g;
+const SUPPORT_WHATSAPP_EXEMPTIONS = [
+  /https:\/\/wa\.me\/8801713249520/g,
+  /\+880\s?1713[- ]?249520/g,
+  /\+8801713249520/g,
+];
 function checkRedaction() {
   const hits = [];
   function walk(dir) {
@@ -315,7 +321,10 @@ function checkRedaction() {
       const p = join(dir, entry.name);
       if (entry.isDirectory()) { walk(p); continue; }
       if (!REDACT_SCAN_EXT.has(extname(entry.name))) continue;
-      const text = readFileSync(p, "utf8");
+      let text = readFileSync(p, "utf8");
+      for (const rx of SUPPORT_WHATSAPP_EXEMPTIONS) {
+        text = text.replace(rx, "");
+      }
       for (const m of text.matchAll(REDACT_PATTERN)) {
         hits.push(`${relative(ROOT, p)}: BD mobile pattern found`);
       }
