@@ -66,3 +66,17 @@ function drain(when: Phase): void {
     created.splice(i, 1);
   }
 }
+
+/**
+ * Runs the exact removal the `afterEach` hook performs, on demand.
+ *
+ * Exposed so tests can assert the drain behaviour directly (ISSUE-46): an
+ * assertion about a directory drained by a *previous* test's hook cannot be
+ * written order-independently under `--sequence.shuffle`, and an afterEach
+ * attached to an `it.fails` probe is swallowed by vitest's expected-failure
+ * handling. Idempotent — drained dirs are spliced out, so a second drain
+ * (the real hook) is a no-op.
+ */
+export function drainTestPhaseDirs(): void {
+  drain("test");
+}

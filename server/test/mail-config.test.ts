@@ -47,6 +47,9 @@ afterAll(async () => {
 
 describe("GET /v5/admin/mail-config (masked)", () => {
   it("reports unconfigured state", async () => {
+    // ISSUE-46: start from a known-empty table — a prior test in this file
+    // may have saved a config (shuffle-safe ordering).
+    app.db.prepare("DELETE FROM mail_config").run();
     const res = await app.inject({
       method: "GET",
       url: "/v5/admin/mail-config",
@@ -64,6 +67,9 @@ describe("GET /v5/admin/mail-config (masked)", () => {
 
 describe("PUT /v5/admin/mail-config (write-only password)", () => {
   it("validates the input shape", async () => {
+    // ISSUE-46: the first-save-without-password branch below is only a 400
+    // while no config is stored — force that state regardless of test order.
+    app.db.prepare("DELETE FROM mail_config").run();
     const bad = await app.inject({
       method: "PUT",
       url: "/v5/admin/mail-config",
@@ -111,6 +117,14 @@ describe("PUT /v5/admin/mail-config (write-only password)", () => {
   });
 
   it("keeps the stored password when PUT omits it (write-only semantics)", async () => {
+    // ISSUE-46: seed a stored password first so this test does not depend on
+    // "saves the config…" having run before it (shuffle-safe ordering).
+    await app.inject({
+      method: "PUT",
+      url: "/v5/admin/mail-config",
+      headers: operatorHeaders(),
+      payload: VALID_CONFIG,
+    });
     const before = app.db.prepare("SELECT password_encrypted FROM mail_config WHERE id = 1").get() as {
       password_encrypted: string;
     };
