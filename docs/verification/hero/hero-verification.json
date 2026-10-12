@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-11T14:30:41.843Z",
+  "generatedAt": "2026-10-12T03:55:33.139Z",
   "base": "http://127.0.0.1:8123",
   "note": "Rendered-pixel verification of the hero phase boundaries. Real scrolls (behavior instant), two rAFs between scroll and capture. Diff = channel delta > 8 on any of RGB.",
   "boundaries": {
@@ -14,12 +14,12 @@
         "from": 0.449,
         "to": 0.451,
         "d_approach": {
-          "pixels": 78636,
+          "pixels": 2365,
           "bbox": [
-            29,
-            76,
+            30,
+            78,
             1409,
-            627
+            626
           ]
         },
         "d_leave": {
@@ -113,8 +113,8 @@
   ],
   "fps": {
     "samples": 90,
-    "medianFrameMs": 16.699999999999818,
-    "p95FrameMs": 16.80000000000109,
+    "medianFrameMs": 16.69999999999891,
+    "p95FrameMs": 16.700000000000728,
     "caveat": "headless software-rendered rAF cadence during a scripted 90-frame scroll of the full hero; not a device FPS claim"
   }
 }

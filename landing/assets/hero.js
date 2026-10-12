@@ -340,6 +340,9 @@
     var cx = W * 0.5, cy = H * 0.44;
     var r = bubbleR(p);
     var fade = 1 - seg(u, 0, 0.25);
+    // Comet-tail alpha and length scale to zero over u∈[0.95,1] so the last
+    // BURST frame carries no streak pixels — only positions cross into MAP.
+    var streak = 1 - seg(u, 0.95, 1);
     if (fade > 0) {
       ctx.save();
       ctx.globalAlpha = fade;
@@ -369,15 +372,17 @@
       var a = 1 - ti, b = ti;
       var ix = a * a * sx + 2 * a * b * mxp + b * b * tx;
       var iy = a * a * sy + 2 * a * b * myp + b * b * ty;
-      var ti2 = Math.max(0, ti - 0.02);
-      var a2 = 1 - ti2, b2 = ti2;
-      var jx = a2 * a2 * sx + 2 * a2 * b2 * mxp + b2 * b2 * tx;
-      var jy = a2 * a2 * sy + 2 * a2 * b2 * myp + b2 * b2 * ty;
-      ctx.strokeStyle = rgba(COL.deep, 0.5);
-      ctx.beginPath();
-      ctx.moveTo(jx, jy);
-      ctx.lineTo(ix, iy);
-      ctx.stroke();
+      if (streak > 0) {
+        var ti2 = Math.max(0, ti - 0.02 * streak);
+        var a2 = 1 - ti2, b2 = ti2;
+        var jx = a2 * a2 * sx + 2 * a2 * b2 * mxp + b2 * b2 * tx;
+        var jy = a2 * a2 * sy + 2 * a2 * b2 * myp + b2 * b2 * ty;
+        ctx.strokeStyle = rgba(COL.deep, 0.5 * streak);
+        ctx.beginPath();
+        ctx.moveTo(jx, jy);
+        ctx.lineTo(ix, iy);
+        ctx.stroke();
+      }
       ctx.fillStyle = rgba(COL.deep, 0.85);
       ctx.fillRect(ix - 1.2, iy - 1.2, 2.4, 2.4);
     }
