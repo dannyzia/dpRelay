@@ -15,10 +15,9 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { startSink, type Sink } from "./helpers/net.js";
 
 const serverRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scriptPath = join(serverRoot, "scripts", "set-alert-channel.cjs");
@@ -37,7 +36,15 @@ interface MockOptions {
   deployStatus?: number;
 }
 
-/** Spins up a recording mock of both APIs and tears it down after each test. */
+/**
+ * Spins up a recording mock of both APIs and tears it down after each test.
+ *
+ * Both mocks are instances of the shared helpers/net.ts sink, configured with
+ * a `record` path filter (ISSUE-92: a cross-worker stray is neither recorded
+ * nor answered — its socket is destroyed) and a `respond` that replays the
+ * real APIs' success shapes. The scoping and force-drop teardown semantics
+ * live in the shared module; this file only states WHICH paths are its own.
+ */
 async function startMocks(opts: MockOptions = {}): Promise<{
   tgUrl: string;
   renderUrl: string;
@@ -45,95 +52,64 @@ async function startMocks(opts: MockOptions = {}): Promise<{
   renderCalls: Recorded[];
   stop: () => Promise<void>;
 }> {
-  const tgCalls: Recorded[] = [];
-  const renderCalls: Recorded[] = [];
-  const servers: Server[] = [];
-
-  const tg = createServer((req, res) => {
-    const path = req.url ?? "";
-    // ISSUE-92: record ONLY the script's Bot API paths (/bot<token>/…).
-    // Vitest runs workers in parallel and ephemeral ports are recycled, so a
-    // stray request from another worker's webhook retry can land on this
-    // mock — recording it would poison assertions like `tgCalls == []`.
-    // A stray is not recorded AND gets no HTTP response (socket destroyed):
-    // the other worker still observes the transport error its own closed-port
-    // test expects, whereas a 404/200 here would fail their assertions.
-    if (!path.startsWith("/bot")) {
-      req.socket.destroy();
-      return;
-    }
-    tgCalls.push({ method: req.method ?? "", path });
-    req.resume();
-    req.on("end", () => {
-      // getMe and sendMessage both answer 200 {ok:true} on success; the test
-      // distinguishes them by path, which is what the real Bot API does.
+  // getMe and sendMessage both answer 200 {ok:true} on success; the test
+  // distinguishes them by path, which is what the real Bot API does.
+  const tg: Sink = await startSink({
+    record: ({ path }) => path.startsWith("/bot"),
+    respond: (_req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, result: { username: "test_ops_bot" } }));
-    });
+    },
   });
 
-  const render = createServer((req, res) => {
-    const url = req.url ?? "";
-    // ISSUE-92: same cross-worker port-recycling race as the tg mock — the
-    // script only ever calls /v1/services/…, so anything else is a stray
-    // (e.g. POST /otp-status from another worker) and must neither be
-    // recorded nor answered (see the tg mock for why it is destroyed).
-    if (!url.startsWith("/v1/services")) {
-      req.socket.destroy();
-      return;
-    }
-    renderCalls.push({ method: req.method ?? "", path: url });
-    req.resume();
-    req.on("end", () => {
-      if (req.method === "GET" && url.endsWith("/env-vars")) {
+  const render: Sink = await startSink({
+    path: "/v1/services",
+    record: ({ path }) => path.startsWith("/v1/services"),
+    respond: (req, res) => {
+      if (req.method === "GET" && req.path.endsWith("/env-vars")) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify([{ key: "JWT_SECRET", value: "test-only" }]));
         return;
       }
-      if (req.method === "PUT" && url.endsWith("/env-vars")) {
+      if (req.method === "PUT" && req.path.endsWith("/env-vars")) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end("[]");
         return;
       }
-      if (req.method === "POST" && url.endsWith("/deploys")) {
+      if (req.method === "POST" && req.path.endsWith("/deploys")) {
         res.writeHead(opts.deployStatus ?? 201, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ message: "deploy triggered" }));
         return;
       }
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ message: "unmocked" }));
-    });
+    },
   });
 
-  await Promise.all(
-    [tg, render].map(
-      (s) =>
-        new Promise<void>((resolve) => {
-          s.listen(0, "127.0.0.1", resolve);
-          servers.push(s);
-        }),
-    ),
-  );
-  const url = (s: Server): string => `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+  // Test files assert `tgCalls == []` / method+path projections; the shared
+  // sink captures strictly more (headers + body), so narrow to the shape the
+  // assertions were written against.
+  const tgCalls: Recorded[] = [];
+  const renderCalls: Recorded[] = [];
+  const project = (sink: Sink, into: Recorded[]): void => {
+    while (into.length < sink.requests.length) {
+      const r = sink.requests[into.length];
+      into.push({ method: r.method, path: r.path });
+    }
+  };
 
   return {
-    tgUrl: url(tg),
-    renderUrl: `${url(render)}/v1/services`,
-    tgCalls,
-    renderCalls,
-    stop: () =>
-      Promise.all(
-        servers.map(
-          (s) =>
-            new Promise<void>((resolve) => {
-              s.close(() => resolve());
-              // Force-drop stray/keep-alive sockets so the listener (and its
-              // ephemeral port) is released the moment teardown runs — a
-              // bind held past teardown is what enables the next collision.
-              s.closeAllConnections();
-            }),
-        ),
-      ).then(() => undefined),
+    tgUrl: tg.url,
+    renderUrl: render.url,
+    get tgCalls() {
+      project(tg, tgCalls);
+      return tgCalls;
+    },
+    get renderCalls() {
+      project(render, renderCalls);
+      return renderCalls;
+    },
+    stop: () => Promise.all([tg.close(), render.close()]).then(() => undefined),
   };
 }
 

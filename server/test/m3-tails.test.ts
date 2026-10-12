@@ -16,13 +16,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
 import { testTmpDir } from "./helpers/tmp-dirs.js";
+import { closedPort, startSink } from "./helpers/net.js";
 
 const TEST_JWT_SECRET = "m3tails-jwt-0123456789abcdef0123456789abcdef";
 const TEST_APP_ID = "m3tails_app";
@@ -309,15 +308,6 @@ async function postVerify(a: FastifyInstance, otp: string): Promise<number> {
   return res.statusCode;
 }
 
-/** Finds a loopback port with no listener — deterministic connection-refused target. */
-async function findClosedPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
-
 /** Captures warn logs (the exhaustion alert's log-only leg) on the app. */
 function captureWarns(a: FastifyInstance): Array<{ obj: Record<string, unknown>; msg?: string }> {
   const warnings: Array<{ obj: Record<string, unknown>; msg?: string }> = [];
@@ -340,7 +330,7 @@ function dampedLogs(warnings: Array<{ obj: Record<string, unknown>; msg?: string
 
 describe("webhook exhaustion alert damping", () => {
   it("caps re-alerts at one per damping window while the receiver stays dead", async () => {
-    const deadPort = await findClosedPort();
+    const deadPort = await closedPort();
     app.close();
     app = makeApp({
       WEBHOOK_RETRY_DELAYS_MS: "10,10",
@@ -372,7 +362,7 @@ describe("webhook exhaustion alert damping", () => {
   });
 
   it("re-alerts after the damping window elapses", async () => {
-    const deadPort = await findClosedPort();
+    const deadPort = await closedPort();
     app.close();
     app = makeApp({
       WEBHOOK_RETRY_DELAYS_MS: "10,10",
@@ -401,18 +391,10 @@ describe("webhook exhaustion alert damping", () => {
   });
 
   it("a successful delivery re-arms alerting instantly (damper reset)", async () => {
-    // Local sink for the alive phase.
-    const requests: unknown[] = [];
-    let sinkStatus: number[] = [500]; // dead by default
-    const server = http.createServer((req, res) => {
-      req.resume();
-      req.on("end", () => {
-        requests.push({});
-        res.writeHead(sinkStatus[0] ?? 500).end();
-      });
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = server.address() as AddressInfo;
+    // Shared sink for the alive phase: the status array is read per-request,
+    // so mutating it mid-test flips the receiver dead → alive → dead.
+    const sinkStatus: number[] = [500]; // dead by default
+    const sink = await startSink({ statusSequence: sinkStatus, path: "/otp-status" });
     try {
       app.close();
       app = makeApp({
@@ -421,7 +403,7 @@ describe("webhook exhaustion alert damping", () => {
         WEBHOOK_EXHAUSTION_DAMPING_SEC: "3600", // explicitly non-default window
       });
       seedApp(app);
-      seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);
+      seedOtpPending(app, sink.url);
       makeVerifiable(app, "654321");
       const warnings = captureWarns(app);
 
@@ -430,25 +412,25 @@ describe("webhook exhaustion alert damping", () => {
       expect(exhaustionAlerts(warnings)).toBe(1);
 
       // Receiver comes alive: delivery succeeds → counter AND damper reset.
-      sinkStatus = [200];
+      sinkStatus[0] = 200;
       rearmSession(app);
       expect(await postVerify(app, "654321")).toBe(200);
-      expect(requests.length).toBeGreaterThanOrEqual(1);
+      expect(sink.requests.length).toBeGreaterThanOrEqual(1);
       expect(exhaustionAlerts(warnings)).toBe(1);
 
       // Receiver dies again: exhaustion #1 (fresh episode) → alert fires again
       // IMMEDIATELY, despite the damping window never having elapsed.
-      sinkStatus = [500];
+      sinkStatus[0] = 500;
       rearmSession(app);
       expect(await postVerify(app, "654321")).toBe(200);
       expect(exhaustionAlerts(warnings)).toBe(2);
     } finally {
-      await new Promise((resolve) => server.close(() => resolve()));
+      await sink.close();
     }
   });
 
   it("damping is per-app: a second dead app alerts independently", async () => {
-    const deadPort = await findClosedPort();
+    const deadPort = await closedPort();
     app.close();
     app = makeApp({
       WEBHOOK_RETRY_DELAYS_MS: "10,10",

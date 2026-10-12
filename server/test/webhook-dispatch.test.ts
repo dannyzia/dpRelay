@@ -9,12 +9,12 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { sha256Hex } from "../src/services/crypto.js";
 import { testTmpDir } from "./helpers/tmp-dirs.js";
+import { closedPort, startSink, type Sink } from "./helpers/net.js";
 
 const TEST_JWT_SECRET = "webhook-test-jwt-0123456789abcdef0123456789abcdef";
 const TEST_ENROLLMENT_SECRET = "enroll-only-secret-0123456789abcdef0123456789ab";
@@ -179,45 +179,18 @@ async function postResults(
   return { statusCode: res.statusCode, body: res.json() };
 }
 
-interface SinkRequest {
-  signature: string | undefined;
-  rawBody: string;
+/**
+ * Starts the shared helpers/net.ts sink at the OTP webhook path. Status
+ * sequencing, stray-request scoping and force-drop teardown live in the
+ * shared module — see its file header for why (ISSUE-92).
+ */
+async function startOtpSink(statusSequence: number[]): Promise<Sink> {
+  return startSink({ statusSequence, path: "/otp-status" });
 }
 
-/**
- * Local HTTP sink answering each request with the next status from
- * `statusSequence` (last value repeats) while capturing headers + raw bodies.
- */
-async function startSink(
-  statusSequence: number[],
-): Promise<{ url: string; requests: SinkRequest[]; close: () => Promise<void> }> {
-  const requests: SinkRequest[] = [];
-  let call = 0;
-  const server = http.createServer((req, res) => {
-    let data = "";
-    req.on("data", (chunk) => (data += chunk));
-    req.on("end", () => {
-      requests.push({ signature: req.headers["x-dp-signature"], rawBody: data });
-      const status = statusSequence[Math.min(call, statusSequence.length - 1)];
-      call += 1;
-      res.writeHead(status).end();
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  return {
-    url: `http://127.0.0.1:${port}/otp-status`,
-    requests,
-    close: () =>
-      new Promise((resolve) => {
-        server.close(() => resolve());
-        // Force-drop keep-alive sockets now instead of waiting out the
-        // server's keepAliveTimeout: teardown must release the port
-        // immediately, and a half-open socket here is exactly the kind of
-        // lingering bind other workers collide with (ISSUE-92).
-        server.closeAllConnections();
-      }),
-  };
+/** The X-DP-Signature header of a recorded sink request (signing assertion). */
+function signatureOf(r: { headers: http.IncomingHttpHeaders }): string | undefined {
+  return r.headers["x-dp-signature"] as string | undefined;
 }
 
 /** All recorded dispatch attempts, oldest first. */
@@ -258,7 +231,7 @@ const expectedPayload = (status: string) => ({
 
 describe("POST /v5/device/results — OTP webhook dispatch", () => {
   it("dispatches a signed otp.status webhook when an accepted result is OTP-linked", async () => {
-    const sink = await startSink([200]);
+    const sink = await startOtpSink([200]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, sink.url);
@@ -279,7 +252,7 @@ describe("POST /v5/device/results — OTP webhook dispatch", () => {
     const expectedSig = createHmac("sha256", WEBHOOK_SECRET)
       .update(received.rawBody, "utf8")
       .digest("hex");
-    expect(received.signature).toBe(expectedSig);
+    expect(signatureOf(received)).toBe(expectedSig);
 
     const rows = deliveryRows(app);
     expect(rows).toHaveLength(1);
@@ -298,7 +271,7 @@ describe("POST /v5/device/results — OTP webhook dispatch", () => {
   });
 
   it("retries on non-2xx with backoff and records each attempt until success", async () => {
-    const sink = await startSink([500, 503, 200]);
+    const sink = await startOtpSink([500, 503, 200]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "40,40" });
     seedOtpPending(app, sink.url);
@@ -321,7 +294,7 @@ describe("POST /v5/device/results — OTP webhook dispatch", () => {
   });
 
   it("records failure without failing the results POST when all retries are exhausted", async () => {
-    const sink = await startSink([500]);
+    const sink = await startOtpSink([500]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, sink.url);
@@ -350,7 +323,7 @@ describe("POST /v5/device/results — OTP webhook dispatch", () => {
   });
 
   it("sends the failed status in the payload when the phone reports failure", async () => {
-    const sink = await startSink([200]);
+    const sink = await startOtpSink([200]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, sink.url);
@@ -402,7 +375,7 @@ describe("POST /v5/device/results — OTP webhook dispatch", () => {
   });
 
   it("does not re-dispatch when a terminal message is reported again", async () => {
-    const sink = await startSink([200]);
+    const sink = await startOtpSink([200]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, sink.url);
@@ -418,7 +391,7 @@ describe("POST /v5/device/results — OTP webhook dispatch", () => {
   });
 
   it("dispatches only the OTP-linked entries of a mixed batch", async () => {
-    const sink = await startSink([200, 200]);
+    const sink = await startOtpSink([200, 200]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, sink.url);
@@ -458,15 +431,6 @@ async function postVerify(
   return { statusCode: res.statusCode, body: res.json() };
 }
 
-/** Finds a loopback port with no listener — deterministic connection-refused target. */
-async function findClosedPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
-}
-
 /**
  * Points the seeded session's OTP hash at a known code (the seed uses a fake
  * constant hash) so POST /v5/otp/verify accepts `otp`.
@@ -479,7 +443,7 @@ function makeVerifiable(a: FastifyInstance, otp: string): void {
 
 describe("POST /v5/otp/verify — verified-status webhook + dispatch logging", () => {
   it("dispatches a signed otp.status webhook with status 'verified' on successful verification", async () => {
-    const sink = await startSink([200]);
+    const sink = await startOtpSink([200]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, sink.url);
@@ -500,7 +464,7 @@ describe("POST /v5/otp/verify — verified-status webhook + dispatch logging", (
     const expectedSig = createHmac("sha256", WEBHOOK_SECRET)
       .update(received.rawBody, "utf8")
       .digest("hex");
-    expect(received.signature).toBe(expectedSig);
+    expect(signatureOf(received)).toBe(expectedSig);
 
     const rows = deliveryRows(app);
     expect(rows).toHaveLength(1);
@@ -549,7 +513,7 @@ describe("POST /v5/otp/verify — verified-status webhook + dispatch logging", (
   });
 
   it("records failed attempts with last_error populated on transport failure", async () => {
-    const port = await findClosedPort();
+    const port = await closedPort();
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);
     makeVerifiable(app, "654321");
@@ -569,7 +533,7 @@ describe("POST /v5/otp/verify — verified-status webhook + dispatch logging", (
   });
 
   it("logs a structured warn per failed attempt and an info on success", async () => {
-    const sink = await startSink([500, 200]);
+    const sink = await startOtpSink([500, 200]);
     cleanup.push(sink.close);
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, sink.url);
@@ -620,7 +584,7 @@ describe("POST /v5/otp/verify — verified-status webhook + dispatch logging", (
   });
 
   it("logs the error object for transport failures", async () => {
-    const port = await findClosedPort();
+    const port = await closedPort();
     app = makeApp({ WEBHOOK_RETRY_DELAYS_MS: "10,10" });
     seedOtpPending(app, `http://127.0.0.1:${port}/otp-status`);
     makeVerifiable(app, "654321");
@@ -677,7 +641,7 @@ describe("webhook exhaustion alerts", () => {
   }
 
   it("alerts at the threshold and re-alerts while the receiver stays dead", async () => {
-    const port = await findClosedPort();
+    const port = await closedPort();
     app = makeApp({
       WEBHOOK_RETRY_DELAYS_MS: "10,10",
       WEBHOOK_EXHAUSTION_ALERT_THRESHOLD: "2",
@@ -724,10 +688,10 @@ describe("webhook exhaustion alerts", () => {
   });
 
   it("does not alert below the threshold and resets after a successful delivery", async () => {
-    const sink = await startSink([200]);
+    const sink = await startOtpSink([200]);
     cleanup.push(sink.close);
-    const deadPort1 = await findClosedPort();
-    const deadPort2 = await findClosedPort();
+    const deadPort1 = await closedPort();
+    const deadPort2 = await closedPort();
     app = makeApp({
       WEBHOOK_RETRY_DELAYS_MS: "10,10",
       WEBHOOK_EXHAUSTION_ALERT_THRESHOLD: "2",

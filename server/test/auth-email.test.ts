@@ -1,33 +1,35 @@
 /**
  * STAGE F3 amendment (ISSUE-82): email verification + self-service password
- * reset. sendMail is captured (partial module mock) so the flows are tested
- * end to end without any real SMTP; the unconfigured-mailer disable paths are
- * tested against the real module.
+ * reset — end-to-end against a REAL SMTP round trip (hub ISSUE-101).
+ *
+ * Unlike the previous revision of this file, `sendMail` is NOT module-mocked:
+ * every send goes through nodemailer to an ephemeral in-process mailbox
+ * (./helpers/mailbox.ts) seeded as the `mail_config` row, so these tests
+ * exercise the whole transport path — password decryption at send time, the
+ * SMTP session itself, and the MIME that actually lands in an inbox — not
+ * just the route logic. Tokens are extracted from the received message, which
+ * is also a standing regression test for the emailed link format.
+ *
+ * Shuffle safety (ISSUE-46): every test establishes its own preconditions;
+ * the shared app seeds its own mail config, and disable-path tests build
+ * separate unconfigured apps.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { buildApp } from "../src/app.js";
-import type { FastifyInstance, InjectOptions } from "fastify";
+import { encryptMailSecret } from "../src/services/mailer.js";
+import type { FastifyInstance } from "fastify";
 import { testTmpDir } from "./helpers/tmp-dirs.js";
-
-/** Captured sends: each entry is the raw body text (contains the token link). */
-const sent: Array<{ to: string; subject: string; text: string }> = [];
-
-vi.mock("../src/services/mailer.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/services/mailer.js")>();
-  return {
-    ...actual,
-    sendMail: vi.fn(async (_db: unknown, _secret: string, to: string, subject: string, text: string) => {
-      sent.push({ to, subject, text });
-    }),
-  };
-});
+import { startMailbox, type Mailbox } from "./helpers/mailbox.js";
 
 const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";
 const DASHBOARD = "https://dashboard.example.test";
 const PASSWORD = "correct-horse-battery";
+const SMTP_USER = "smtp-user@example.test";
+const SMTP_PASS = "test-smtp-password-not-a-secret";
 
 let app: FastifyInstance;
+let mailbox: Mailbox;
 
 function makeApp(env: Record<string, string> = {}): FastifyInstance {
   const dbPath = join(testTmpDir("dprelay-auth-email-test-"), "test.db");
@@ -35,6 +37,34 @@ function makeApp(env: Record<string, string> = {}): FastifyInstance {
     dbPath,
     env: { JWT_SECRET: TEST_JWT_SECRET, DASHBOARD_BASE_URL: DASHBOARD, ...env },
   });
+}
+
+/**
+ * Waits until `count` messages have arrived in the mailbox. Sends are
+ * fire-and-forget in the routes (`void sendMail(...)`), so the test must
+ * poll for the wire result rather than assume synchronous delivery.
+ */
+async function waitForMail(count: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (mailbox.messages.length < count) {
+    if (Date.now() > deadline) {
+      throw new Error(`expected ${count} message(s), saw ${mailbox.messages.length}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/**
+ * Decodes a captured message into searchable text: quoted-printable soft
+ * line breaks removed (=CRLF) and byte escapes decoded, so a long link split
+ * at column 76 is reassembled exactly as the recipient's client would.
+ */
+function bodyText(raw: string): string {
+  const sep = raw.search(/\r?\n\r?\n/);
+  const body = sep === -1 ? "" : raw.slice(sep).replace(/^\r?\n\r?\n/, "");
+  return body
+    .replace(/=\r?\n/g, "")
+    .replace(/=([0-9A-Fa-f]{2})/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 }
 
 /** Extracts the raw token from an emailed link body (…/#/route/<token>). */
@@ -55,32 +85,35 @@ async function registerUser(email: string): Promise<string> {
 }
 
 /**
- * Seeds a configured SMTP row directly (the routes' PUT is covered
- * elsewhere). Idempotent upsert so every test can call it itself instead of
- * relying on the mail-status test having run first (ISSUE-46 shuffle safety).
+ * Seeds a mail_config row pointing at the live mailbox. Idempotent upsert so
+ * every test can call it itself instead of relying on ordering (ISSUE-46).
+ * The password is encrypted exactly as the admin route would, so the send
+ * path's decryption is exercised for real.
  */
 function seedMailConfig(): void {
   app.db
     .prepare(
       "INSERT INTO mail_config (id, host, port, username, password_encrypted, from_address, updated_at) " +
-        "VALUES (1, 'smtp.example.test', 465, 'u@example.test', 'v1:aaaa:bbbb:cccc', 'f@example.test', unixepoch()) " +
+        "VALUES (1, '127.0.0.1', ?, ?, ?, 'f@example.test', unixepoch()) " +
         "ON CONFLICT(id) DO UPDATE SET host = excluded.host, port = excluded.port, " +
         "username = excluded.username, password_encrypted = excluded.password_encrypted, " +
         "from_address = excluded.from_address, updated_at = excluded.updated_at",
     )
-    .run();
+    .run(mailbox.port, SMTP_USER, encryptMailSecret(SMTP_PASS, TEST_JWT_SECRET));
 }
 
-beforeEach(() => {
-  sent.length = 0;
-});
-
 beforeAll(async () => {
+  mailbox = await startMailbox();
   app = makeApp();
 });
 
 afterAll(async () => {
   await app.close();
+  await mailbox.close();
+});
+
+beforeEach(() => {
+  mailbox.messages.length = 0;
 });
 
 describe("mail-status (public feature flag)", () => {
@@ -97,7 +130,7 @@ describe("mail-status (public feature flag)", () => {
 });
 
 describe("email verification (soft)", () => {
-  it("registers fine with mail unconfigured and verifies via an emailed token once configured", async () => {
+  it("registers fine with mail unconfigured and verifies via a real emailed token once configured", async () => {
     // ISSUE-46: configured mailer on the shared app — self-sufficient fixture.
     seedMailConfig();
 
@@ -110,18 +143,26 @@ describe("email verification (soft)", () => {
         payload: { email: "bare-user@example.test", password: PASSWORD },
       });
       expect(res.statusCode).toBe(201);
-      expect(sent).toHaveLength(0);
+      expect(mailbox.messages).toHaveLength(0);
     } finally {
       await bare.close();
     }
 
-    // Configured app: register sends the verification email (captured).
+    // Configured app: register sends the verification email through SMTP.
     const cookie = await registerUser("verify-user@example.test");
-    expect(sent).toHaveLength(1);
-    expect(sent[0].to).toBe("verify-user@example.test");
-    expect(sent[0].subject).toContain("Confirm");
-    const raw = tokenFromLink(sent[0].text);
-    expect(sent[0].text).toContain(`${DASHBOARD}/#/verify/`);
+    await waitForMail(1);
+    const mail = mailbox.messages[0];
+    expect(mail.to).toEqual(["verify-user@example.test"]);
+    expect(mail.from).toBe("f@example.test");
+    // The wire credentials are the DECRYPTED mail_config values — proof the
+    // send path really decrypted the stored secret, not a mock.
+    expect(mail.authUser).toBe(SMTP_USER);
+    expect(mail.authPass).toBe(SMTP_PASS);
+    expect(mail.subject).toContain("Confirm");
+
+    const text = bodyText(mail.raw);
+    expect(text).toContain(`${DASHBOARD}/#/verify/`);
+    const raw = tokenFromLink(text);
 
     // /me reports unverified (additive field), then verified after the token.
     const meBefore = await app.inject({ method: "GET", url: "/v5/auth/me", headers: { cookie: `dp_session=${cookie}` } });
@@ -145,7 +186,8 @@ describe("email verification (soft)", () => {
     expect(unknown.json()).toMatchObject({ code: "invalid_token" });
 
     const cookie = await registerUser("expired-verify@example.test");
-    const raw = tokenFromLink(sent[sent.length - 1].text);
+    await waitForMail(1);
+    const raw = tokenFromLink(bodyText(mailbox.messages[0].raw));
     app.db.prepare("UPDATE user_email_tokens SET expires_at = unixepoch() - 1 WHERE purpose = 'verify'").run();
     const expired = await app.inject({ method: "POST", url: "/v5/auth/verify-email", payload: { token: raw } });
     expect(expired.statusCode).toBe(400);
@@ -160,9 +202,12 @@ describe("self-service password reset", () => {
     seedMailConfig(); // ISSUE-46: forgot mails below need a configured mailer
     const cookie = await registerUser("reset-user@example.test");
     app.db.prepare("UPDATE user_sessions SET expires_at = unixepoch() + 3600").run();
-    // The register above sent its own verification mail — reset the capture
-    // so this test asserts only on forgot/reset sends.
-    sent.length = 0;
+    // The register above fired its verification mail asynchronously — WAIT
+    // for it to land before clearing, or it arrives after the wipe and gets
+    // misidentified as a reset mail below (that poisoning made newToken a
+    // verify-purpose token and failed the final reset with 400).
+    await waitForMail(1);
+    mailbox.messages.length = 0;
 
     // Unknown email: same generic envelope, no email sent (anti-enumeration).
     const ghost = await app.inject({
@@ -172,7 +217,7 @@ describe("self-service password reset", () => {
     });
     expect(ghost.statusCode).toBe(200);
     expect(ghost.json()).toEqual({ ok: true });
-    expect(sent).toHaveLength(0);
+    expect(mailbox.messages).toHaveLength(0);
 
     // Known email: reset mail goes out; a second request supersedes the first.
     const first = await app.inject({
@@ -181,9 +226,11 @@ describe("self-service password reset", () => {
       payload: { email: "reset-user@example.test" },
     });
     expect(first.statusCode).toBe(200);
-    const oldToken = tokenFromLink(sent[sent.length - 1].text);
+    await waitForMail(1);
+    const oldToken = tokenFromLink(bodyText(mailbox.messages[0].raw));
     await app.inject({ method: "POST", url: "/v5/auth/password/forgot", payload: { email: "reset-user@example.test" } });
-    const newToken = tokenFromLink(sent[sent.length - 1].text);
+    await waitForMail(2);
+    const newToken = tokenFromLink(bodyText(mailbox.messages[1].raw));
     expect(newToken).not.toBe(oldToken);
 
     // The superseded token is dead; the newest works.
