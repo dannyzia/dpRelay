@@ -333,7 +333,15 @@ describe("connected: nav ↔ route-table parity", () => {
 
   it("customer tabs are exactly the connected nav subset", () => {
     expect(CUSTOMER_TABS.every((tab) => NAV.some((item) => item.id === tab.id))).toBe(true);
-    expect(CUSTOMER_TABS.map((tab) => tab.id)).toEqual(["credits", "buy", "bulk", "history", "credentials"]);
+    // ISSUE-96 added the "plan" tab (unlimited BYOD plan + device slots).
+    expect(CUSTOMER_TABS.map((tab) => tab.id)).toEqual([
+      "credits",
+      "plan",
+      "buy",
+      "bulk",
+      "history",
+      "credentials",
+    ]);
   });
 
   it("hrefFor is the only hash builder the table relies on", () => {

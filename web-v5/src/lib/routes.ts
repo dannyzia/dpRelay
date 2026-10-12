@@ -24,6 +24,7 @@ export interface NavItem {
 /** Customer tabs — the connected app's credit tools. */
 export const CUSTOMER_TABS: NavItem[] = [
   { id: "credits", label: "Balance", segments: ["credits"], requiresConnected: true },
+  { id: "plan", label: "Plan", segments: ["plan"], requiresConnected: true },
   { id: "buy", label: "Buy credits", segments: ["buy"], requiresConnected: true },
   { id: "bulk", label: "Bulk", segments: ["bulk"], requiresConnected: true },
   { id: "history", label: "History", segments: ["history"], requiresConnected: true },

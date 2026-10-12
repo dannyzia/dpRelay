@@ -214,6 +214,34 @@
         }
       }
     },
+    "/v5/apps/devices": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/apps/devices/{deviceId}": {
+      "delete": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "deviceId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/device/phone-number": {
       "post": {
         "responses": {
@@ -367,6 +395,42 @@
         }
       }
     },
+    "/v5/billing/plans": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/billing/subscription": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/billing/plans/purchase": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/billing/plans/submit-trx": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/v5/admin/billing/packages": {
       "post": {
         "responses": {
@@ -458,6 +522,24 @@
     },
     "/v5/admin/billing/queue": {
       "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/admin/billing/plans/queue": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/v5/admin/billing/plans/approve": {
+      "post": {
         "responses": {
           "200": {
             "description": "Default Response"
