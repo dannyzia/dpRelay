@@ -134,26 +134,24 @@ test.describe('v5 connected app plane', () => {
       return;
     }
 
-    // Mutating path: a real campaign POST. Either it is created (detail panel
-    // opens with the campaign name) or the API refuses structurally
-    // (bulk_not_enabled / insufficient_credits / checksum_required) — all
-    // valid outcomes; an unstructured error is not.
-    // KNOWN GAP (flagged on ISSUE-64/ISSUE-99): dashboard/src's create form
-    // never calls the F5c preview step, so a bulk-enabled server always
-    // answers checksum_required — web-v5 implements the two-step, dashboard
-    // does not yet. Until it does, expect the refusal branch here.
+    // Mutating path (ISSUE-100): the form now runs the F5c preview step
+    // before creation, so a bulk-enabled server accepts the campaign
+    // (201 Created) instead of refusing with checksum_required.
     await page.getByPlaceholder(/Phone numbers, one per line/).fill('+8801712345678');
     const name = `e2e-mut-${Date.now()}`;
     await page.getByPlaceholder('Campaign name').fill(name);
+
+    // The preview surfaces the recipient count before anything spends credits.
+    await page.getByRole('button', { name: 'Preview recipients' }).click();
+    await expect(page.getByText(/1 recipient ready to send/)).toBeVisible({ timeout: 15_000 });
+
+    // Creation carries the preview checksum → 201 Created + detail panel opens.
+    const created = page.waitForResponse(
+      (res) => res.url().endsWith('/v5/bulk/campaigns') && res.request().method() === 'POST',
+    );
     await page.getByRole('button', { name: 'Create campaign' }).click();
-    const detail = page.getByRole('heading', { name: name });
-    const refusal = page.getByRole('alert');
-    await expect(detail.or(refusal)).toBeVisible({ timeout: 15_000 });
-    if (await refusal.isVisible()) {
-      await expect(refusal).toHaveText(
-        /Bulk sending is not enabled|Not enough bulk credits|Preview the recipient list first/,
-      );
-    }
+    expect((await created).status()).toBe(201);
+    await expect(page.getByRole('heading', { name })).toBeVisible({ timeout: 15_000 });
   });
 
   test('credits screen shows balances and the package catalog', async ({ page }) => {

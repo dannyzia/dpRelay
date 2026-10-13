@@ -5,8 +5,10 @@ import {
   createCampaign,
   getCampaign,
   listCampaigns,
+  previewCampaign,
   type Campaign,
   type CampaignDetail,
+  type PreviewCampaignResult,
 } from "../api.js";
 
 type CampaignStatus = Campaign["status"];
@@ -58,32 +60,97 @@ function CreateForm(props: { onCreated: (campaignId: string) => void }) {
   const [message, setMessage] = useState("");
   const [phonesText, setPhonesText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F5c two-step: creation must carry the checksum of a PREVIEWED list, so we
+  // keep the preview next to the exact phones string it was computed from — if
+  // the operator edits the list afterwards the preview is stale and must be
+  // re-run (the server would answer checksum_mismatch otherwise).
+  const [preview, setPreview] = useState<{ key: string; result: PreviewCampaignResult } | null>(null);
+
+  /** Splits the textarea into the exact array that will be previewed/created. */
+  function parsePhones(): string[] {
+    return phonesText
+      .split(/[\s,]+/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+  }
+
+  /** True when a preview exists for the CURRENT list (checksum still valid). */
+  const previewIsFresh = preview !== null && preview.key === parsePhones().join("\n");
+
+  /** F5c step 1: validate the list server-side and bind its checksum. */
+  async function runPreview(): Promise<PreviewCampaignResult | null> {
+    const phones = parsePhones();
+    const invalid = phones.filter((p) => !E164_RE.test(p));
+    if (invalid.length > 0) {
+      setPreview(null);
+      setError(`Not valid E.164 (+countrynumber…): ${invalid.slice(0, 3).join(", ")}`);
+      return null;
+    }
+    setPreviewing(true);
+    setError(null);
+    try {
+      const result = await previewCampaign(phones);
+      setPreview({ key: phones.join("\n"), result });
+      return result;
+    } catch (err) {
+      setPreview(null);
+      if (err instanceof ApiError) {
+        if (err.code === "bulk_not_enabled") setError("Bulk sending is not enabled on this deployment (BULK_ENABLED).");
+        else setError(err.message);
+      } else {
+        setError("Preview failed — try again.");
+      }
+      return null;
+    } finally {
+      setPreviewing(false);
+    }
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-    const phones = phonesText
-      .split(/[\s,]+/)
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
-    const invalid = phones.filter((p) => !E164_RE.test(p));
-    if (invalid.length > 0) {
-      setError(`Not valid E.164 (+countrynumber…): ${invalid.slice(0, 3).join(", ")}`);
+    // Submitting without a fresh preview runs the preview step instead of
+    // creating — a list the operator has not reviewed must never spend credits.
+    let result: PreviewCampaignResult | null = previewIsFresh && preview !== null ? preview.result : null;
+    if (result === null) result = await runPreview();
+    if (result === null) return;
+    if (result.total < 1) {
+      setError("No valid recipients in the list — add at least one E.164 number.");
+      return;
+    }
+    if ((result.invalidRows?.length ?? 0) > 0) {
+      setError("Fix the rejected rows below, then preview again.");
       return;
     }
     setBusy(true);
     try {
-      const result = await createCampaign({ name: name.trim(), message, phones });
+      const created = await createCampaign({
+        name: name.trim(),
+        message,
+        phones: parsePhones(),
+        checksum: result.checksum,
+      });
       setName("");
       setMessage("");
       setPhonesText("");
-      props.onCreated(result.campaignId);
+      setPreview(null);
+      props.onCreated(created.campaignId);
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.code === "bulk_not_enabled") setError("Bulk sending is not enabled on this deployment (BULK_ENABLED).");
-        else if (err.code === "no_credits_row" || err.code === "insufficient_credits") setError("Not enough bulk credits for this campaign.");
-        else setError(err.message);
+        // The list changed under the preview (or the server recomputed a
+        // different digest): force a fresh preview rather than spend blindly.
+        if (err.code === "checksum_mismatch") {
+          setPreview(null);
+          setError("Recipient list changed since preview — preview again to confirm.");
+        } else if (err.code === "bulk_not_enabled") {
+          setError("Bulk sending is not enabled on this deployment (BULK_ENABLED).");
+        } else if (err.code === "no_credits_row" || err.code === "insufficient_credits") {
+          setError("Not enough bulk credits for this campaign.");
+        } else {
+          setError(err.message);
+        }
       } else {
         setError("Something went wrong — try again.");
       }
@@ -119,19 +186,60 @@ function CreateForm(props: { onCreated: (campaignId: string) => void }) {
       />
       <textarea
         value={phonesText}
-        onChange={(e) => setPhonesText(e.target.value)}
+        onChange={(e) => {
+          setPhonesText(e.target.value);
+          // Editing the list invalidates any preview bound to the old one.
+          setPreview(null);
+        }}
         placeholder={"Phone numbers, one per line (E.164)\n+8801XXXXXXXXX"}
         rows={4}
         required
         className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
       />
-      <button
-        type="submit"
-        disabled={busy}
-        className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-      >
-        {busy ? "Creating…" : "Create campaign"}
-      </button>
+      {preview !== null && (
+        <div className="rounded-lg border border-sky-900 bg-sky-950/40 p-3 text-sm text-slate-300">
+          <p className="font-medium text-slate-200">
+            {preview.result.total} recipient{preview.result.total === 1 ? "" : "s"} ready to send
+            {!previewIsFresh && (
+              <span className="ml-2 font-normal text-amber-300">— list changed, preview again</span>
+            )}
+          </p>
+          {preview.result.sampleFirst5.length > 0 && (
+            <p className="mt-1 font-mono text-xs text-slate-400">
+              First {preview.result.sampleFirst5.length}: {preview.result.sampleFirst5.join(", ")}
+            </p>
+          )}
+          {preview.result.perCampaignLimit !== undefined && (
+            <p className="mt-1 text-xs text-slate-500">Per-campaign limit: {preview.result.perCampaignLimit}</p>
+          )}
+          {preview.result.invalidRows.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-xs text-red-300">
+              {preview.result.invalidRows.slice(0, 5).map((row) => (
+                <li key={row.line}>
+                  Line {row.line}: {row.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => void runPreview()}
+          disabled={previewing || busy}
+          className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:border-slate-500 disabled:opacity-50"
+        >
+          {previewing ? "Previewing…" : "Preview recipients"}
+        </button>
+        <button
+          type="submit"
+          disabled={busy || previewing}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+        >
+          {busy ? "Creating…" : "Create campaign"}
+        </button>
+      </div>
     </form>
   );
 }
