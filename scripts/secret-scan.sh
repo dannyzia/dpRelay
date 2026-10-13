@@ -103,6 +103,17 @@ SECRET_RE+='|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
 
 grep_index "secret-shaped content in tracked files" "$SECRET_RE"
 
+# --- 2b. Credentials embedded in URL userinfo -------------------------------------
+# scheme://user:pass@host — the credential hides in plain sight inside an
+# ordinary-looking URL, so no key-format prefix gives it away and rule 2 can
+# never see it (ISSUE-102: this shape slipped past the gate in an e2e spec).
+# The colon between user and pass is mandatory: without it the "userinfo" is
+# just a username, and requiring it keeps port numbers (localhost:5173) and
+# bare email-ish URLs from tripping the rule — verified against the full
+# tracked tree before this rule shipped.
+USERINFO_RE='[a-zA-Z][a-zA-Z0-9+.-]*://[^/[:space:]@]+:[^/[:space:]@]+@'
+grep_index "credentials embedded in URL userinfo (user:pass@host)" "$USERINFO_RE"
+
 # --- 3. Entropy backstop ----------------------------------------------------------------
 # A PEM header can be stripped or reformatted. A >=512-char run of base64 with
 # no spaces is almost never prose and almost always key material.
