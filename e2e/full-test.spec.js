@@ -1,219 +1,196 @@
 const { test, expect } = require('@playwright/test');
 
-const ADMIN_EMAIL = 'callzr@gmail.com';
-const ADMIN_PASSWORD = '@DELL123dell#';
-const DASHBOARD_URL = 'https://authenticator-15fb7.web.app';
-const UNIQUE_EMAIL = `testclient_${Date.now()}@example.com`;
+/**
+ * dP Relay v5 end-to-end suite (ISSUE-99) — modernized from the legacy
+ * Firebase v4 smoke test. Targets the React Vite dashboard (AuthScreens,
+ * ConnectAppScreen, CampaignsScreen, CreditsScreen, OperatorPanel) and the
+ * Fastify /v5 API behind it.
+ *
+ * Environment (all optional — the suite degrades gracefully without them):
+ *   DASHBOARD_URL       where the SPA is served (default in playwright.config.ts)
+ *   E2E_APP_ID          X-App-Id of a provisioned app; unlocks the campaigns/
+ *   E2E_APP_SECRET     credits/operator plane tests (secret shown once at mint)
+ *   E2E_OPERATOR_SECRET unlocks the operator panel (OPERATOR_SECRET)
+ *   E2E_ALLOW_MUTATIONS set to "1" to let the campaign-creation test actually
+ *                       POST a campaign (needs bulk enabled + credits; it can
+ *                       enqueue real SMS, so it is OFF by default)
+ *
+ * Every run registers fresh users (test_<ts>_<rand>@example.com) so repeat
+ * runs never collide on email_taken. The v5 dashboard is a state machine, not
+ * a URL router: navigation happens through in-app buttons, so tests drive the
+ * UI rather than page.goto()ing sub-routes.
+ */
 
-// Helper: check if an element containing text is visible (with short timeout)
-const isVisible = async (page, selector, timeout = 2000) => {
-  try {
-    return await page.locator(selector).isVisible({ timeout });
-  } catch {
-    return false;
-  }
-};
+const APP_ID = process.env.E2E_APP_ID;
+const APP_SECRET = process.env.E2E_APP_SECRET;
+const OPERATOR_SECRET = process.env.E2E_OPERATOR_SECRET;
+const ALLOW_MUTATIONS = process.env.E2E_ALLOW_MUTATIONS === '1';
 
-// Helper: check if an error banner is showing on the page
-const getErrorText = async (page) => {
-  const err = page.locator('.text-red-700, .bg-red-50').first();
-  if (await err.isVisible({ timeout: 500 }).catch(() => false)) {
-    return (await err.textContent()).trim();
-  }
-  return null;
-};
+// Server enforces a 10-char minimum (server/src/routes/auth.ts PASSWORD_MIN).
+const TEST_PASSWORD = 'E2ePassw0rd!';
 
-test.describe('Admin and User full flows', () => {
+/** Fresh identity per call: millisecond stamp + random suffix beats same-ms collisions. */
+function uniqueEmail() {
+  return `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}@example.com`;
+}
+
+/** Registers a new user through the RegisterScreen and lands back on sign-in. */
+async function registerUser(page, email) {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Register' }).click();
+  await expect(page.getByRole('heading', { name: 'Create account' })).toBeVisible();
+  await page.getByPlaceholder('you@example.com').fill(email);
+  await page.getByPlaceholder('At least 8 characters').fill(TEST_PASSWORD);
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByRole('heading', { name: 'Account created' })).toBeVisible();
+  await page.getByRole('button', { name: 'Go to sign in' }).click();
+}
+
+/** Signs in and waits for the post-login gate (connect-app screen). */
+async function signIn(page, email) {
+  await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  await page.getByPlaceholder('you@example.com').fill(email);
+  await page.locator('input[type="password"]').fill(TEST_PASSWORD);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Connect an app' })).toBeVisible();
+  // The session contract: login stores the JWT pair in localStorage.
+  const token = await page.evaluate(() => localStorage.getItem('dprelay.accessToken'));
+  expect(token, 'login must store an access token in localStorage').toBeTruthy();
+}
+
+/** Pastes app credentials into ConnectAppScreen (verified server-side before store). */
+async function connectApp(page) {
+  await page.getByPlaceholder('e.g. dprelay-prod-2').fill(APP_ID);
+  await page.locator('input[type="password"]').fill(APP_SECRET);
+  await page.getByRole('button', { name: 'Connect app' }).click();
+}
+
+test.describe('v5 user client flow', () => {
+  test('register, sign in, and gate on connect-app', async ({ page }) => {
+    const email = uniqueEmail();
+    await registerUser(page, email);
+    await signIn(page, email);
+    // Sign-in with no connected app must land on the connect-app gate, not an error.
+    await expect(page.getByRole('button', { name: 'Sign out instead' })).toBeVisible();
+  });
+
+  test('rejects bad credentials with a field-level hint', async ({ page }) => {
+    await page.goto('/');
+    await page.getByPlaceholder('you@example.com').fill(uniqueEmail());
+    await page.locator('input[type="password"]').fill('definitely-wrong-1');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page.getByRole('alert')).toHaveText('Email or password is incorrect.');
+  });
+
+  test('connect-app rejects unknown app ids without breaking the session', async ({ page }) => {
+    const email = uniqueEmail();
+    await registerUser(page, email);
+    await signIn(page, email);
+    // A bogus id (NOT the provisioned one): requireApp answers unknown_app →
+    // the screen maps it to an actionable hint.
+    await page.getByPlaceholder('e.g. dprelay-prod-2').fill(`unknown-${Date.now()}`);
+    await page.locator('input[type="password"]').fill('definitely-not-a-real-secret-0000');
+    await page.getByRole('button', { name: 'Connect app' }).click();
+    await expect(page.getByRole('alert')).toHaveText(/Unknown X-App-Id/);
+    // The user session survives a failed app connection (planes are independent).
+    expect(await page.evaluate(() => localStorage.getItem('dprelay.accessToken'))).toBeTruthy();
+  });
+});
+
+test.describe('v5 connected app plane', () => {
+  test.skip(
+    () => !APP_ID || !APP_SECRET,
+    'E2E_APP_ID / E2E_APP_SECRET not set — skipping connected-plane tests',
+  );
+
   test.beforeEach(async ({ page }) => {
-    await page.context().clearCookies();
-    await page.goto(DASHBOARD_URL);
+    const email = uniqueEmail();
+    await registerUser(page, email);
+    await signIn(page, email);
+    await connectApp(page);
+    await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible();
   });
 
-  test('Admin: login, navigate pages, manage campaigns', async ({ page }) => {
-    // --- Login as admin ---
-    await page.click('text=Login');
-    await page.fill('input[type="email"]', ADMIN_EMAIL);
-    await page.fill('input[type="password"]', ADMIN_PASSWORD);
-    await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(/.*dashboard/);
-    console.log('Admin login OK');
-
-    // --- Admin packages page loads ---
-    await page.goto(`${DASHBOARD_URL}/admin/packages`);
-    await expect(page.locator('text=Manage Packages')).toBeVisible();
-
-    // Try creating an OTP package (may fail if admin role not set)
-    const pkgForm = page.locator('form');
-    await pkgForm.locator('input[type="text"]').fill('Test OTP 100');
-    await pkgForm.locator('input[type="number"]').nth(0).fill('100');
-    await pkgForm.locator('input[type="number"]').nth(1).fill('100');
-    await pkgForm.locator('input[type="number"]').nth(2).fill('30');
-    await pkgForm.locator('select').selectOption('otp');
-    await pkgForm.locator('button[type="submit"]').click();
-    await page.waitForTimeout(2000);
-
-    const errText = await getErrorText(page);
-    if (errText) {
-      console.log('Package creation skipped (backend):', errText);
-    } else {
-      await expect(page.getByRole('cell', { name: 'Test OTP 100' }).first()).toBeVisible();
-      // Create a bulk package too
-      await pkgForm.locator('input[type="text"]').fill('Test Bulk 500');
-      await pkgForm.locator('input[type="number"]').nth(0).fill('500');
-      await pkgForm.locator('input[type="number"]').nth(1).fill('400');
-      await pkgForm.locator('input[type="number"]').nth(2).fill('30');
-      await pkgForm.locator('select').selectOption('bulk');
-      await pkgForm.locator('button[type="submit"]').click();
-      await expect(page.getByRole('cell', { name: 'Test Bulk 500' }).first()).toBeVisible();
+  test('campaigns screen renders the create form and validates E.164', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: 'New campaign' })).toBeVisible();
+    // Status filters are the campaign list surface.
+    for (const filter of ['all', 'queued', 'sending', 'paused', 'completed', 'cancelled']) {
+      await expect(page.getByRole('button', { name: filter, exact: true })).toBeVisible();
     }
 
-    // --- Admin transactions page loads ---
-    await page.goto(`${DASHBOARD_URL}/admin/transactions`);
-    await expect(page.locator('table')).toBeVisible();
-    // Look for actual Approve buttons (not in the empty-state row)
-    const approveBtn = page.locator('button:has-text("Approve")').first();
-    if (await approveBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      page.on('dialog', (dialog) => dialog.accept());
-      await approveBtn.click();
-      await page.waitForTimeout(2000);
-      console.log('Approved a pending transaction');
-    } else {
-      console.log('No pending transactions to approve');
-    }
+    // Client-side E.164 validation: a bad number is rejected before any API
+    // call, so this is safe to run against a live deployment.
+    await page.getByPlaceholder('Campaign name').fill(`e2e-${Date.now()}`);
+    await page.getByPlaceholder(/Message \(160 chars/).fill('dP Relay E2E validation probe');
+    await page.getByPlaceholder(/Phone numbers, one per line/).fill('12345');
+    await page.getByRole('button', { name: 'Create campaign' }).click();
+    await expect(page.getByRole('alert')).toHaveText(/Not valid E\.164/);
 
-    // --- Bulk campaign creation (4-step wizard) ---
-    await page.goto(`${DASHBOARD_URL}/dashboard/bulk/create`);
-    // Step 1: campaign name + app (requires at least 1 registered app)
-    const hasApp = await page.locator('label:has-text("App") select option').count() > 1;
-    if (hasApp) {
-      await page.locator('label:has-text("Campaign Name") input').fill('Test Bulk Campaign');
-      await page.locator('label:has-text("App") select').selectOption({ index: 1 });
-      await page.click('button:has-text("Continue")');
-      // Step 2: CSV
-      if (await isVisible(page, 'textarea[placeholder*="+880"]')) {
-        await page.locator('textarea[placeholder*="+880"]').fill('+8801712345678\n+8801712345679');
-        await page.click('button:has-text("Continue")');
-        // Step 3: message
-        if (await isVisible(page, 'label:has-text("Message Template") textarea')) {
-          await page.locator('label:has-text("Message Template") textarea').fill('Hello from test');
-          await page.click('button:has-text("Continue")');
-          // Step 4: submit
-          await page.click('button:has-text("Submit Campaign")');
-          try {
-            await expect(page).toHaveURL(/\/dashboard\/bulk\/[a-f0-9-]+/, { timeout: 5000 });
-            await page.waitForTimeout(2000);
-            if (await isVisible(page, 'button:has-text("Pause")')) {
-              await page.click('button:has-text("Pause")');
-              await expect(page.locator('text=paused')).toBeVisible({ timeout: 10000 });
-            }
-            if (await isVisible(page, 'button:has-text("Resume")')) {
-              await page.click('button:has-text("Resume")');
-            }
-            if (await isVisible(page, 'button:has-text("Cancel")')) {
-              await page.click('button:has-text("Cancel")');
-              await expect(page.locator('text=cancelled')).toBeVisible({ timeout: 10000 });
-            }
-            console.log('Bulk campaign created and actions tested');
-          } catch {
-            console.log('Bulk campaign submission failed');
-          }
-        }
-      }
-    } else {
-      console.log('No registered apps — skipping bulk campaign creation');
-    }
-  });
-
-  test('User (client): register, apps, credits, playground', async ({ page }) => {
-    // --- Register a new client account ---
-    await page.goto(`${DASHBOARD_URL}/register`);
-    await page.fill('#name', 'Test Client');
-    await page.fill('#email', UNIQUE_EMAIL);
-    await page.fill('#password', 'Test123!');
-    await page.fill('#confirmPassword', 'Test123!');
-
-    // Check registration page renders correctly
-    await expect(page.locator('text=Create your account')).toBeVisible();
-
-    await page.click('button:has-text("Create Account")');
-    try {
-      await expect(page).toHaveURL(/.*dashboard/, { timeout: 15000 });
-      console.log('User registration OK');
-    } catch {
-      console.log('Registration did not redirect — checking for error');
-      const err = await getErrorText(page);
-      console.log('Registration error:', err);
-      // Still on register page — skip further tests
-      expect(err).toBeNull();
+    if (!ALLOW_MUTATIONS) {
+      test.info().annotations.push({
+        type: 'note',
+        description: 'Real campaign creation skipped (set E2E_ALLOW_MUTATIONS=1 to enable)',
+      });
       return;
     }
 
-    // --- Navigate to apps page ---
-    await page.goto(`${DASHBOARD_URL}/dashboard/apps`);
-    await expect(page.locator('text=Your Apps')).toBeVisible();
-
-    // Try registering an app
-    if (await isVisible(page, 'button:has-text("Register New App")')) {
-      await page.click('button:has-text("Register New App")');
-      await page.waitForTimeout(500);
-
-      if (await isVisible(page, 'text=Register New App')) {
-        await page.fill('input[name="appName"]', 'Test App');
-        await page.click('button:has-text("Create App")');
-        await page.waitForTimeout(3000);
-
-        if (await isVisible(page, 'text=App created successfully')) {
-          const appId = await page.locator('code').first().innerText();
-          const appSecret = await page.locator('code').nth(1).innerText();
-          expect(appId).toBeTruthy();
-          expect(appSecret).toBeTruthy();
-          console.log('App registered:', appId);
-          await page.click('button:has-text("Done")');
-        } else {
-          const err = await getErrorText(page);
-          console.log('App creation failed:', err);
-        }
-      }
+    // Mutating path: a real campaign POST. Either it is created (detail panel
+    // opens with the campaign name) or the API refuses structurally
+    // (bulk_not_enabled / insufficient_credits / checksum_required) — all
+    // valid outcomes; an unstructured error is not.
+    // KNOWN GAP (flagged on ISSUE-64/ISSUE-99): dashboard/src's create form
+    // never calls the F5c preview step, so a bulk-enabled server always
+    // answers checksum_required — web-v5 implements the two-step, dashboard
+    // does not yet. Until it does, expect the refusal branch here.
+    await page.getByPlaceholder(/Phone numbers, one per line/).fill('+8801712345678');
+    const name = `e2e-mut-${Date.now()}`;
+    await page.getByPlaceholder('Campaign name').fill(name);
+    await page.getByRole('button', { name: 'Create campaign' }).click();
+    const detail = page.getByRole('heading', { name: name });
+    const refusal = page.getByRole('alert');
+    await expect(detail.or(refusal)).toBeVisible({ timeout: 15_000 });
+    if (await refusal.isVisible()) {
+      await expect(refusal).toHaveText(
+        /Bulk sending is not enabled|Not enough bulk credits|Preview the recipient list first/,
+      );
     }
+  });
 
-    // --- Buy credits ---
-    await page.goto(`${DASHBOARD_URL}/dashboard/buy-credits`);
-    await expect(page.locator('h1:has-text("Buy Credits")')).toBeVisible();
+  test('credits screen shows balances and the package catalog', async ({ page }) => {
+    await page.getByRole('button', { name: 'Credits' }).click();
+    // exact: "Credits" also substring-matches OTP credits / Bulk credits / Buy credits.
+    await expect(page.getByRole('heading', { name: 'Credits', exact: true })).toBeVisible();
+    // Balance cards resolve to numbers (they render "…" while loading).
+    await expect(page.locator('h2:has-text("OTP credits") + p')).toHaveText(/^\d+$/);
+    await expect(page.locator('h2:has-text("Bulk credits") + p')).toHaveText(/^\d+$/);
+    // Package catalog: either rows or the explicit empty state.
+    await expect(page.getByRole('heading', { name: 'Buy credits' })).toBeVisible();
+    await expect(page.getByText(/No active packages published|\u09F3\d+/).first()).toBeVisible();
+  });
+});
 
-    if (await isVisible(page, 'button:has-text("Buy Now")', 5000)) {
-      await page.click('button:has-text("Buy Now")').first();
-      await page.waitForTimeout(500);
+test.describe('v5 operator panel', () => {
+  test.skip(
+    () => !APP_ID || !APP_SECRET || !OPERATOR_SECRET,
+    'E2E_APP_ID / E2E_APP_SECRET / E2E_OPERATOR_SECRET not set — skipping operator unlock',
+  );
 
-      if (await isVisible(page, 'input[name="trxId"]')) {
-        await page.fill('input[name="trxId"]', 'TEST_TRX_123');
-        await page.click('button:has-text("Submit TrxID")');
-        if (await isVisible(page, 'text=Awaiting admin approval', 5000)) {
-          console.log('Credit purchase submitted');
-        }
-      }
-    }
+  test('unlocks with the operator secret and shows aggregate metrics', async ({ page }) => {
+    const email = uniqueEmail();
+    await registerUser(page, email);
+    await signIn(page, email);
+    await connectApp(page);
+    await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible();
 
-    // --- Transactions page ---
-    await page.goto(`${DASHBOARD_URL}/dashboard/transactions`);
-    await expect(page.locator('h1:has-text("Transactions")')).toBeVisible();
-    console.log('Transactions page loaded');
+    // Operator nav lives in the connected shell (state machine, not a route).
+    await page.getByRole('button', { name: 'Operator' }).click();
+    await expect(page.getByRole('heading', { name: 'Operator view' })).toBeVisible();
+    await page.getByPlaceholder('OPERATOR_SECRET').fill(OPERATOR_SECRET);
+    await page.getByRole('button', { name: 'Unlock' }).click();
 
-    // --- Playground ---
-    await page.goto(`${DASHBOARD_URL}/dashboard/playground`);
-    await expect(page.locator('h1:has-text("API Playground")')).toBeVisible();
-
-    // Try to use the playground if we have an app
-    const appDropdown = page.locator('select').first();
-    const options = await appDropdown.locator('option').all();
-    if (options.length > 1) {
-      const appName = await options[1].innerText();
-      await appDropdown.selectOption({ label: appName });
-      await page.fill('input[name="appSecret"]', 'dummy-secret');
-      await page.fill('#phone', '+8801712345678');
-      await page.click('button:has-text("Send OTP")');
-      await page.waitForTimeout(2000);
-      console.log('Playground: Send OTP attempted');
-    }
-    console.log('Playground page loaded');
+    // Unlock probes getAdminMetrics with the secret before trusting it.
+    await expect(page.getByText('Aggregate metrics')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Apps', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Lock' })).toBeVisible();
   });
 });
