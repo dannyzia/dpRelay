@@ -247,14 +247,48 @@ export async function listCampaigns(status?: Campaign["status"]): Promise<{ camp
 export async function getCampaign(id: string): Promise<CampaignDetail> {
   const body = await appFetch<{ ok: true; campaign: CampaignDetail }>(`/v5/bulk/campaigns/${encodeURIComponent(id)}`);
   return body.campaign;
+}/** One rejected recipient row from the preview step: 1-based line + why. */
+export interface PreviewInvalidRow {
+  line: number;
+  reason: string;
+}
+
+/**
+ * F5c preview result (POST /v5/bulk/campaigns/preview): pure validation —
+ * spends no credits and stores nothing. `checksum` is the SHA-256 the create
+ * route RECOMPUTES over the submitted list, so a recipient list the operator
+ * never reviewed can never spend credits (a changed list answers
+ * checksum_mismatch).
+ */
+export interface PreviewCampaignResult {
+  total: number;
+  sampleFirst5: string[];
+  invalidRows: PreviewInvalidRow[];
+  checksum: string;
+  headerSkipped?: boolean;
+  perCampaignLimit?: number;
+}
+
+/**
+ * F5c step 1 — validate the recipient list and obtain the checksum that
+ * createCampaign must submit. Sends the parsed phones as JSON { phones } (the
+ * server also accepts raw text/csv; the dashboard splits the textarea
+ * client-side and gates on E.164 before calling).
+ */
+export async function previewCampaign(phones: string[]): Promise<PreviewCampaignResult> {
+  return appFetch<PreviewCampaignResult & { ok: true }>("/v5/bulk/campaigns/preview", {
+    method: "POST",
+    body: JSON.stringify({ phones }),
+  });
 }
 
 export interface CreateCampaignInput {
   name: string;
   message: string;
   phones: string[];
+  /** F5c: checksum from previewCampaign over this EXACT phones array. */
+  checksum: string;
 }
-
 export interface CreateCampaignResult {
   campaignId: string;
   totalRecipients: number;
@@ -262,6 +296,12 @@ export interface CreateCampaignResult {
   duplicateCount?: number;
 }
 
+/**
+ * F5c step 2 — create the campaign carrying the preview checksum. The server
+ * recomputes it over the submitted phones and refuses (checksum_mismatch) when
+ * the list changed since preview, so callers must submit the same array they
+ * previewed.
+ */
 export async function createCampaign(input: CreateCampaignInput): Promise<CreateCampaignResult> {
   return appFetch<CreateCampaignResult & { ok: true }>("/v5/bulk/campaigns", {
     method: "POST",
@@ -270,6 +310,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Create
       message: input.message,
       sourceType: "csv",
       phones: input.phones,
+      checksum: input.checksum,
     }),
   });
 }
