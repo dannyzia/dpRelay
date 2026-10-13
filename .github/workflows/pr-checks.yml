@@ -254,3 +254,109 @@ jobs:
           node-version: '20'
       - name: Check landing site
         run: node scripts/check-landing.mjs
+
+  # ISSUE-103: the v5 Playwright suite in CI, no-credentials skip mode. Boots
+  # a throwaway API server (fresh SQLite, runtime-minted secrets) plus the
+  # dashboard dev server on the runner, then runs `npx playwright test` with
+  # NO E2E_* variables: the register / sign-in / connect-app tests execute and
+  # gate the PR, while the app-plane suites take their test.skip guards.
+  #
+  # Skip mode is the security posture, not a compromise: the job holds no
+  # stored secret, so a PR cannot exfiltrate one and nothing it does can touch
+  # a shared environment — both endpoints are this job's own localhost
+  # instances. DASHBOARD_URL and VITE_API_BASE_URL are set precisely because
+  # the defaults point at production (playwright.config.ts falls back to the
+  # deployed pages.dev dashboard, dashboard/src/api.ts to the Render API).
+  #
+  # Unconditional on every PR (same discipline as server-tests): auth
+  # regressions are not path-scoped, and a skipped required check is
+  # indistinguishable from a passing one.
+  dashboard-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Declared once: every step below reads them. Loopback ports on a clean
+      # runner — change them here and nowhere else.
+      SERVER_PORT: 3879
+      DASHBOARD_PORT: 5275
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            dashboard/package-lock.json
+      - name: Install Playwright (repo root)
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+      - name: Generate throwaway runtime env
+        # Secrets are minted per run and never stored in the repo or in
+        # Actions settings — skip mode needs no credential at all. The values
+        # only ever exist in this runner's temp dir.
+        run: |
+          {
+            echo "PORT=${SERVER_PORT}"
+            echo "HOST=127.0.0.1"
+            echo "LOG_LEVEL=warn"
+            echo "DB_PATH=${RUNNER_TEMP}/e2e.db"
+            echo "JWT_SECRET=$(openssl rand -hex 32)"
+            echo "OPERATOR_SECRET=$(openssl rand -hex 16)"
+            echo "APP_PROVISIONING_SECRET=$(openssl rand -hex 16)"
+            echo "BULK_ENABLED=true"
+            echo "CORS_ALLOWED_ORIGINS=http://localhost:${DASHBOARD_PORT}"
+          } > "${RUNNER_TEMP}/e2e.env"
+      - name: Start API server
+        working-directory: server
+        # Migrations run at boot (server/src/db.ts), so a fresh DB_PATH is
+        # schema-current without a separate step.
+        run: |
+          set -a; source "${RUNNER_TEMP}/e2e.env"; set +a
+          nohup npx tsx src/index.ts > "${RUNNER_TEMP}/server.log" 2>&1 &
+      - name: Start dashboard dev server
+        working-directory: dashboard
+        # VITE_API_BASE_URL bakes the API origin into the served SPA — without
+        # it the dashboard would silently talk to the production API.
+        run: |
+          VITE_API_BASE_URL="http://127.0.0.1:${SERVER_PORT}" \
+            nohup npm run dev -- --port "${DASHBOARD_PORT}" --strictPort \
+            > "${RUNNER_TEMP}/vite.log" 2>&1 &
+      - name: Wait for the stack
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf "http://127.0.0.1:${SERVER_PORT}/health" >/dev/null 2>&1 \
+              && curl -sf "http://localhost:${DASHBOARD_PORT}/" >/dev/null 2>&1; then
+              echo "stack ready (attempt ${i})"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::stack did not become ready within 60s"
+          exit 1
+      - name: Run e2e (no credentials — gated suites skip)
+        # Deliberately NO E2E_APP_ID / E2E_APP_SECRET / E2E_OPERATOR_SECRET:
+        # auth + connect-app regressions run; app-plane suites skip cleanly.
+        env:
+          DASHBOARD_URL: http://localhost:${{ env.DASHBOARD_PORT }}
+        run: npx playwright test
+      - name: Diagnose failure
+        if: failure()
+        run: |
+          echo "--- server.log ---"; tail -n 100 "${RUNNER_TEMP}/server.log" 2>/dev/null || true
+          echo "--- vite.log ---"; tail -n 100 "${RUNNER_TEMP}/vite.log" 2>/dev/null || true
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-e2e-results
+          path: test-results/
+          if-no-files-found: ignore
