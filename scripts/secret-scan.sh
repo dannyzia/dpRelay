@@ -43,8 +43,13 @@ FAILED=0
 # git grep exits 1 for "no matches" (fine) and >1 for a real error (not fine).
 # `-e` is mandatory, not stylistic: a pattern starting with "-" is parsed as an
 # option otherwise, and the secret rules here begin with "-----BEGIN".
-grep_index() { # <label> <regex>
-  local label="$1" regex="$2" out rc
+grep_index() { # <label> <regex> [skip-regex]
+  # The optional third argument drops candidate lines whose ENTIRE match sits
+  # on a line also matching a known-fixture idiom (rule 2c). It filters LINES,
+  # not files: no class here can exempt a whole path the way the allowlist can,
+  # so a real credential still trips the rule unless it wears a fixture costume.
+  # Case-insensitive because fixtures spell their markers in every case.
+  local label="$1" regex="$2" skip="${3-}" out rc
   set +e
   out=$(git grep -I -n -E -e "$regex" -- "${TRACKED[@]}" 2>&1)
   rc=$?
@@ -54,6 +59,9 @@ grep_index() { # <label> <regex>
     echo "This is NOT a pass. Fix the gate before trusting its verdict."
     printf '%s\n' "$out" | head -5 | sed 's/^/  /'
     exit 2
+  fi
+  if [ -n "$out" ] && [ -n "$skip" ]; then
+    out=$(printf '%s\n' "$out" | grep -viE -e "$skip" || true)
   fi
   if [ -n "$out" ]; then
     echo "secret gate FAILED — $label:"
@@ -113,6 +121,40 @@ grep_index "secret-shaped content in tracked files" "$SECRET_RE"
 # tracked tree before this rule shipped.
 USERINFO_RE='[a-zA-Z][a-zA-Z0-9+.-]*://[^/[:space:]@]+:[^/[:space:]@]+@'
 grep_index "credentials embedded in URL userinfo (user:pass@host)" "$USERINFO_RE"
+
+# --- 2c. Plaintext credential constants -------------------------------------------------
+# ISSUE-102's incident shape: `const ADMIN_PASSWORD = "..."` committed in an
+# e2e spec. No key-format prefix and no URL, so rules 2 and 2b are blind to it;
+# the only signal is the NAME screaming that the value is a credential.
+#
+# Candidate: a SCREAMING_CASE name containing PASSWORD/SECRET/TOKEN bound to a
+# quoted value of >=6 chars. A naive version of this rule flagged 84 lines on
+# the tracked tree — so the skip regex carves out exactly the fixture idioms
+# this repo uses by convention, each class verified against the full tree:
+#   1. values with no digit — prose placeholders ("dev-enroll-value"), not
+#      generated credentials;
+#   2. names ending _KEY — storage-key identifiers ("webv5.appSecret");
+#   3. values truncated with "..." — documentation placeholders;
+#   4. fixture markers in the value (test/fake/0123456789abcdef/correct-horse…)
+#      — the synthetic secrets this suite mints by convention;
+#   5. fixture role prefixes on the name (TEST_JWT_SECRET, FAKE_TOKEN, …).
+# Measured result: zero lines on master trip this rule, while mod4's
+# `ADMIN_PASSWORD = "@DELL123dell#"` still trips it. A skip can hide a real
+# credential — that is the accepted cost of any non-firing rule — so each
+# class is a documented convention, never a path exemption; anything novel
+# gets an allowlist entry with a reason instead of a wider skip.
+# Both quote chars in one variable: inside double quotes ' is literal and "
+# needs one backslash — far harder to mis-nest than the '\'' idiom (an early
+# version of this block was one "'" pair short and failed bash -n loudly,
+# which is exactly how it should fail).
+QUOTE="\"'"
+PASSCONST_RE="[A-Z0-9_]*(PASSWORD|SECRET|TOKEN)[A-Z0-9_]*[[:space:]]*=[[:space:]]*[${QUOTE}][^${QUOTE}]{6,}[${QUOTE}]"
+PASSCONST_SKIP="(PASSWORD|SECRET|TOKEN)[A-Z0-9_]*[[:space:]]*=[[:space:]]*[${QUOTE}][^${QUOTE}0-9]*[${QUOTE}]"
+PASSCONST_SKIP+="|(PASSWORD|SECRET|TOKEN)[A-Z0-9_]*_KEY[[:space:]]*="
+PASSCONST_SKIP+="|(PASSWORD|SECRET|TOKEN)[A-Z0-9_]*[[:space:]]*=[[:space:]]*[${QUOTE}][^${QUOTE}]*\.\.\.[${QUOTE}]"
+PASSCONST_SKIP+="|(PASSWORD|SECRET|TOKEN)[A-Z0-9_]*[[:space:]]*=[[:space:]]*[${QUOTE}][^${QUOTE}]*(test|fake|mock|sample|placeholder|do-not-use|not-a-credential|0123456789abcdef|correct-horse)[^${QUOTE}]*[${QUOTE}]"
+PASSCONST_SKIP+="|(TEST|FAKE|MOCK|DUMMY|SAMPLE|EXAMPLE|KEY|PLACEHOLDER)[A-Z0-9_]*(PASSWORD|SECRET|TOKEN)"
+grep_index "plaintext password/secret/token constant" "$PASSCONST_RE" "$PASSCONST_SKIP"
 
 # --- 3. Entropy backstop ----------------------------------------------------------------
 # A PEM header can be stripped or reformatted. A >=512-char run of base64 with
