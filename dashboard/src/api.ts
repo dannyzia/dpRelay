@@ -610,10 +610,15 @@ export async function listOversightCampaigns(
 
 export interface PendingTransaction {
   transactionId: string;
-  appId: string;
+  /** Null for wallet (user-owned) purchases — F9 ISSUE-88 queue rows carry userId instead. */
+  appId: string | null;
+  /** Wallet owner attribution for user-owned purchases (null on app purchases). */
+  userId?: string | null;
   packageCode: string;
   smsQuota: number;
   amountBdt: number;
+  /** Server-supplied price currency (BDT | USD | EUR, default BDT — F5/ISSUE-89). */
+  currency?: string;
   packageType: string;
   trxId: string | null;
   requestedAt: number;
