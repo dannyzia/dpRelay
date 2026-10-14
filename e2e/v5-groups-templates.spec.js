@@ -56,7 +56,7 @@ async function signInFresh(page) {
 
 /** Pastes app credentials and lands on the connected shell. */
 async function connectApp(page) {
-  await page.getByPlaceholder('e.g. dprelay-prod-2').fill(APP_ID);
+  await page.getByPlaceholder('e.g. dprelay-prod-3').fill(APP_ID);
   await page.locator('input[type="password"]').fill(APP_SECRET);
   await page.getByRole('button', { name: 'Connect app' }).click();
   await expect(page.getByRole('heading', { name: 'Campaigns' })).toBeVisible();

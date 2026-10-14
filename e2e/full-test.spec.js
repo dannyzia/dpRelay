@@ -60,7 +60,7 @@ async function signIn(page, email) {
 
 /** Pastes app credentials into ConnectAppScreen (verified server-side before store). */
 async function connectApp(page) {
-  await page.getByPlaceholder('e.g. dprelay-prod-2').fill(APP_ID);
+  await page.getByPlaceholder('e.g. dprelay-prod-3').fill(APP_ID);
   await page.locator('input[type="password"]').fill(APP_SECRET);
   await page.getByRole('button', { name: 'Connect app' }).click();
 }
@@ -88,7 +88,7 @@ test.describe('v5 user client flow', () => {
     await signIn(page, email);
     // A bogus id (NOT the provisioned one): requireApp answers unknown_app →
     // the screen maps it to an actionable hint.
-    await page.getByPlaceholder('e.g. dprelay-prod-2').fill(`unknown-${Date.now()}`);
+    await page.getByPlaceholder('e.g. dprelay-prod-3').fill(`unknown-${Date.now()}`);
     await page.locator('input[type="password"]').fill('definitely-not-a-real-secret-0000');
     await page.getByRole('button', { name: 'Connect app' }).click();
     await expect(page.getByRole('alert')).toHaveText(/Unknown X-App-Id/);

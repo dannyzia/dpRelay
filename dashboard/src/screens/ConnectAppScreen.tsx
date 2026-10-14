@@ -65,7 +65,7 @@ export function ConnectAppScreen(props: { onConnected: () => void }) {
         <input
           value={appId}
           onChange={(e) => setAppId(e.target.value)}
-          placeholder="e.g. dprelay-prod-2"
+          placeholder="e.g. dprelay-prod-3"
           className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-sky-500"
           required
         />
