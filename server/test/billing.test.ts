@@ -109,8 +109,14 @@ describe("package catalog + upsert", () => {
     await upsertPackage({ packageCode: "otp100cheap", name: "OTP 100 cheap", smsQuota: 100, priceBdt: 150, validityDays: 30, type: "otp" });
     await upsertPackage({ packageCode: "hidden", name: "Hidden", smsQuota: 1, priceBdt: 1, validityDays: 1, type: "otp", isActive: false });
 
-    const list = (await app.inject({ method: "GET", url: "/v5/billing/packages" })).json() as { packages: { packageCode: string; priceBdt: number }[] };
+    const list = (await app.inject({ method: "GET", url: "/v5/billing/packages" })).json() as { packages: { packageCode: string; priceBdt: number; isActive?: boolean }[] };
     expect(list.packages.map((p) => p.packageCode)).toEqual(["otp100cheap", "otp100", "bulk500"]);
+
+    // ISSUE-106 contract parity: the public list must state isActive on every
+    // row. The route already filters WHERE is_active = 1, so an omitted field
+    // made the SPA's `p.isActive` undefined -> falsy -> permanent empty state.
+    expect(list.packages.every((p) => p.isActive === true)).toBe(true);
+    expect("isActive" in list.packages[0]).toBe(true);
 
     // Upsert same code updates in place (no duplicate row).
     await upsertPackage({ ...PKG, priceBdt: 250 });

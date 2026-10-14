@@ -155,15 +155,48 @@ test.describe('v5 connected app plane', () => {
   });
 
   test('credits screen shows balances and the package catalog', async ({ page }) => {
+    // Capture the app's own catalog request rather than hardcoding an API
+    // origin: playwright.config.ts only pins the dashboard URL, and the API
+    // base is baked into the SPA at serve time.
+    let catalogPayload = null;
+    page.on('response', (res) => {
+      if (res.url().includes('/v5/billing/packages') && res.request().method() === 'GET') {
+        res
+          .json()
+          .then((body) => {
+            catalogPayload = body;
+          })
+          .catch(() => {});
+      }
+    });
+
     await page.getByRole('button', { name: 'Credits' }).click();
     // exact: "Credits" also substring-matches OTP credits / Bulk credits / Buy credits.
     await expect(page.getByRole('heading', { name: 'Credits', exact: true })).toBeVisible();
     // Balance cards resolve to numbers (they render "…" while loading).
     await expect(page.locator('h2:has-text("OTP credits") + p')).toHaveText(/^\d+$/);
     await expect(page.locator('h2:has-text("Bulk credits") + p')).toHaveText(/^\d+$/);
-    // Package catalog: either rows or the explicit empty state.
     await expect(page.getByRole('heading', { name: 'Buy credits' })).toBeVisible();
-    await expect(page.getByText(/No active packages published|\u09F3\d+/).first()).toBeVisible();
+
+    // ISSUE-106: every catalog row must carry isActive, else the screen's
+    // filter drops it and the catalog renders its empty state forever.
+    await expect
+      .poll(() => (catalogPayload === null ? null : catalogPayload.packages), {
+        message: 'catalog response never arrived',
+      })
+      .not.toBeNull();
+    expect(Array.isArray(catalogPayload.packages)).toBe(true);
+    expect(catalogPayload.packages.every((p) => p.isActive === true)).toBe(true);
+
+    // AC4: a non-empty catalog must actually render rows — the empty-state
+    // text is only acceptable when the API returned nothing.
+    const emptyState = page.getByText('No active packages published.');
+    if (catalogPayload.packages.length > 0) {
+      await expect(emptyState).toHaveCount(0);
+      await expect(page.locator('ul.divide-y li')).toHaveCount(catalogPayload.packages.length);
+    } else {
+      await expect(emptyState).toBeVisible();
+    }
   });
 });
 

@@ -20,7 +20,7 @@ interface PackageRow {
   currency?: string;
   validityDays: number;
   type: "otp" | "bulk" | "both";
-  isActive: boolean;
+  isActive?: boolean;
 }
 
 interface RequestResult {
@@ -119,12 +119,12 @@ export function CreditsScreen() {
         <h2 className="font-medium text-slate-200">Buy credits</h2>
         {packages === null ? (
           <p className="mt-2 text-sm text-slate-400">Loading packages…</p>
-        ) : packages.filter((p) => p.isActive).length === 0 ? (
+        ) : packages.filter((p) => p.isActive !== false).length === 0 ? (
           <p className="mt-2 text-sm text-slate-400">No active packages published.</p>
         ) : (
           <ul className="mt-3 divide-y divide-slate-800">
             {packages
-              .filter((p) => p.isActive)
+              .filter((p) => p.isActive !== false)
               .map((p) => (
                 <li key={p.packageCode} className="flex items-center justify-between gap-3 py-3">
                   <div>
