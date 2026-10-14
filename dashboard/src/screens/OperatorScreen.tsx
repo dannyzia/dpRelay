@@ -22,6 +22,7 @@ import {
   type OversightCampaign,
   type PendingTransaction,
 } from "../api.js";
+import { formatPrice } from "../lib/format.js";
 
 /**
  * Operator admin view (server requireOperator plane). The operator secret is
@@ -230,7 +231,7 @@ function ApprovalsSection(): JSX.Element {
                 <div>
                   <p className="font-mono text-sm">{t.trxId ?? "(no TrxID submitted)"}</p>
                   <p className="text-xs text-slate-500">
-                    {t.appId} · {t.packageCode} ({t.packageType}) · ৳{t.amountBdt} → {t.smsQuota} SMS · requested {new Date(t.requestedAt * 1000).toLocaleString()}
+                    {t.appId ?? t.userId ?? "app"} · {t.packageCode} ({t.packageType}) · {formatPrice(t.amountBdt, t.currency)} → {t.smsQuota} SMS · requested {new Date(t.requestedAt * 1000).toLocaleString()}
                   </p>
                 </div>
                 <div className="flex gap-2">

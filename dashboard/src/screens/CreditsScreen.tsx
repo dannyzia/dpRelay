@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { appFetch, API_BASE } from "../api.js";
+import { formatPrice } from "../lib/format.js";
 
 interface CreditsRow {
   otpSmsRemaining: number;
@@ -15,6 +16,8 @@ interface PackageRow {
   name: string;
   smsQuota: number;
   priceBdt: number;
+  /** Server-supplied price currency (BDT | USD | EUR, default BDT — F5/ISSUE-89). */
+  currency?: string;
   validityDays: number;
   type: "otp" | "bulk" | "both";
   isActive: boolean;
@@ -131,7 +134,7 @@ export function CreditsScreen() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="font-semibold text-slate-100">৳{p.priceBdt}</span>
+                    <span className="font-semibold text-slate-100">{formatPrice(p.priceBdt, p.currency)}</span>
                     <button
                       onClick={() => requestPurchase(p.packageCode)}
                       disabled={busy}
