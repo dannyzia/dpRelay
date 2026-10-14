@@ -42,6 +42,59 @@ else
   fail "node available on PATH"
 fi
 
+# Install the tracked pre-commit hook. `core.hooksPath` is repo-LOCAL config and
+# cannot be committed, so without this a fresh clone silently runs no hook at
+# all until someone remembers the one-liner. Idempotent, and never fatal: it is
+# a convenience for whoever just cloned, not a correctness check, so a non-git
+# directory or an absent hook is skipped rather than failed.
+#
+# Two things the original version did not do, both deliberate:
+#
+#   - It reported the condition BEFORE fixing it. Auto-setting silently and then
+#     printing PASS hid the fact that this clone's secret gate was never wired
+#     up, which is the exact gap the block exists to close.
+#   - It read the config back instead of assuming the write worked. `git config`
+#     can fail without a non-zero exit being visible here (protected config,
+#     safe.directory, a read-only repo), and a PASS in that case would be a lie
+#     about the pre-commit secret gate rather than a green check.
+#
+# The warning is gated on the hook being TRACKED, not merely on disk: an
+# untracked .githooks/pre-commit is a local file that no clone will ever
+# receive, so nothing is lost by leaving core.hooksPath alone for it — the hook
+# would not exist elsewhere to run.
+if git rev-parse --git-dir >/dev/null 2>&1 && [ -f .githooks/pre-commit ]; then
+  CURRENT_HOOKS_PATH="$(git config --get core.hooksPath || echo '')"
+  # `git ls-files --` prints the path when it is in the index (staged or
+  # committed) and nothing at all otherwise, so a non-empty result means tracked.
+  HOOK_TRACKED=""
+  if [ -n "$(git ls-files -- .githooks/pre-commit 2>/dev/null)" ]; then
+    HOOK_TRACKED="yes"
+  fi
+
+  # Report the condition first, while it is still observable. Once the write
+  # below has run, `git config --get` no longer returns empty and the state that
+  # prompted this message is gone — which is how the original version managed to
+  # hide the very gap it existed to close.
+  if [ -z "$CURRENT_HOOKS_PATH" ] && [ -n "$HOOK_TRACKED" ]; then
+    echo "  WARN: core.hooksPath is unset while .githooks/pre-commit is tracked — no pre-commit secret gate would run until it is configured"
+  fi
+
+  # Unchanged from before: correct ANY value that is not exactly .githooks, not
+  # only an unset one, so a hook path pointing elsewhere still gets redirected.
+  if [ "$CURRENT_HOOKS_PATH" != ".githooks" ]; then
+    git config core.hooksPath .githooks
+  fi
+
+  # Read back rather than assume. `git config` writes can be refused (protected
+  # config, safe.directory, a read-only repo) and a PASS there would be a lie
+  # about the pre-commit secret gate.
+  if [ "$(git config --get core.hooksPath || echo '')" = ".githooks" ]; then
+    pass "git hooksPath -> .githooks (pre-commit secret gate active)"
+  else
+    fail "git hooksPath -> .githooks (config did not take; run: git config core.hooksPath .githooks)"
+  fi
+fi
+
 # Resolve a JDK 17 for Gradle (CI pins 17; ambient JDK 21 breaks the
 # android-34 JdkImageTransform). Respects an already-correct JAVA_HOME.
 JDK17=""
