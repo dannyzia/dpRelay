@@ -27,7 +27,11 @@
  *     push. An absent path that reads as "nothing found" is how a gate turns
  *     itself off; a push is the worst place to discover it.
  *
- * Nothing here touches this repository's own index, remotes, or hooks.
+ * Nothing here touches this repository's own index, remotes, or hooks — but
+ * that holds only because the GIT_* overrides are scrubbed below; see the note
+ * there for what this suite does without them. (The scratch helpers below
+ * create branches named `mixed` and `other` and commit messages `c1`/`c2`;
+ * against the live repo, inherited GIT_DIR made those real.)
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -38,6 +42,36 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(repoRoot, ".githooks", "pre-push");
+
+/**
+ * Every git override git exports into a hook environment, removed before this
+ * suite spawns anything.
+ *
+ * The pre-push hook runs this very suite via scripts/run-all-checks.sh, so by
+ * the time these tests start GIT_DIR points at the LIVE worktree gitdir. An
+ * inherited override defeats `git init`, after which `git commit -m c1`,
+ * `git checkout -b mixed` and `git push` all act on the REAL repository: the
+ * branch gets gutted to a tree holding only fixture files, and the stray
+ * branches and commits appear on it while every assertion still describes a
+ * throwaway rig. That is exactly what happened on
+ * feat/ops-git-hooks-stage-c-fold.
+ *
+ * Deleted from process.env at module scope rather than passed per call site:
+ * this file spawns git (and, underneath, a real `git push`) a dozen times, and
+ * one missed `env:` reintroduces a destructive bug that only manifests when the
+ * suite runs FROM a hook. `server/test/secret-scan.test.ts` documents the same
+ * hazard.
+ */
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]) {
+  delete process.env[key];
+}
 
 interface Opts {
   suiteExit?: number;

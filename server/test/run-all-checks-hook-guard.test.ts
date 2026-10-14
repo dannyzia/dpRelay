@@ -18,7 +18,9 @@
  * The block under test is extracted from the shipped script at runtime rather
  * than copied, so a refactor that moves it is caught instead of silently
  * leaving this test exercising stale code. Every scenario runs in a scratch
- * repository: nothing here can touch this repo's own git config.
+ * repository: nothing here can touch this repo's own git config — but that
+ * holds only because the GIT_* overrides are scrubbed below; see the note
+ * there for what this suite does without them.
  */
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -28,6 +30,34 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * Every git override git exports into a hook environment, removed before this
+ * suite spawns anything.
+ *
+ * The pre-push hook runs this suite via scripts/run-all-checks.sh, so GIT_DIR
+ * already points at the LIVE worktree gitdir when these tests start. An
+ * inherited override defeats `git init` in the scratch directory, so the
+ * extracted block's `git rev-parse`/`git config` read the REAL repo's config
+ * instead — which reports `core.hooksPath` already set and turns the very
+ * warning this file exists to pin into an unreachable assertion (and
+ * `chmod …/.git` then fails on a directory that was never created).
+ *
+ * Deleted from process.env at module scope rather than passed per call site:
+ * the block under test is itself a shell fragment that forks its own `git`
+ * children, so an `env:` on the outer call alone cannot cover them.
+ * `server/test/secret-scan.test.ts` documents the same hazard.
+ */
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]) {
+  delete process.env[key];
+}
 const SCRIPT = join(repoRoot, "scripts", "run-all-checks.sh");
 
 const WARNING = "core.hooksPath is unset while .githooks/pre-commit is tracked";

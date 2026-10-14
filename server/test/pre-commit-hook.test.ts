@@ -33,7 +33,9 @@
  *     not run, the output must SAY it did not run rather than imply a clean
  *     lint — a skip that reads as a pass is the same lie as a missing gate.
  *
- * Nothing here touches this repository's own index or hooks.
+ * Nothing here touches this repository's own index or hooks — but that holds
+ * only because the GIT_* overrides are scrubbed below; see the note there for
+ * what this suite does without them.
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -44,6 +46,36 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(repoRoot, ".githooks", "pre-commit");
+
+/**
+ * Every git override git exports into a hook environment, removed before this
+ * suite spawns anything.
+ *
+ * The pre-commit hook runs this very suite via scripts/run-all-checks.sh, so
+ * git has already exported GIT_DIR pointing at the LIVE worktree gitdir by the
+ * time these tests start. An inherited override defeats `git init` — the
+ * scratch rig is never created — and then `git add` + `git commit -m x` land on
+ * the checked-out branch of the REAL repository, committing only the fixture
+ * files and gutting the branch while every assertion still describes a
+ * throwaway repo. That is not hypothetical here: it is what produced the stray
+ * `x` commits and the missing files on this branch.
+ *
+ * Deleted from process.env at module scope rather than passed per call site:
+ * this file spawns git a dozen times plus grandchildren forked by the gate
+ * shell itself, and one missed `env:` reintroduces a destructive bug that only
+ * shows up when the suite is run FROM a hook. `server/test/secret-scan.test.ts`
+ * documents the same hazard and scopes its own `rigEnv` per call.
+ */
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]) {
+  delete process.env[key];
+}
 
 /**
  * Stub gate bodies. Each exits the way the real gate would.
