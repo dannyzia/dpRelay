@@ -114,6 +114,48 @@ describe("secret gate: clean repositories pass", () => {
   it("does not flag .env.example, which is documentation", () => {
     expect(scan().code).toBe(0);
   });
+
+  it("does not flag placeholder, port-only or email-only URLs", () => {
+    // AC3 (ISSUE-102): the userinfo rule must not catch the shapes docs use
+    // every day — no password means no colon before the @, and a port number
+    // is not userinfo. One file so the first FP would fail the whole test.
+    writeFileSync(
+      join(rig, "urls.env.example"),
+      [
+        "# Example: https://dprelay-dashboard.pages.dev,http://localhost:5173",
+        "R2_ENDPOINT=https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com",
+        "AUTHOR=https://github.com/dannyzia",
+        "HEALTH=http://127.0.0.1:8123/health",
+        "SUPPORT=mailto:ops@example.com",
+      ].join("\n") + "\n",
+    );
+    const { code, out } = scan();
+    rmSync(join(rig, "urls.env.example"));
+    expect(out).toContain("secret gate: clean");
+    expect(code).toBe(0);
+  });
+
+  it("does not flag fixture-shaped credential constants", () => {
+    // AC3 companion for rule 2c (ISSUE-102): the fixture idioms this repo
+    // uses by convention must not trip the plaintext-constant rule — a gate
+    // red on day one gets disabled by week two. Each line here mirrors a
+    // class of lines that exists on master right now.
+    writeFileSync(
+      join(rig, "fixtures.ts"),
+      [
+        'const TEST_JWT_SECRET = "test-only-secret-0123456789abcdef0123456789abcdef";',
+        'const SMTP_PASSWORD = "super-secret-smtp-password";',
+        'const APP_SECRET_KEY = "webv5.appSecret";',
+        'const VALID_CHALLENGE_TOKEN = "aBC123...";',
+        'const SECRET = "dev-enroll-value";',
+        "const TEST_PASSWORD = 'E2ePassw0rd!';",
+      ].join("\n") + "\n",
+    );
+    const { code, out } = scan();
+    rmSync(join(rig, "fixtures.ts"));
+    expect(out).toContain("secret gate: clean");
+    expect(code).toBe(0);
+  });
 });
 
 describe("secret gate: credential content is caught", () => {
@@ -136,15 +178,43 @@ describe("secret gate: credential content is caught", () => {
     { name: "an AWS access key id", file: "aws.txt", body: "A=AKIAIOSFODNN7EXAMPLE\n" },
     { name: "a Stripe live key", file: "stripe.txt", body: "L=sk_live_0123456789abcdefgh\n" },
     { name: "a long base64 blob that could be a stripped PEM", file: "blob.txt", body: `${"A".repeat(600)}\n` },
+    {
+      // ISSUE-102: credentials hiding in URL userinfo have no key-format
+      // prefix, so the SECRET_RE shapes above can never see them. The colon is
+      // what makes it a credential rather than a bare username.
+      name: "credentials embedded in a URL userinfo",
+      file: "callback.txt",
+      body: "LOGIN=https://admin:Sup3rS3cret!@dashboard.example.com/login\n",
+    },
+    {
+      // ISSUE-102 AC2: the credential mod4 actually carried — a plaintext
+      // constant, not a URL. Invisible to every key-format rule above; the
+      // NAME is the only signal, which is exactly what rule 2c keys on.
+      name: "a plaintext admin password constant (the mod4 shape)",
+      file: "admin-creds.js",
+      body: 'const ADMIN_PASSWORD = "@DELL123dell#";\n',
+    },
   ];
 
   for (const shape of SHAPES) {
     it(`fails on ${shape.name}`, () => {
       writeFileSync(join(rig, shape.file), shape.body);
-      const { code, out } = scan();
-      rmSync(join(rig, shape.file));
-      expect(out, `gate output for ${shape.file}`).toContain("secret gate FAILED");
-      expect(code).toBe(1);
+    const { code, out } = scan();
+    rmSync(join(rig, shape.file));
+    expect(out, `gate output for ${shape.file}`).toContain("secret gate FAILED");
+    if (shape.name.startsWith("credentials embedded in a URL userinfo")) {
+      // Name the rule so a future refactor cannot silently drop it while the
+      // generic FAILED line still matches.
+      expect(out, `userinfo rule label for ${shape.file}`).toContain("URL userinfo");
+    }
+    if (shape.name.startsWith("a plaintext admin password constant")) {
+      // Likewise pin rule 2c's label: mod4's shape must fail as ITS rule,
+      // not incidentally via some other pattern.
+      expect(out, `password-constant rule label for ${shape.file}`).toContain(
+        "password/secret/token constant",
+      );
+    }
+    expect(code).toBe(1);
     });
   }
 });
