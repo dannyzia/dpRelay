@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Pre-push: the full check suite runs before anything NEW reaches the remote.
+#
+# Why this exists: pre-commit keeps the fast gates (secret, AGPL, lint) because
+# they must answer in about a second, and CI re-runs everything on the PR — so
+# the expensive half of the suite had a gap between "committed locally" and
+# "green in CI". Anything pushed to `master` or a shared branch is in the
+# remote's object store and in every clone within seconds, and unwinding a bad
+# push means a revert commit plus a force-push on every working copy. This hook
+# closes that gap at the only moment it can still be cheap: before the transfer.
+#
+# The owner decision that shapes the whole design: **skip when nothing new
+# reaches the remote.** git calls this hook once per push with the refs to be
+# transferred on stdin, one line each, in the exact form documented in
+# githooks(5) pre-push:
+#
+#     <local ref> SP <local object name> SP <remote ref> SP <remote object name> LF
+#
+# so a push of a ref the remote already holds byte-for-byte, a ref *deletion*
+# (local ref given as "(delete)", local object name all zeroes — there is no
+# object travelling at all), and the "everything up-to-date" case where git
+# passes no lines at all are all visible without touching the network. Paying
+# 2-3 minutes of suite time to re-confirm state the remote already holds is the
+# fastest way to teach people `--no-verify`, and that flag silences every other
+# hook with it. The suite therefore runs only when at least one ref carries an
+# object the remote does not have.
+#
+# The object names are compared, never the ref names: `<local ref>` is echoed
+# back as it was given on the command line (it may literally be `HEAD`), so two
+# refs with the same name on both sides must not be mistaken for "up to date".
+#
+# `core.hooksPath` points git at this directory instead of `.git/hooks`, so the
+# hook is a TRACKED file that ships with the clone. Bootstrap a fresh clone
+# with:
+#
+#     git config core.hooksPath .githooks
+#
+# `scripts/run-all-checks.sh` does this automatically, so anyone who runs the
+# pre-merge gate gets it for free.
+#
+# Bypass deliberately with `git push --no-verify` — for a docs-only typo fix
+# when CI is the real judge, say. CI runs every gate again regardless, so a
+# bypass is never the last line of defence; it is a trade you make knowingly,
+# not a default.
+#
+# NOTE: deliberately no `set -e`. The suite's exit code IS the decision here,
+# and `set -e` would abort this script before the failure could be reported.
+# Errors are handled explicitly instead, and every failure mode blocks.
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "pre-push: not inside a git repository — refusing to guess." >&2
+  exit 1
+}
+cd "$REPO_ROOT" || {
+  echo "pre-push: cannot enter $REPO_ROOT — refusing to push." >&2
+  exit 1
+}
+
+REMOTE="${1:-<unknown remote>}"
+
+# The decision needs the WHOLE ref list, not the first line: a push carrying
+# one new branch and three up-to-date refs must still run the suite, and a
+# reader that acted per-line could not say that. Read everything, then decide.
+REFS="$(cat)"
+
+SEEN=0
+NEEDS_RUN=0
+TRAVELING=""
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  # Empty line (including the single empty line produced by empty stdin).
+  [ -n "$local_ref" ] || continue
+  SEEN=$((SEEN + 1))
+
+  # All-zero local object name = a deletion. githooks(5): the local ref reads
+  # "(delete)" and the local object name is the all-zeroes object name. Nothing
+  # is transferred, so nothing new can reach the remote — and there is no local
+  # object to test. The branch name check below is belt and braces: the zero
+  # object name is the documented signal, the label is what a reader sees.
+  case "$local_sha" in
+    *[!0]*) ;; # contains a non-zero digit: a real object is travelling
+    *) continue ;;
+  esac
+
+  # Byte-identical to what the remote already holds: nothing new travels.
+  [ "$local_sha" = "$remote_sha" ] && continue
+
+  NEEDS_RUN=1
+  TRAVELING="${TRAVELING:+$TRAVELING, }$local_ref"
+done <<< "$REFS"
+
+if [ "$SEEN" -eq 0 ]; then
+  echo "pre-push: git offered no refs to push — nothing reaches $REMOTE, suite not run."
+  exit 0
+fi
+
+if [ "$NEEDS_RUN" -eq 0 ]; then
+  echo "pre-push: all $SEEN ref(s) already on $REMOTE (or being deleted) — nothing new reaches it, suite not run."
+  exit 0
+fi
+
+# ---------------------------------------------------------------- fail-closed
+#
+# A suite that is MISSING or that ERRORED is a failure, never a pass. This is
+# the same rule pre-commit applies to the secret gate: an absent path reads as
+# "nothing found" to anything that treats it as optional, and a push is exactly
+# the wrong place to discover the gate silently stopped existing.
+SUITE="scripts/run-all-checks.sh"
+if [ ! -f "$SUITE" ]; then
+  echo "" >&2
+  echo "pre-push: BLOCKED — $SUITE is missing, so the full check suite did not run." >&2
+  echo "This is NOT a pass. Nothing was pushed to $REMOTE." >&2
+  echo "Restore the script, or bypass deliberately with: git push --no-verify" >&2
+  exit 1
+fi
+
+echo "pre-push: $TRAVELING carries new object(s) to $REMOTE — running scripts/run-all-checks.sh (a few minutes, output streams below)."
+echo "pre-push: bypass deliberately with 'git push --no-verify'; CI re-runs every gate regardless."
+
+# Output streams rather than being captured: a hook that prints nothing for
+# two minutes reads as a hung terminal, and a hung terminal is what people
+# Ctrl-C — after which they reach for --no-verify.
+bash "$SUITE"
+status=$?
+
+if [ "$status" -ne 0 ]; then
+  echo "" >&2
+  echo "pre-push: BLOCKED — the full check suite failed (exit $status)." >&2
+  echo "Nothing was pushed to $REMOTE. Fix the failure reported above." >&2
+  echo "Bypass deliberately with: git push --no-verify" >&2
+  exit 1
+fi
+
+echo "pre-push: full check suite passed — pushing to $REMOTE."
+exit 0

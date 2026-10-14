@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# Pre-commit: run the fast gates before anything can reach the index.
+#
+# Why this exists: the secret gate ran in CI only, which meant a credential could
+# be committed, pushed, and rejected afterwards — by which time it is in the
+# remote's object store and in every clone. Rotating a leaked production key is
+# hours of work across two systems; catching it here is a red line and a
+# re-stage. The gate already scans the git INDEX rather than the working tree,
+# so its answer is exactly the question this hook asks: "can this be committed?"
+#
+# `core.hooksPath` points git at this directory instead of `.git/hooks`, so the
+# hook is a TRACKED file that ships with the clone rather than a local file
+# nobody else has. Bootstrap a fresh clone with:
+#
+#     git config core.hooksPath .githooks
+#
+# `scripts/run-all-checks.sh` does this automatically, so anyone who runs the
+# pre-merge gate gets it for free.
+#
+# Bypass deliberately with `git commit --no-verify` — chiefly when amending or
+# rebase-finishing, where the content is already known-clean. CI runs every gate
+# again regardless, so a bypass is never the last line of defence.
+#
+# No husky and no new dependency: git's own hook mechanism plus gates that
+# already exist.
+#
+# ------------------------------------------------------------------ what runs
+#
+#   secret gate   scripts/secret-scan.sh   ~0.7s   blocks
+#   AGPL gate     scripts/agpl-grep.sh     ~0.4s   blocks
+#   lint          ktlint (Android)         only when authenticator-app/ is staged,
+#                                             because it measured 51s cold / 25s
+#                                             re-run / 2.7s warm — see below
+#                 ESLint (functions)       blocks when functions/ exists, else
+#                                             SKIPs the way run-all-checks.sh does
+#
+# and what deliberately does not: **the test suite.** Server vitest, the Android
+# unit tests and E2E are the slow part by an order of magnitude, and
+# `.github/workflows/pr-checks.yml` runs every one of them on the PR. The
+# arithmetic is not close: a hook that takes a minute to answer gets bypassed
+# with --no-verify, and that bypass silences the secret gate with it. Trading a
+# credential catch for a lint error caught one commit later in CI is a bad deal.
+# Ordering follows the same rule — cheapest and most critical first, so a
+# secret failure is reported before anyone waits on Gradle.
+#
+# NOTE: deliberately no `set -e`. Each gate's exit code is the whole point here,
+# and `set -e` would abort this script before a code could be read. Errors are
+# handled explicitly instead, and every failure mode blocks.
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "pre-commit: not inside a git repository — refusing to guess." >&2
+  exit 1
+}
+cd "$REPO_ROOT" || {
+  echo "pre-commit: cannot enter $REPO_ROOT — refusing to commit." >&2
+  exit 1
+}
+
+#
+# Runs one gate script, failing closed.
+#
+# Two rules this encodes, both learned the hard way:
+#   - A gate that is MISSING is a failure, never a pass. A path that has quietly
+#     disappeared reads as "nothing found" to any check that treats it as optional.
+#   - A gate that ERRORs is a failure, never a pass. Exit 0 from a scan that did
+#     not actually run is how a gate turns itself off.
+#
+# @param $1 human name of the gate, for the message
+# @param $2 path to the gate script
+# @param $3 what to do about the failure, printed under the BLOCKED line
+# @returns 0 clean, 1 blocked
+#
+run_gate() {
+  local name="$1" path="$2" remedy="$3"
+
+  if [ ! -f "$path" ]; then
+    echo "" >&2
+    echo "pre-commit: BLOCKED — the $name is missing ($path), so it did not run." >&2
+    echo "This is NOT a pass. $remedy" >&2
+    return 1
+  fi
+
+  bash "$path"
+  local status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "pre-commit: $name clean."
+    return 0
+  fi
+
+  echo "" >&2
+  echo "pre-commit: BLOCKED — $name failed (exit $status)." >&2
+  echo "$remedy" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# 1. Secret gate — first, and kept bespoke on purpose.
+#
+# Its exit codes mean three different things and each needs its own advice:
+# 0 clean, 1 found something, 2 the scan itself errored. Collapsing 1 and 2 into
+# one message would send an operator to allowlist a path when the real fault is
+# that the scan never ran.
+# ---------------------------------------------------------------------------
+GATE="scripts/secret-scan.sh"
+if [ ! -f "$GATE" ]; then
+  echo "pre-commit: $GATE is missing, so the gate did not run." >&2
+  echo "This is NOT a pass. Restore the file, or bypass with --no-verify." >&2
+  exit 1
+fi
+
+bash "$GATE"
+status=$?
+
+case "$status" in
+  0)
+    echo "pre-commit: secret gate clean."
+    ;;
+  1)
+    echo "" >&2
+    echo "pre-commit: BLOCKED — the secret gate found something committable." >&2
+    echo "Nothing was committed. Fix it, or allowlist the exact path in" >&2
+    echo "scripts/secret-scan-allowlist.txt with a reason." >&2
+    exit 1
+    ;;
+  2)
+    # The gate's own convention: exit 2 means the scan ERRORED, not that it
+    # found nothing. Treating that as a pass is how a gate quietly turns off.
+    echo "" >&2
+    echo "pre-commit: BLOCKED — the secret gate failed to run (exit 2)." >&2
+    echo "That is NOT a pass. Fix the gate before trusting any clean verdict." >&2
+    exit 1
+    ;;
+  *)
+    echo "" >&2
+    echo "pre-commit: BLOCKED — gate exited $status unexpectedly." >&2
+    exit 1
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# 2. AGPL identifier gate.
+#
+# The clean-room constraint on this repo: nothing identifying from a rival
+# implementation may appear in this tree. It belongs in pre-commit for the same
+# reason the secret gate does — discovered after a push it means a revert across
+# every clone, and the licence question is not one to answer under time pressure.
+# ---------------------------------------------------------------------------
+run_gate "AGPL identifier gate" \
+  "scripts/agpl-grep.sh" \
+  "Nothing was committed. Remove the offending identifier, or restore scripts/agpl-grep.sh." \
+  || exit 1
+
+# ---------------------------------------------------------------------------
+# 3. Lint.
+#
+# Two decisions here, both about keeping this hook fast enough that nobody
+# reaches for --no-verify (which would silence the secret gate with it):
+#
+#   - ktlint is only run when the commit touches `authenticator-app/`. Measured
+#     on this machine: 51s with a cold Gradle daemon, 25s on a forced re-run,
+#     2.7s warm. Paying any of that to commit a TypeScript file is a trade nobody
+#     keeps making, and Kotlin is the only thing ktlint can find errors in. When
+#     no Kotlin is staged the line says so plainly rather than claiming a pass.
+#     Stage a Kotlin change and it runs, which is exactly when it matters.
+#   - gradle's output is captured, so a clean run is one line instead of fifty.
+#     It is printed in full on failure, because the failing task is the point.
+#
+# The toolchain-absent case skips loudly rather than failing. A developer with
+# no JDK cannot lint Kotlin, and blocking their TypeScript commit on that would
+# only teach them --no-verify — so it names what was NOT checked instead.
+# ---------------------------------------------------------------------------
+
+KOTLIN_STAGED=0
+if git diff --cached --name-only 2>/dev/null | grep -q '^authenticator-app/'; then
+  KOTLIN_STAGED=1
+fi
+
+if [ "$KOTLIN_STAGED" -eq 0 ]; then
+  echo "pre-commit: ktlint not run — no authenticator-app/ changes staged (Kotlin was not linted, and nothing claimed it was)."
+elif [ -x "authenticator-app/gradlew" ] && command -v java >/dev/null 2>&1; then
+  GRADLE_OUT="$( cd authenticator-app && ./gradlew ktlintCheck 2>&1 )"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "" >&2
+    echo "pre-commit: BLOCKED — ktlint failed (exit $status)." >&2
+    printf '%s\n' "$GRADLE_OUT" >&2
+    echo "Nothing was committed. Fix the reported Kotlin lint errors." >&2
+    echo "If this is a toolchain problem rather than lint, note that CI pins JDK" >&2
+    echo "17 — see scripts/run-all-checks.sh for how it resolves one." >&2
+    exit 1
+  fi
+  echo "pre-commit: ktlint clean."
+else
+  echo "pre-commit: SKIP ktlint — gradlew not executable or java not on PATH; staged Kotlin was NOT linted (this is not a pass)." >&2
+fi
+
+# ESLint is scoped to functions/, which was decommissioned at v4 (06980de). The
+# check stays so that plane returning re-enables linting automatically instead
+# of silently never running again — same reasoning as run-all-checks.sh.
+if [ -f functions/package.json ]; then
+  ( cd functions && npm run lint )
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "" >&2
+    echo "pre-commit: BLOCKED — ESLint (functions) failed (exit $status)." >&2
+    echo "Nothing was committed. Fix the reported lint errors." >&2
+    exit 1
+  fi
+  echo "pre-commit: ESLint (functions) clean."
+else
+  echo "pre-commit: SKIP ESLint — functions/ plane decommissioned, so nothing to lint."
+fi
+
+echo "pre-commit: all gates passed (secret, AGPL, lint). Test suite runs in CI."
+exit 0
