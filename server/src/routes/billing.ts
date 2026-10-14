@@ -112,6 +112,12 @@ const billingRoutes: FastifyPluginAsync = async (app) => {
         validityDays: r.validity_days,
         type: r.type,
         currency: r.currency,
+        // The route already filters WHERE is_active = 1, so every row returned
+        // here is active by construction. Stating it keeps the payload's shape
+        // identical to the admin list and stops the SPA from having to guess at
+        // an omitted field (ISSUE-106: `p.isActive` was undefined -> falsy -> the
+        // catalog always rendered its empty state).
+        isActive: true,
       })),
     };
   });
