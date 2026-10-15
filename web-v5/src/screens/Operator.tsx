@@ -214,7 +214,11 @@ export function AppsView(props: {
             <td>{app.name}</td>
             <td>{formatEpochUtc(app.createdAt)}</td>
             <td>
-              <span className={app.revokedAt === null ? "chip approved" : "chip rejected"}>
+              <span
+                className={
+                  app.revokedAt === null ? "chip approved state-active" : "chip rejected state-revoked"
+                }
+              >
                 {app.revokedAt === null ? "Active" : "Revoked"}
               </span>
             </td>
@@ -313,6 +317,19 @@ export function MetricsView({ metrics }: { metrics: AdminMetrics }): JSX.Element
 }
 
 /** Pure cross-app campaigns table. */
+/**
+ * Chip tone for a campaign status: the raw status stays in the class list
+ * (deep-linkable/inspectable), and this maps it onto the shipped
+ * approved/pending/rejected chip styles so every campaign state is actually
+ * coloured instead of falling back to the neutral chip.
+ */
+function campaignTone(status: string): string {
+  if (status === "completed") return "approved";
+  if (status === "cancelled") return "rejected";
+  if (status === "sending" || status === "queued" || status === "paused") return "pending";
+  return "";
+}
+
 export function CampaignsView({ campaigns }: { campaigns: OversightCampaign[] }): JSX.Element {
   if (campaigns.length === 0) {
     return <p className="muted">No campaigns.</p>;
@@ -337,7 +354,7 @@ export function CampaignsView({ campaigns }: { campaigns: OversightCampaign[] })
             <td className="mono">{c.appId}</td>
             <td>{c.name}</td>
             <td>
-              <span className={`chip ${c.status}`}>{formatStatus(c.status)}</span>
+              <span className={`chip ${c.status} ${campaignTone(c.status)}`}>{formatStatus(c.status)}</span>
             </td>
             <td className="num">{c.totalRecipients}</td>
             <td className="num">{c.sentCount}</td>
@@ -1233,9 +1250,11 @@ export function PackagesView(props: {
                       </select>
                     </td>
                     <td>
-                      <span className={`chip ${p.isActive ? "approved" : "rejected"}`}>
-                        {p.isActive ? "Active" : "Retired"}
-                      </span>
+                    <span
+                      className={`chip ${p.isActive ? "approved state-active" : "rejected state-retired"}`}
+                    >
+                      {p.isActive ? "Active" : "Retired"}
+                    </span>
                     </td>
                     <td>
                       <form
@@ -1421,7 +1440,7 @@ export function UsersView(props: {
                   <td>{u.email}</td>
                   <td>
                     <span
-                      className={`chip ${u.disabled ? "rejected" : "approved"}`}
+                      className={`chip ${u.disabled ? "rejected state-withheld" : "approved state-active"}`}
                       title={u.disabledReason ?? undefined}
                     >
                       {u.disabled ? "Withheld" : "Active"}

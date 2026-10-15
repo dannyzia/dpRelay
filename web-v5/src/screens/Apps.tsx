@@ -116,6 +116,10 @@ export function AppsView(props: {
   } | null;
   /** Soft-verification banner (F3 amendment): shown when unverified AND mail is configured. */
   verifyBanner: "hidden" | "offer" | "sent";
+  /** ISSUE-112: id of the company whose pairing panel is open (null/omitted = collapsed). */
+  pairingCompanyId?: string | null;
+  /** ISSUE-112: toggles the "Link your Android device" panel for one company. */
+  onTogglePairing?: (companyId: string) => void;
   onResend: () => void;
   onOpen: (appId: string) => void;
   onCreate: (name: string) => void;
@@ -126,6 +130,19 @@ export function AppsView(props: {
   onToggleHistory: () => void;
 }): JSX.Element {
   const storedCreds = getConnectedApp();
+  const pairingCompanyId = props.pairingCompanyId ?? null;
+  const pairingCompany =
+    pairingCompanyId === null
+      ? null
+      : (props.companies ?? []).find((company) => company.id === pairingCompanyId) ?? null;
+  // The freshly created company's enrollment secret is the only one this
+  // session can show — the server stores every other one hashed (shown once).
+  const pairingSecret =
+    pairingCompany !== null &&
+    props.freshSecret !== null &&
+    props.freshSecret.companyId === pairingCompany.id
+      ? props.freshSecret.deviceEnrollmentSecret
+      : "";
   return (
     <>
       <WalletHeader
@@ -203,6 +220,13 @@ export function AppsView(props: {
                   >
                     Rename
                   </button>
+                  <button
+                    type="button"
+                    aria-expanded={pairingCompanyId === company.id}
+                    onClick={(): void => props.onTogglePairing?.(company.id)}
+                  >
+                    {pairingCompanyId === company.id ? "Hide device setup" : "Link device"}
+                  </button>
                   {company.disabled ? null : (
                     <button
                       type="button"
@@ -223,6 +247,23 @@ export function AppsView(props: {
               </li>
             ))}
           </ul>
+        )}
+
+        {pairingCompany !== null && (
+          <div className="card nested" data-testid="company-pairing">
+            <h2>Link your Android device — {pairingCompany.name}</h2>
+            <p className="muted">
+              Pair the Android phone that holds your SIM as this company&apos;s BYOD gateway.
+              The same steps work for every company you own.
+            </p>
+            <DevicePairingView secret={pairingSecret} />
+            <button
+              type="button"
+              onClick={(): void => props.onTogglePairing?.(pairingCompany.id)}
+            >
+              Hide device setup
+            </button>
+          </div>
         )}
 
         {props.freshSecret !== null && (
@@ -337,6 +378,8 @@ export function Apps({
   } | null>(null);
   const [mailConfigured, setMailConfigured] = useState<boolean | null>(null);
   const [resent, setResent] = useState<boolean>(false);
+  // ISSUE-112: which company's "Link your Android device" panel is open.
+  const [pairingCompanyId, setPairingCompanyId] = useState<string | null>(null);
 
   const reload = (): void => {
     listCompanies()
@@ -461,6 +504,10 @@ export function Apps({
       busy={busy}
       freshSecret={freshSecret}
       verifyBanner={verifyBanner}
+      pairingCompanyId={pairingCompanyId}
+      onTogglePairing={(companyId: string): void => {
+        setPairingCompanyId((current) => (current === companyId ? null : companyId));
+      }}
       onResend={(): void => {
         resendVerification()
           .then(() => setResent(true))

@@ -21,10 +21,12 @@ import { useEffect, useState } from "react";
 import {
   disconnectApp,
   getConnectedApp,
+  getWallet,
   logoutAccount,
   setAppUnauthorizedHandler,
   getCurrentUser,
   type SessionUser,
+  type Wallet,
 } from "./api";
 import { Shell } from "./components/Shell";
 import { useRoute } from "./hooks/useRoute";
@@ -54,6 +56,11 @@ export function App(): JSX.Element {
   const [connected, setConnected] = useState<boolean>(() => getConnectedApp() !== null);
   // null = probing /v5/auth/me once on mount; then the user or signed-out.
   const [user, setUser] = useState<SessionUser | null | undefined>(undefined);
+  // ISSUE-112 topbar balance chip: undefined until a user is known (nothing
+  // to ask for), then the loaded wallet or null while loading/failed. A
+  // failed wallet read is silent — the chip just stays hidden rather than
+  // putting an error banner in the navigation.
+  const [wallet, setWallet] = useState<Wallet | null | undefined>(undefined);
 
   useEffect(() => {
     setAppUnauthorizedHandler(() => setConnected(false));
@@ -62,6 +69,24 @@ export function App(): JSX.Element {
       .catch(() => setUser(null));
     return () => setAppUnauthorizedHandler(null);
   }, []);
+
+  useEffect(() => {
+    if (user === null || user === undefined) {
+      setWallet(undefined);
+      return;
+    }
+    let alive = true;
+    getWallet()
+      .then((w) => {
+        if (alive) setWallet(w);
+      })
+      .catch(() => {
+        if (alive) setWallet(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [user]);
 
   const signOut = (): void => {
     // Best-effort server-side session delete; the cookie clears regardless.
@@ -94,7 +119,13 @@ export function App(): JSX.Element {
   if (!isOperator && !isPublic && section !== "login") {
     if (user === undefined) {
       return (
-        <Shell user={user} connected={connected} section={section} signOut={signOut}>
+        <Shell
+          user={user}
+          connected={connected}
+          section={section}
+          signOut={signOut}
+          wallet={wallet}
+        >
           <p className="muted">Loading…</p>
         </Shell>
       );
@@ -113,7 +144,7 @@ export function App(): JSX.Element {
   }
 
   return (
-    <Shell user={user} connected={connected} section={section} signOut={signOut}>
+    <Shell user={user} connected={connected} section={section} signOut={signOut} wallet={wallet}>
       {isOperator ? (
         <Operator route={route} />
       ) : section === "docs" ? (

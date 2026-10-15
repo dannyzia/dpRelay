@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
 import type {
@@ -811,5 +812,143 @@ describe("DevicesView (STAGE F7)", () => {
       <DevicesView list={{ ...list, devices: [] }} apps={apps} {...noop} />,
     );
     expect(empty).toContain("No devices enrolled yet.");
+  });
+});
+
+describe("ISSUE-112: operator status badges (active / retired / revoked / withheld)", () => {
+  const noop = (): void => undefined;
+  const APP_LIVE: AdminApp = {
+    id: "row-1",
+    appId: "live-app",
+    name: "Live customer",
+    webhookUrl: null,
+    rateMaxPerPhone: 5,
+    rateWindowSec: 3600,
+    createdAt: 1791400000,
+    revokedAt: null,
+  };
+  const APP_REVOKED: AdminApp = { ...APP_LIVE, id: "row-2", appId: "dead-app", revokedAt: 1791405000 };
+  const PKGS: AdminPackage[] = [
+    {
+      packageCode: "otp100",
+      name: "OTP 100",
+      smsQuota: 100,
+      priceBdt: 200,
+      validityDays: 30,
+      type: "otp",
+      isActive: true,
+      currency: "BDT",
+    },
+    {
+      packageCode: "old50",
+      name: "Old 50",
+      smsQuota: 50,
+      priceBdt: 100,
+      validityDays: 30,
+      type: "bulk",
+      isActive: false,
+      currency: "BDT",
+    },
+  ];
+  const USERS: AdminUserItem[] = [
+    {
+      id: "u1",
+      email: "held@example.test",
+      disabled: true,
+      disabledReason: "chargeback investigation",
+      disabledAt: 1791400100,
+      createdAt: 1791400000,
+      appCount: 1,
+      apps: [{ id: "app-row", appId: "app_1", name: "My app", revoked: false }],
+    },
+    {
+      id: "u2",
+      email: "fine@example.test",
+      disabled: false,
+      disabledReason: null,
+      disabledAt: null,
+      createdAt: 1791400500,
+      appCount: 0,
+      apps: [],
+    },
+  ];
+
+  it("badges the app State cell active/revoked without moving any column", () => {
+    const html = renderToString(
+      <AppsView apps={[APP_LIVE, APP_REVOKED]} onRevoke={noop} onUnrevoke={noop} />,
+    );
+    expect(html).toContain('class="chip approved state-active"');
+    expect(html).toContain('class="chip rejected state-revoked"');
+    // PR #73/74 column structure + shipped test ids must survive the polish.
+    expect(html).toContain("<th>App ID</th>");
+    expect(html).toContain("<th>State</th>");
+    expect(html).toContain("<th>Actions</th>");
+    expect(html).toContain('data-testid="revoke-row-1"');
+    expect(html).toContain('data-testid="unrevoke-row-2"');
+    expect(html).toContain("Active");
+    expect(html).toContain("Revoked");
+  });
+
+  it("badges package state active/retired with the same column layout", () => {
+    const html = renderToString(
+      <PackagesView packages={PKGS} error={null} note={null} busy={false} onCreate={noop} onPatch={noop} onToggleActive={noop} />,
+    );
+    expect(html).toContain('class="chip approved state-active"');
+    expect(html).toContain('class="chip rejected state-retired"');
+    expect(html).toContain("<th>State</th>");
+    expect(html).toContain('aria-label="price-old50"');
+    expect(html).toContain(">Retire<");
+    expect(html).toContain(">Reactivate<");
+  });
+
+  it("badges withheld users distinctly and keeps the reason tooltip", () => {
+    const html = renderToString(
+      <UsersView users={USERS} error={null} note={null} busy={false} onToggle={noop} />,
+    );
+    expect(html).toContain('class="chip rejected state-withheld"');
+    expect(html).toContain('class="chip approved state-active"');
+    expect(html).toContain('title="chargeback investigation"');
+    expect(html).toContain(">Enable<");
+    expect(html).toContain(">Withhold<");
+  });
+
+  it("tones the campaign status chip while keeping the raw status class", () => {
+    const html = renderToString(
+      <CampaignsView
+        campaigns={[
+          {
+            campaignId: "camp-1",
+            appId: "customer-app",
+            name: "October promo",
+            status: "sending",
+            totalRecipients: 1000,
+            sentCount: 400,
+            failedCount: 4,
+            queuedCount: 596,
+            createdAt: 1791400000,
+            startedAt: 1791400100,
+            completedAt: null,
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain("chip sending pending");
+    expect(html).toContain("<th>Status</th>");
+    expect(html).toContain("<th>Recipients</th>");
+  });
+
+  it("the theme defines every badge class and only defined tokens", () => {
+    // Read the stylesheet from disk (node test environment): vitest's CSS
+    // pipeline hands back an empty module for `styles.css?raw`.
+    const stylesCss = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+    for (const state of ["state-active", "state-retired", "state-revoked", "state-withheld"]) {
+      expect(stylesCss, state).toContain(`.chip.${state}`);
+    }
+    expect(stylesCss).toContain("--warn-text");
+    const used = new Set(Array.from(stylesCss.matchAll(/var\((--[a-z0-9-]+)/g), (m) => String(m[1])));
+    const defined = new Set(Array.from(stylesCss.matchAll(/(--[a-z0-9-]+)\s*:/g), (m) => String(m[1])));
+    for (const token of used) {
+      expect(defined.has(token), `undefined token ${token}`).toBe(true);
+    }
   });
 });
