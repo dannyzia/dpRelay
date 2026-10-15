@@ -169,6 +169,7 @@ jobs:
       dashboard: ${{ steps.filter.outputs.dashboard }}
       webv5: ${{ steps.filter.outputs.webv5 }}
       landing: ${{ steps.filter.outputs.landing }}
+      clientnode: ${{ steps.filter.outputs.clientnode }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -194,6 +195,13 @@ jobs:
             echo "landing=true" >> "$GITHUB_OUTPUT"
           else
             echo "landing=false" >> "$GITHUB_OUTPUT"
+          fi
+          # client-node (ISSUE-117): the Node SDK, or this workflow — same
+          # smoke-validate-the-gate discipline as every predicate above.
+          if git diff --name-only "HEAD^" "HEAD" | grep -qE '^(client-node/|\.github/workflows/pr-checks\.yml)'; then
+            echo "clientnode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "clientnode=false" >> "$GITHUB_OUTPUT"
           fi
 
   # PR-time gate for the dashboard SPA: typecheck + build when dashboard/ is
@@ -245,6 +253,33 @@ jobs:
         run: npm test
       - name: Build
         run: npx vite build
+
+  # PR-time gate for the client-node SDK (ISSUE-117): typecheck + vitest
+  # (100% coverage thresholds are part of `npm test`) + build when
+  # client-node/ (or this workflow) is touched. `npm ci` pins the committed
+  # lockfile, same discipline as web-v5-build above.
+  client-node-tests:
+    needs: changes
+    if: needs.changes.outputs.clientnode == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: client-node/package-lock.json
+      - name: Install Dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
 
   # STAGE F6 (ISSUE-86): static marketing site gate — zero-dependency
   # structural checks (internal links, per-page SEO, owner-verbatim guide
