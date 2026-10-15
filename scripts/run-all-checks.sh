@@ -227,6 +227,18 @@ if [ "$NODE_MAJOR_OK" = "1" ]; then
     && pass "dashboard build" || fail "dashboard build"
 fi
 
+# Client SDK + v5 SPA (ISSUE-117): local parity with the pr-checks gates —
+# typecheck + test + build for each tree, pinned to the committed lockfile.
+# (ISSUE-116's "16 passed" count predates these two checks; expect 18.)
+echo ""
+echo "--- Client SDK + Web v5 ---"
+if [ "$NODE_MAJOR_OK" = "1" ]; then
+  echo -n "  client-node (typecheck + test + build)... "
+  (cd client-node && npm ci --silent > /dev/null 2>&1 && npm run typecheck > /dev/null 2>&1 && npm test > /dev/null 2>&1 && npm run build > /dev/null 2>&1) && pass "client-node (typecheck + test + build)" || fail "client-node (typecheck + test + build)"
+  echo -n "  web-v5 (typecheck + test + build)... "
+  (cd web-v5 && npm ci --silent > /dev/null 2>&1 && npm run typecheck > /dev/null 2>&1 && npm test > /dev/null 2>&1 && npm run build > /dev/null 2>&1) && pass "web-v5 (typecheck + test + build)" || fail "web-v5 (typecheck + test + build)"
+fi
+
 # Security
 echo ""
 echo "--- Security ---"
