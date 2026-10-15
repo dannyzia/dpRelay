@@ -24,6 +24,11 @@ object EncryptedPrefsHelper {
   private const val KEY_GATEWAY_NUMBER = "gateway_phone_number"
   private const val KEY_APP_ENROLLMENT_SECRET = "app_enrollment_secret"
 
+  // ISSUE-120: operator-configured app E2EE passphrase for opening e2ee:v1:
+  // outstanding bodies. A credential like the enrollment secrets, never a
+  // BuildConfig constant (ADR-016).
+  private const val KEY_APP_E2EE_KEY = "app_e2ee_key"
+
   private var encryptedPrefs: SharedPreferences? = null
 
   /**
@@ -149,6 +154,7 @@ object EncryptedPrefsHelper {
     encryptedPrefs?.edit()
       ?.remove(KEY_ENROLLMENT_SECRET)
       ?.remove(KEY_APP_ENROLLMENT_SECRET)
+      ?.remove(KEY_APP_E2EE_KEY)
       ?.remove(KEY_DEVICE_API_KEY)
       ?.apply()
   }
@@ -266,5 +272,41 @@ object EncryptedPrefsHelper {
     }
 
     return encryptedPrefs?.getString(KEY_APP_ENROLLMENT_SECRET, null)
+  }
+
+  /**
+   * Stores the app E2EE passphrase (ISSUE-120). The customer backend
+   * encrypts with the same passphrase; blank/null clears it, which makes
+   * e2ee:v1: bodies fail closed at send time instead of going out corrupt.
+   *
+   * @param context Application context
+   * @param key The app E2EE passphrase, or blank/null to clear
+   */
+  fun storeAppE2eeKey(context: Context, key: String?) {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    val editor = encryptedPrefs?.edit() ?: return
+    if (key.isNullOrBlank()) {
+      editor.remove(KEY_APP_E2EE_KEY)
+    } else {
+      editor.putString(KEY_APP_E2EE_KEY, key)
+    }
+    editor.apply()
+  }
+
+  /**
+   * Retrieves the app E2EE passphrase.
+   *
+   * @param context Application context
+   * @return The stored passphrase, or null when unset
+   */
+  fun getAppE2eeKey(context: Context): String? {
+    if (encryptedPrefs == null) {
+      initialize(context)
+    }
+
+    return encryptedPrefs?.getString(KEY_APP_E2EE_KEY, null)
   }
 }

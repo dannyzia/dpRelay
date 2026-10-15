@@ -149,6 +149,8 @@ try {
 | 429 | `RateLimitError` | `rate_limited`, `resend_cooldown`, `daily_quota_exceeded` |
 | other | `DpRelayError` | server `code`, or `http_<status>` |
 | — | `NetworkError` | `timeout`, `network_error` |
+| — | `DecryptionError` | `decryption_failed` (wrong E2EE key / corrupt payload) |
+| — | `ValidationError` | `invalid_envelope`, `invalid_key_length` (malformed E2EE input) |
 
 ## API
 
@@ -170,6 +172,33 @@ client.getCampaignStatus(campaignId: string): Promise<BulkCampaignStatusResult>
 
 Helpers are exported too: `normalizePhoneNumber`, `isValidE164`,
 `normalizeOtp`, `isValidOtp`, plus `DEFAULT_BASE_URL` / `DEFAULT_TIMEOUT_MS`.
+
+### End-to-end encryption (general / bulk plane)
+
+```ts
+import { encryptMessage, decryptMessage, DecryptionError } from "@digital-papyrus/dprelay-client";
+
+// Customer backend: seal the body with the same passphrase the gateway
+// operator configured as the app E2EE key, then send the envelope as the
+// message. The server relays it opaquely; the gateway decrypts before
+// SmsManager. Never for OTP — the server must read OTP challenges.
+const envelope = encryptMessage("Bulk notice: sale ends Sunday", "correct-horse-passphrase");
+// envelope === "e2ee:v1:<base64(12B iv + 16B tag + ciphertext)>"
+
+try {
+  decryptMessage(envelope, "correct-horse-passphrase"); // ⇒ plaintext
+} catch (err) {
+  if (err instanceof DecryptionError) {
+    // wrong key or corrupt payload (code "decryption_failed") — fail closed
+  }
+}
+```
+
+- Key: a string is stretched with PBKDF2-HMAC-SHA256 (100,000 iterations,
+  salt `dprelay:e2ee:salt`); a 32-byte `Uint8Array` is used raw, anything
+  else raises `ValidationError` (`invalid_key_length`).
+- Malformed envelopes raise `ValidationError` (`invalid_envelope`); only
+  authentication failures raise `DecryptionError`.
 
 ### Validation rules (client side, before any request)
 
