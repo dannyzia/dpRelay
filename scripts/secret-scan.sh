@@ -28,10 +28,52 @@ cd "$(dirname "$0")/.."
 ALLOWLIST="scripts/secret-scan-allowlist.txt"
 
 # --- allowlist-filtered tracked paths -------------------------------------------------
-# NUL-delimited so paths with spaces survive.
-mapfile -d '' TRACKED < <(
-  git ls-files -z | node scripts/filter-allowlist.cjs "$ALLOWLIST"
-)
+# NUL-delimited so paths with spaces survive. Two deliberate steps, both of
+# which existed as bugs before ISSUE-107:
+#
+# 1. The index listing is captured ONLY to prove there is one. bash command
+#    substitution drops NUL bytes (and warns about it on stderr, which is
+#    unusable in a gate that must stay quiet when clean), so a `-z` stream can
+#    never survive inside a variable — it would arrive as one concatenated
+#    string with no path boundaries. The probe therefore reads plain
+#    `git ls-files`: an empty index produces empty output in BOTH forms, so
+#    the check is identical, while the real stream below keeps its NULs
+#    byte-for-byte by never entering a variable.
+# 2. The filtered stream goes to a file, not to `< <(...)`. Process
+#    substitution hides the subshell's exit status: if `node` was missing or
+#    filter-allowlist.cjs threw, TRACKED came out empty and the gate printed
+#    "nothing to scan" and exited 0 — a fail-open pass over an unscanned tree.
+set +e
+RAW_TRACKED=$(git ls-files)
+LIST_RC=$?
+set -e
+if [ "$LIST_RC" -ne 0 ]; then
+  echo "secret gate ERROR — could not list tracked files (git ls-files rc=$LIST_RC)." >&2
+  echo "This is NOT a pass. Fix the gate before trusting its verdict." >&2
+  exit 2
+fi
+if [ -z "$RAW_TRACKED" ]; then
+  echo "secret gate: nothing to scan (no tracked files)"
+  exit 0
+fi
+
+FILTERED=$(mktemp) || {
+  echo "secret gate ERROR — could not create a scratch file for the filtered list." >&2
+  echo "This is NOT a pass. Fix the gate before trusting its verdict." >&2
+  exit 2
+}
+trap 'rm -f "$FILTERED"' EXIT
+set +e
+git ls-files -z | node scripts/filter-allowlist.cjs "$ALLOWLIST" >"$FILTERED"
+FILTER_RC=$?
+set -e
+if [ "$FILTER_RC" -ne 0 ]; then
+  echo "secret gate ERROR — the allowlist filter did not run (filter rc=$FILTER_RC)." >&2
+  echo "This is NOT a pass. Fix the gate before trusting its verdict." >&2
+  exit 2
+fi
+
+mapfile -d '' TRACKED <"$FILTERED"
 if [ "${#TRACKED[@]}" -eq 0 ]; then
   echo "secret gate: nothing to scan (no tracked files outside the allowlist)"
   exit 0
@@ -107,6 +149,7 @@ SECRET_RE+='|xox[baprs]-[A-Za-z0-9-]{10,}'
 SECRET_RE+='|AKIA[0-9A-Z]{16}'
 SECRET_RE+='|rnd_[A-Za-z0-9]{20,}'
 SECRET_RE+='|sk_live_[0-9a-zA-Z]{16,}'
+SECRET_RE+='|whsec_[0-9a-zA-Z]{24,}'
 SECRET_RE+='|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
 
 grep_index "secret-shaped content in tracked files" "$SECRET_RE"

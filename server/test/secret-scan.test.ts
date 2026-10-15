@@ -15,6 +15,9 @@
  *      repository and NEVER on a live branch — see rigEnv below for how an
  *      inherited GIT_DIR (git exports it into hook environments) silently
  *      defeats `git init` and what that cost once already.
+ *   4. a scan that could not run is an ERROR, never a pass: a filter that
+ *      throws — or a node that never starts — must leave exit 2, not an empty
+ *      list the gate reads as "nothing to scan" (ISSUE-107 C1).
  *
  * A mangled pattern can still compile (an unclosed "[" swallows the rest of the
  * alternation into a literal bracket expression), so the only real defence
@@ -22,9 +25,10 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubGitEnv } from "./helpers/git-test-env.js";
 import { testTmpDir } from "./helpers/tmp-dirs.js";
 
 // fileURLToPath, not `.pathname`: the repo path contains a space, so the raw
@@ -48,17 +52,10 @@ let rig: string;
  * invalidating PR heads. Scrub every git override so the rig is its own
  * repository wherever the suite is launched from, and assert it in beforeAll.
  */
-const rigEnv: NodeJS.ProcessEnv = { ...process.env };
-for (const key of [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_COMMON_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-]) {
-  delete rigEnv[key];
-}
+// The list of overrides itself lives in helpers/git-test-env.ts so this suite
+// and the three hook suites scrub an identical set — a suite that forgets an
+// entry is how this hazard came back once already (ISSUE-107 T3).
+const rigEnv: NodeJS.ProcessEnv = scrubGitEnv(process.env);
 
 const git = (args: string[]): string =>
   execFileSync("git", args, { cwd: rig, encoding: "utf8", env: rigEnv });
@@ -280,6 +277,55 @@ describe("secret gate: refuses to report a broken scan as clean", () => {
     const res = spawnSync("bash", ["scripts/secret-scan.sh"], { cwd: rig, encoding: "utf8", env: rigEnv });
     writeFileSync(gatePath, original);
     expect(`${res.stdout}${res.stderr}`).toContain("NOT a pass");
+    expect(res.status).toBe(2);
+  });
+});
+
+describe("secret gate: a dead allowlist filter fails closed (ISSUE-107 C1)", () => {
+  it("exits 2, not 0, when filter-allowlist.cjs throws", () => {
+    const filterPath = join(rig, "scripts", "filter-allowlist.cjs");
+    writeFileSync(filterPath, 'throw new Error("filter exploded");\n');
+    // Commit AFTER breaking the filter: the gate short-circuits to "nothing to
+    // scan" on an empty index, and an uncommitted rig would make this pass or
+    // fail for a reason unrelated to the filter.
+    git(["add", "-A"]);
+    git(["commit", "-q", "--allow-empty", "-m", "rig state"]);
+    const res = spawnSync("bash", ["scripts/secret-scan.sh"], { cwd: rig, encoding: "utf8", env: rigEnv });
+    // Restore before asserting: a failed assertion must not leave a broken
+    // filter behind for every later test in this file.
+    cpSync(join(REPO_ROOT, "scripts", "filter-allowlist.cjs"), filterPath);
+
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toContain("allowlist filter did not run");
+    expect(out).not.toContain("nothing to scan");
+    expect(out).not.toContain("secret gate: clean");
+    expect(res.status).toBe(2);
+  });
+
+  it("exits 2, not 0, when node itself never runs the filter", () => {
+    // The other way the filter dies: node is missing or broken. A stub that
+    // exits 127 before reading anything leaves the filtered list empty, which
+    // is exactly the state the old `< <(...)` pipeline could not tell apart
+    // from a genuinely clean tree. PATH keeps the system entries so git still
+    // works and the failure under test is the filter's, not the gate's own
+    // plumbing reporting something else.
+    const bin = join(rig, "broken-bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "node"), "#!/bin/sh\nexit 127\n");
+    chmodSync(join(bin, "node"), 0o755);
+
+    git(["add", "-A"]);
+    git(["commit", "-q", "--allow-empty", "-m", "rig state"]);
+    const res = spawnSync("bash", ["scripts/secret-scan.sh"], {
+      cwd: rig,
+      encoding: "utf8",
+      env: { ...rigEnv, PATH: `${bin}:${rigEnv.PATH ?? ""}` },
+    });
+    rmSync(bin, { recursive: true, force: true });
+
+    const out = `${res.stdout}${res.stderr}`;
+    expect(out).toContain("allowlist filter did not run");
+    expect(out).not.toContain("secret gate: clean");
     expect(res.status).toBe(2);
   });
 });

@@ -29,6 +29,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DANGEROUS_GIT_VARS, scrubGitEnv } from "./helpers/git-test-env.js";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
@@ -46,18 +48,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
  * Deleted from process.env at module scope rather than passed per call site:
  * the block under test is itself a shell fragment that forks its own `git`
  * children, so an `env:` on the outer call alone cannot cover them.
- * `server/test/secret-scan.test.ts` documents the same hazard.
+ * The six names themselves live in `helpers/git-test-env.ts`, shared with the
+ * three suites that scrub them too. `server/test/secret-scan.test.ts` documents
+ * the same hazard.
  */
-for (const key of [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_COMMON_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-]) {
-  delete process.env[key];
-}
+for (const key of DANGEROUS_GIT_VARS) delete process.env[key];
 const SCRIPT = join(repoRoot, "scripts", "run-all-checks.sh");
 
 const WARNING = "core.hooksPath is unset while .githooks/pre-commit is tracked";
@@ -124,10 +119,14 @@ function runBlock(opts: { hooksPath: string; tracked: boolean; readOnlyGit?: boo
 
     if (opts.readOnlyGit) chmodSync(join(dir, ".git"), 0o555);
 
+    // Freshly scrubbed env as well as the module-scope loop: the block forks
+    // its own git children, and this outer call is the last place a copy of
+    // the inherited overrides could still be introduced (ISSUE-107 T3).
     const output = execFileSync("bash", ["-c", `${PREAMBLE}\n${hookBlock()}`], {
       cwd: dir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      env: scrubGitEnv(process.env),
     });
 
     if (opts.readOnlyGit) chmodSync(join(dir, ".git"), 0o755);

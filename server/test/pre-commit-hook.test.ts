@@ -44,6 +44,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DANGEROUS_GIT_VARS, scrubGitEnv } from "./helpers/git-test-env.js";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(repoRoot, ".githooks", "pre-commit");
 
@@ -63,19 +65,12 @@ const HOOK = join(repoRoot, ".githooks", "pre-commit");
  * Deleted from process.env at module scope rather than passed per call site:
  * this file spawns git a dozen times plus grandchildren forked by the gate
  * shell itself, and one missed `env:` reintroduces a destructive bug that only
- * shows up when the suite is run FROM a hook. `server/test/secret-scan.test.ts`
- * documents the same hazard and scopes its own `rigEnv` per call.
+ * shows up when the suite is run FROM a hook. The six names themselves live in
+ * `helpers/git-test-env.ts`, shared with the three suites that scrub them too.
+ * `server/test/secret-scan.test.ts` documents the same hazard and scopes its
+ * own `rigEnv` per call.
  */
-for (const key of [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_COMMON_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-]) {
-  delete process.env[key];
-}
+for (const key of DANGEROUS_GIT_VARS) delete process.env[key];
 
 /**
  * Stub gate bodies. Each exits the way the real gate would.
@@ -177,7 +172,13 @@ function commit(repo: string, opts: { kotlin?: boolean } = {}): Result {
     execFileSync("git", ["add", "authenticator-app/Main.kt"], { cwd: repo, stdio: "ignore" });
   }
 
-  const env = { ...process.env, PATH: `${join(repo, "bin")}${":"}${process.env.PATH ?? ""}` };
+  // Scrubbed explicitly too, not only by the module-scope loop above: this is
+  // the one place that builds a child env from scratch, so it must not be able
+  // to reintroduce an override by copying one in (ISSUE-107 T3).
+  const env = {
+    ...scrubGitEnv(process.env),
+    PATH: `${join(repo, "bin")}${":"}${process.env.PATH ?? ""}`,
+  };
   const p = spawnSync("git", ["commit", "-q", "-m", "x"], { cwd: repo, encoding: "utf8", env });
   return { code: p.status ?? -1, out: `${p.stdout ?? ""}${p.stderr ?? ""}`, repo };
 }

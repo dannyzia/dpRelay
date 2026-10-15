@@ -35,10 +35,12 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { DANGEROUS_GIT_VARS, scrubGitEnv } from "./helpers/git-test-env.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOK = join(repoRoot, ".githooks", "pre-push");
@@ -59,19 +61,11 @@ const HOOK = join(repoRoot, ".githooks", "pre-push");
  * Deleted from process.env at module scope rather than passed per call site:
  * this file spawns git (and, underneath, a real `git push`) a dozen times, and
  * one missed `env:` reintroduces a destructive bug that only manifests when the
- * suite runs FROM a hook. `server/test/secret-scan.test.ts` documents the same
- * hazard.
+ * suite runs FROM a hook. The six names themselves live in
+ * `helpers/git-test-env.ts`, shared with the three suites that scrub them too.
+ * `server/test/secret-scan.test.ts` documents the same hazard.
  */
-for (const key of [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_COMMON_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-]) {
-  delete process.env[key];
-}
+for (const key of DANGEROUS_GIT_VARS) delete process.env[key];
 
 interface Opts {
   suiteExit?: number;
@@ -136,7 +130,14 @@ interface PushResult {
 
 /** Runs a real `git push`; never throws, so failures can be asserted on. */
 function push(repo: Repo, ...args: string[]): PushResult {
-  const p = spawnSync("git", ["push", ...args], { cwd: repo.work, encoding: "utf8" });
+  // The live env is already scrubbed above; this passes a freshly scrubbed
+  // copy as well, so a later refactor that stops touching process.env cannot
+  // quietly put an inherited GIT_DIR back in front of a REAL push.
+  const p = spawnSync("git", ["push", ...args], {
+    cwd: repo.work,
+    encoding: "utf8",
+    env: scrubGitEnv(process.env),
+  });
   return { code: p.status ?? -1, out: p.stdout ?? "", err: p.stderr ?? "" };
 }
 
@@ -149,8 +150,20 @@ describe(".githooks/pre-push", () => {
   it("exists, is executable, and is syntactically valid bash", () => {
     expect(existsSync(HOOK)).toBe(true);
     expect(readFileSync(HOOK, { encoding: "utf8" }).startsWith("#!/usr/bin/env bash")).toBe(true);
-    const mode = execFileSync("stat", ["-c", "%a", HOOK], { encoding: "utf8" }).trim();
-    expect(mode).toBe("755");
+    // Any execute bit, never an exact "755": git stores only "executable", so
+    // a checkout under umask 0002 legitimately lands at 775. The exact-mode
+    // check that used to live here failed the gate on the owner's own machine
+    // (while CI's umask 022 stayed green) and relied on GNU-only `stat -c %a`,
+    // which macOS does not have — both are the rigidity ISSUE-107 T1 removes.
+    expect(Boolean(statSync(HOOK).mode & 0o111)).toBe(true);
+    // The index is what every clone and every hook run actually gets: 100755.
+    // A 100644 entry means git skips the hook entirely, and a gate that never
+    // runs must not read as a passing one.
+    const entry = execFileSync("git", ["ls-files", "-s", ".githooks/pre-push"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(entry.startsWith("100755")).toBe(true);
     const syn = spawnSync("bash", ["-n", HOOK], { encoding: "utf8" });
     expect(syn.status).toBe(0);
   });
