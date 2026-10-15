@@ -143,12 +143,19 @@ jobs:
         run: bash scripts/secret-scan.sh
       # v4 functions/ plane removed (decommission) — the npm-audit step that
       # scanned it went with it; remediation is moot post-decommission.
+      #
+      # ISSUE-108: Central Analyzer queries search.maven.org via SHA-1 hashes, which
+      # Sonatype rate-limits / times out from GitHub Actions runner IPs.
+      # Disabling Central search prevents false-alarm CI failures while retaining
+      # NVD CVE vulnerability scanning.
       - name: Run dependency check
         uses: dependency-check/Dependency-Check_Action@main
         with:
           project: 'Authenticator'
           path: '.'
           format: 'ALL'
+          args: >
+            --disableCentral
 
   # Path predicate for the dashboard job below, computed with native git instead
   # of a third-party filter action. pr-checks only runs on pull_request events,
