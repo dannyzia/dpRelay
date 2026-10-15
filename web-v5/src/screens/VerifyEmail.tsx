@@ -36,7 +36,7 @@ export function VerifyEmailView(props: {
 }
 
 /** Container: exchanges the emailed token once on mount and tracks verification state. */
-export function VerifyEmail({ token }: { token: string }): JSX.Element {
+export function VerifyEmail({ token, onVerified }: { token: string; onVerified?: () => void }): JSX.Element {
   const [state, setState] = useState<"pending" | "verified" | "failed">("pending");
   const [error, setError] = useState<string | null>(null);
 
@@ -46,7 +46,12 @@ export function VerifyEmail({ token }: { token: string }): JSX.Element {
       return;
     }
     verifyEmail(token)
-      .then(() => setState("verified"))
+      .then(() => {
+        setState("verified");
+        // ISSUE-119: refresh the session so gated screens (banner, company
+        // creation) flip to verified without a manual reload.
+        onVerified?.();
+      })
       .catch((err: unknown) => {
         setError(describeError(err));
         setState("failed");
