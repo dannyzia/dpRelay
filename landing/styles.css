@@ -947,3 +947,134 @@ tbody tr:hover {
   font-size: 0.8rem;
   white-space: nowrap;
 }
+
+/* ── Product architecture flow diagram (.diagram-flow) ──
+   The mental-model schematic: App → dP Relay → SIM → Customer.
+   Built from plain flex boxes (no images/SVG) so it stays selectable,
+   translatable and readable by screen readers in DOM order. */
+.diagram-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  margin: 2rem 0;
+}
+
+.diagram-flow figcaption {
+  font-size: 0.9rem;
+  color: var(--mute);
+  margin: 0;
+}
+
+.diagram-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.diagram-node {
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  flex: 1;
+  min-width: 140px;
+}
+
+.diagram-node.highlight {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px var(--green);
+  background: var(--surface);
+}
+
+.diagram-arrow {
+  color: var(--mute);
+  font-weight: bold;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+@media (max-width: 640px) {
+  .diagram-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* Arrows point downward once the row stacks vertically. */
+  .diagram-arrow {
+    transform: rotate(90deg);
+    text-align: center;
+  }
+}
+
+/* ── Audience persona grid (.persona-grid) ──
+   "Who is dP Relay for?" — one card per audience segment. */
+.persona-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+  margin: 2rem 0;
+}
+
+.persona-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.persona-card h3 {
+  margin-top: 0;
+}
+
+.persona-card p {
+  margin-bottom: 0.75rem;
+}
+
+.persona-card p:last-child {
+  margin-bottom: 0;
+}
+
+.persona-badge {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--green-soft);
+  margin-bottom: 0.5rem;
+}
+
+/* ── Accordion (details/summary) ──
+   Used by the BYOD troubleshooting list: native HTML disclosure widgets,
+   no JavaScript, keyboard-accessible by default. */
+details.card {
+  padding: 0;
+  margin-bottom: 0.75rem;
+}
+
+details.card summary {
+  cursor: pointer;
+  padding: 1rem 1.25rem;
+}
+
+details.card[open] summary {
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 0.75rem;
+}
+
+details.card > *:not(summary) {
+  padding: 0 1.25rem;
+}
+
+details.card > *:last-child {
+  padding-bottom: 1.25rem;
+}
