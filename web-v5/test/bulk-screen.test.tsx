@@ -6,8 +6,16 @@
 import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
 import * as XLSX from "xlsx";
-import type { BulkCreateResult, BulkPreview } from "../src/api";
-import { BulkView, fileToCsvText, type BulkViewProps } from "../src/screens/Bulk";
+import type { BulkCampaignStatus, BulkCreateResult, BulkPreview } from "../src/api";
+import {
+  BulkView,
+  CampaignStatusView,
+  PASTED_SOURCE_LABEL,
+  TEMPLATE_VARIABLES,
+  fileToCsvText,
+  insertToken,
+  type BulkViewProps,
+} from "../src/screens/Bulk";
 
 /** Strip React's `<!-- -->` text separators (see operator-screens.test.tsx). */
 const renderToString = (el: JSX.Element): string =>
@@ -176,5 +184,119 @@ describe("fileToCsvText", () => {
     const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, ...new Array(60).fill(0)]);
     const file = new File([bytes], "recipients.xlsx");
     await expect(fileToCsvText(file)).rejects.toMatchObject({ code: "unreadable_file" });
+  });
+});
+
+describe("ISSUE-112: paste recipients + template variable chips", () => {
+  it("renders the paste box with a label and a preview action locked while empty", () => {
+    const empty = renderToString(<BulkView {...props()} />);
+    expect(empty).toContain('data-testid="bulk-paste"');
+    expect(empty).toContain('for="bulkPasted"');
+    expect(empty).toContain('data-testid="bulk-preview-pasted" disabled');
+
+    const typed = renderToString(
+      <BulkView {...props({ pasted: "+8801711000001\n+8801711000002" })} />,
+    );
+    expect(typed).not.toContain('data-testid="bulk-preview-pasted" disabled');
+    expect(typed).toContain("+8801711000001");
+
+    // Once previewed, the source label names the paste box as the list origin.
+    const labelled = renderToString(<BulkView {...props({ fileName: PASTED_SOURCE_LABEL })} />);
+    expect(labelled).toContain("Pasted recipients");
+    expect(labelled).toContain('data-testid="bulk-file-name"');
+  });
+
+  it("offers {{name}} and {{phone}} chips above the message box", () => {
+    const html = renderToString(<BulkView {...props()} />);
+    expect(html).toContain('data-testid="bulk-var-chips"');
+    for (const token of TEMPLATE_VARIABLES) {
+      expect(html, token).toContain(`>${token}</button>`);
+    }
+    // Chips sit ABOVE the message textarea, per the handoff spec.
+    expect(html.indexOf("bulk-var-chips")).toBeLessThan(html.indexOf("bulk-message"));
+  });
+
+  it("insertToken places a token at the caret with exactly one spacing character", () => {
+    expect(insertToken("", "{{name}}", 0)).toEqual({ text: "{{name}}", caret: 8 });
+    const atEnd = insertToken("Hi ", "{{name}}", 3);
+    expect(atEnd.text).toBe("Hi {{name}}");
+    expect(atEnd.caret).toBe(11);
+    const mid = insertToken("HiBob", "{{name}}", 2);
+    expect(mid.text).toBe("Hi {{name}} Bob");
+    expect(mid.caret).toBe(11);
+    // A newline already separates, but fused words on the right still get one space.
+    const afterNewline = insertToken("Hello\nthere", "{{phone}}", 6);
+    expect(afterNewline.text).toBe("Hello\n{{phone}} there");
+    // Out-of-range carets clamp to the end instead of throwing.
+    expect(insertToken("ab", "{{phone}}", 99).text).toBe("ab {{phone}}");
+    expect(insertToken("ab", "{{phone}}", -5).text).toBe("{{phone}} ab");
+  });
+});
+
+describe("ISSUE-112: campaign broadcast status visualisation", () => {
+  const STATUS: BulkCampaignStatus = {
+    campaignId: "camp-9",
+    name: "Spring sale",
+    status: "sending",
+    sourceType: "csv",
+    totalRecipients: 100,
+    sentCount: 40,
+    failedCount: 10,
+    queuedCount: 50,
+    createdAt: 1791500000,
+    startedAt: 1791500010,
+    completedAt: null,
+    unlimitedPass: false,
+  };
+  const CREATED: BulkCreateResult = {
+    ok: true,
+    campaignId: "camp-9",
+    totalRecipients: 42,
+    creditsReserved: 42,
+    charset: "gsm",
+    status: "queued",
+  };
+
+  it("shows the status chip, counters and a determinate progress bar", () => {
+    const html = renderToString(<CampaignStatusView status={STATUS} error={null} />);
+    expect(html).toContain('data-testid="campaign-status"');
+    expect(html).toContain('data-testid="campaign-status-chip"');
+    expect(html).toContain(">sending<");
+    expect(html).toContain('data-testid="campaign-percent"');
+    expect(html).toContain(">50%<");
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-valuenow="50"');
+    expect(html).toContain("width:50%");
+    expect(html).toContain("</strong> sent");
+    expect(html).toContain("</strong> failed");
+    expect(html).toContain("</strong> queued");
+    expect(html).toContain("of 100 recipients");
+  });
+
+  it("renders the loading state and poll failures as an alert", () => {
+    const loading = renderToString(<CampaignStatusView status={null} error={null} />);
+    expect(loading).toContain("Loading broadcast status…");
+
+    const failed = renderToString(
+      <CampaignStatusView status={null} error="Unauthorized (invalid_app_credentials)" />,
+    );
+    expect(failed).toContain('role="alert"');
+    expect(failed).toContain("invalid_app_credentials");
+  });
+
+  it("offers the refresh action only when a handler is wired", () => {
+    expect(renderToString(<CampaignStatusView status={STATUS} error={null} />)).not.toContain(
+      "Refresh status",
+    );
+    expect(
+      renderToString(<CampaignStatusView status={STATUS} error={null} onRefresh={NOOP} />),
+    ).toContain("Refresh status");
+  });
+
+  it("shows the status panel only after a campaign was created", () => {
+    expect(renderToString(<BulkView {...props()} />)).not.toContain("campaign-status");
+    const created = renderToString(<BulkView {...props({ created: CREATED })} />);
+    expect(created).toContain("Broadcast status");
+    expect(created).toContain("Loading broadcast status…");
   });
 });

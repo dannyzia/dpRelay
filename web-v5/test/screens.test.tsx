@@ -177,6 +177,54 @@ describe("AppsView (F9 wallet + companies)", () => {
     expect(withSecret).toContain("added to your wallet");
   });
 
+  it("offers a per-company Link device action and the dedicated pairing section", () => {
+    const collapsed = render(<AppsView {...baseProps} companies={COMPANIES} />);
+    // One action per directory row, plus the section only when a company is selected.
+    expect(collapsed.match(/Link device/g)).toHaveLength(2);
+    expect(collapsed).not.toContain("company-pairing");
+
+    const open = render(
+      <AppsView {...baseProps} companies={COMPANIES} pairingCompanyId="co-1" />,
+    );
+    expect(open).toContain('data-testid="company-pairing"');
+    expect(open).toContain("Link your Android device — My shop");
+    expect(open).toContain("Hide device setup");
+    // Existing company: no fresh secret in this session, so the shown-once
+    // fallback + guide render instead of a QR that cannot exist.
+    expect(open).toContain('data-testid="pairing-empty"');
+    expect(open).toContain('data-testid="pairing-steps"');
+    expect(open).not.toContain("qr-box");
+
+    // A company id that is not in the directory opens nothing (no dead panel).
+    const unknown = render(
+      <AppsView {...baseProps} companies={COMPANIES} pairingCompanyId="co-missing" />,
+    );
+    expect(unknown).not.toContain("company-pairing");
+  });
+
+  it("shows the QR + copyable payload in the pairing section while the secret is known", () => {
+    const html = render(
+      <AppsView
+        {...baseProps}
+        companies={COMPANIES}
+        pairingCompanyId="co-1"
+        freshSecret={{
+          companyId: "co-1",
+          appId: "app_new1",
+          appSecret: "s3cret-value",
+          deviceEnrollmentSecret: "dev-enroll-value",
+          trialSms: 20,
+        }}
+      />,
+    );
+    expect(html).toContain('data-testid="company-pairing"');
+    expect(html).toContain('data-testid="pairing"');
+    expect(html).toContain("dprelay-enroll:v1?server=");
+    expect(html).toContain("Copy enrollment payload");
+    expect(html).toContain("pairing-steps");
+    expect(html).toContain("gateway-apk");
+  });
+
   it("renders the wallet purchase history when toggled on", () => {
     const history: WalletTransaction[] = [
       {

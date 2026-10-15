@@ -5,7 +5,7 @@ import {
   qrSvg,
   resolveServerBase,
 } from "../src/lib/devicePairing";
-import { DevicePairingView } from "../src/screens/DevicePairing";
+import { BYOD_GUIDE_URL, DevicePairingView } from "../src/screens/DevicePairing";
 
 const html = (el: JSX.Element): string => renderToString(el).replace(/<!-- -->/g, "");
 
@@ -54,5 +54,20 @@ describe("DevicePairingView", () => {
     expect(out).toContain('data-testid="pairing-empty"');
     expect(out).toContain("shown once");
     expect(out).not.toContain("qr-box");
+    // ISSUE-112: the guide still renders without a secret — recovery is
+    // documented, and the hashed secret is never pretended to exist.
+    expect(out).toContain("rotate the enrollment secret");
+  });
+
+  it("always carries the 4-step setup guide and the gateway APK reference", () => {
+    for (const secret of [SECRET, ""]) {
+      const out = html(<DevicePairingView secret={secret} />);
+      const steps = out.match(/<li[\s\S]*?<\/li>/g) ?? [];
+      expect(steps, `secret=${secret === "" ? "<empty>" : "set"}`).toHaveLength(4);
+      expect(out).toContain('data-testid="pairing-steps"');
+      expect(out).toContain('data-testid="gateway-apk"');
+      expect(out).toContain(`href="${BYOD_GUIDE_URL}"`);
+      expect(out).toContain("official download link");
+    }
   });
 });

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { renderToString as renderToRawString } from "react-dom/server";
 import indexHtml from "../index.html?raw";
 import type { BulkCreateResult, BulkPreview, Company, SessionUser, Wallet } from "../src/api";
-import { Shell } from "../src/components/Shell";
+import { Shell, credentialsJump } from "../src/components/Shell";
 import { hrefFor, parseHash } from "../src/lib/router";
 import { CUSTOMER_TABS, NAV, PUBLIC_SECTIONS, isKnownSection, navHref } from "../src/lib/routes";
 import { AppsView } from "../src/screens/Apps";
@@ -286,6 +286,52 @@ describe("a11y: semantic landmarks and lang", () => {
     expect(html).not.toContain("Balance");
     expect(html).not.toContain("Companies");
     expect(html).not.toContain("Sign out");
+    // ISSUE-112: the topbar balance chip and credentials jump are
+    // authenticated-only affordances.
+    expect(html).not.toContain("topbar-balance");
+    expect(html).not.toContain("topbar-credentials");
+  });
+});
+
+describe("ISSUE-112: topbar balance chip and credentials jump", () => {
+  it("shows the wallet balance chip for a signed-in user once it loaded", () => {
+    const html = render(
+      <Shell user={USER} connected section="credits" signOut={NOOP} wallet={WALLET}>
+        <p>screen</p>
+      </Shell>,
+    );
+    expect(html).toContain('data-testid="topbar-balance"');
+    expect(html).toContain("20");
+    expect(html).toContain("13");
+  });
+
+  it("hides the chip while the wallet is loading or unreadable", () => {
+    for (const wallet of [null, undefined]) {
+      const html = render(
+        <Shell user={USER} connected section="credits" signOut={NOOP} wallet={wallet}>
+          <p>screen</p>
+        </Shell>,
+      );
+      expect(html).not.toContain("topbar-balance");
+      expect(html).toContain("API credentials");
+    }
+  });
+
+  it("offers the credentials jump to a signed-in user", () => {
+    const html = render(
+      <Shell user={USER} connected={false} section="apps" signOut={NOOP}>
+        <p>screen</p>
+      </Shell>,
+    );
+    expect(html).toContain('data-testid="topbar-credentials"');
+    expect(html).toContain("API credentials");
+  });
+
+  it("the jump targets the credentials screen when connected, the hub otherwise", () => {
+    expect(credentialsJump(true)).toBe(hrefFor(["credentials"]));
+    expect(credentialsJump(false)).toBe(hrefFor(["apps"]));
+    expect(isKnownSection(parseHash(credentialsJump(true))[0] ?? "")).toBe(true);
+    expect(isKnownSection(parseHash(credentialsJump(false))[0] ?? "")).toBe(true);
   });
 });
 

@@ -1297,3 +1297,36 @@ export async function createBulkCampaign(input: {
     body: JSON.stringify({ ...input, sourceType: "csv" }),
   });
 }
+
+/** Live broadcast counters for one campaign owned by this app (server: publicCampaign). */
+export interface BulkCampaignStatus {
+  campaignId: string;
+  name: string;
+  /** queued | sending | paused | completed | cancelled. */
+  status: string;
+  sourceType: string;
+  totalRecipients: number;
+  sentCount: number;
+  failedCount: number;
+  queuedCount: number;
+  createdAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  /** ISSUE-96: true when the campaign rides the BYOD free-pass (0 credits). */
+  unlimitedPass: boolean;
+}
+
+/**
+ * GET /v5/bulk/campaigns/:id — the campaign's live status/counters, polled by
+ * the Bulk screen to visualize a broadcast after it is queued.
+ *
+ * @param campaignId campaign id returned by `createBulkCampaign`.
+ * @returns the campaign's current status and send counters.
+ */
+export async function getCampaignStatus(campaignId: string): Promise<BulkCampaignStatus> {
+  const body = await appFetch<{ ok: true; campaign: BulkCampaignStatus }>(
+    `/v5/bulk/campaigns/${encodeURIComponent(campaignId)}`,
+    { method: "GET" },
+  );
+  return body.campaign;
+}
