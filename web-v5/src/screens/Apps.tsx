@@ -12,6 +12,7 @@ import {
   listOwnedApps,
   renameCompany,
   resendVerification,
+  rotateCompanyDeviceSecret,
   type Company,
   type CompanyCreated,
   type OwnedApp,
@@ -120,6 +121,14 @@ export function AppsView(props: {
   pairingCompanyId?: string | null;
   /** ISSUE-112: toggles the "Link your Android device" panel for one company. */
   onTogglePairing?: (companyId: string) => void;
+  /** ISSUE-113: freshly minted enrollment secrets per company (shown once, this session). */
+  rotatedSecrets?: Record<string, string>;
+  /** ISSUE-113: id of the company whose rotation is in flight (drives the busy label). */
+  rotatingCompanyId?: string | null;
+  /** ISSUE-113: last rotation failure, surfaced as an alert in the pairing panel. */
+  rotateError?: string | null;
+  /** ISSUE-113: mints a new enrollment secret for one company (self-serve re-pairing). */
+  onRotateSecret?: (companyId: string) => void;
   onResend: () => void;
   onOpen: (appId: string) => void;
   onCreate: (name: string) => void;
@@ -136,13 +145,17 @@ export function AppsView(props: {
       ? null
       : (props.companies ?? []).find((company) => company.id === pairingCompanyId) ?? null;
   // The freshly created company's enrollment secret is the only one this
-  // session can show — the server stores every other one hashed (shown once).
+  // session can show UNTIL ISSUE-113: a self-serve rotation mints a new one
+  // on demand (and invalidates the previous pairing payload). The server
+  // stores every other secret hashed — it is never re-served.
+  const rotatedSecret = pairingCompany === null ? undefined : (props.rotatedSecrets ?? {})[pairingCompany.id];
   const pairingSecret =
-    pairingCompany !== null &&
+    rotatedSecret ??
+    (pairingCompany !== null &&
     props.freshSecret !== null &&
     props.freshSecret.companyId === pairingCompany.id
       ? props.freshSecret.deviceEnrollmentSecret
-      : "";
+      : "");
   return (
     <>
       <WalletHeader
@@ -257,6 +270,30 @@ export function AppsView(props: {
               The same steps work for every company you own.
             </p>
             <DevicePairingView secret={pairingSecret} />
+            {props.rotateError !== null && props.rotateError !== undefined && (
+              <p className="error" role="alert">
+                {props.rotateError}
+              </p>
+            )}
+            <p>
+              <button
+                type="button"
+                data-testid="company-rotate-secret-btn"
+                disabled={props.rotatingCompanyId === pairingCompany.id}
+                onClick={(): void => props.onRotateSecret?.(pairingCompany.id)}
+              >
+                {props.rotatingCompanyId === pairingCompany.id
+                  ? "Generating new code…"
+                  : "Generate new pairing code / Re-pair phone"}
+              </button>
+            </p>
+            {rotatedSecret !== undefined && (
+              <p className="ok-note" data-testid="company-rotated-secret">
+                New pairing code generated — the QR and payload above are live now. The previous
+                code stopped working the moment it was issued, so re-pair any other phone with
+                this one.
+              </p>
+            )}
             <button
               type="button"
               onClick={(): void => props.onTogglePairing?.(pairingCompany.id)}
@@ -380,6 +417,11 @@ export function Apps({
   const [resent, setResent] = useState<boolean>(false);
   // ISSUE-112: which company's "Link your Android device" panel is open.
   const [pairingCompanyId, setPairingCompanyId] = useState<string | null>(null);
+  // ISSUE-113: self-serve re-pairing — minted secrets live only in this
+  // session's state (the server never re-serves one), keyed by company.
+  const [rotatedSecrets, setRotatedSecrets] = useState<Record<string, string>>({});
+  const [rotatingCompanyId, setRotatingCompanyId] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
 
   const reload = (): void => {
     listCompanies()
@@ -474,6 +516,23 @@ export function Apps({
       .catch((err: unknown) => setError(describeError(err)));
   };
 
+  /**
+   * ISSUE-113: self-serve re-pairing — mints a new enrollment secret and
+   * keeps the one-time value in this session's state so the panel can show
+   * its QR/payload immediately. The previous payload stops enrolling the
+   * moment the server commits the new digest.
+   */
+  const rotateSecret = (companyId: string): void => {
+    setRotatingCompanyId(companyId);
+    setRotateError(null);
+    rotateCompanyDeviceSecret(companyId)
+      .then((res) => {
+        setRotatedSecrets((prev) => ({ ...prev, [res.companyId]: res.deviceEnrollmentSecret }));
+      })
+      .catch((err: unknown) => setRotateError(describeError(err)))
+      .finally(() => setRotatingCompanyId(null));
+  };
+
   const open = (appId: string): void => {
     if (getConnectedApp()?.appId === appId) {
       onOpenApp();
@@ -508,6 +567,10 @@ export function Apps({
       onTogglePairing={(companyId: string): void => {
         setPairingCompanyId((current) => (current === companyId ? null : companyId));
       }}
+      rotatedSecrets={rotatedSecrets}
+      rotatingCompanyId={rotatingCompanyId}
+      rotateError={rotateError}
+      onRotateSecret={rotateSecret}
       onResend={(): void => {
         resendVerification()
           .then(() => setResent(true))

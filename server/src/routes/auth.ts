@@ -580,6 +580,58 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
+   * ISSUE-113: customer self-serve DEVICE ENROLLMENT rotation — re-pair a
+   * replacement phone without the operator. Mints a new per-app enrollment
+   * secret, overwrites the stored digest (the old secret stops enrolling the
+   * instant this commits, since /v5/device/enroll is a digest lookup) and
+   * returns the raw value exactly once: same shown-once contract as company
+   * creation and the admin-plane rotation (admin-apps.ts).
+   *
+   * Fail-closed: an unknown company and someone else's company are
+   * indistinguishable (both 404 company_not_found); a withheld company or a
+   * revoked app cannot mint a working pairing code (400).
+   */
+  app.post("/v5/auth/companies/:id/rotate-device-secret", async (request, reply) => {
+    const session = requireSession(request, reply);
+    if (session === null) return reply;
+    const params = (request.params ?? {}) as { id?: unknown };
+    const companyId = typeof params.id === "string" ? params.id : "";
+
+    const row = app.db
+      .prepare(
+        "SELECT c.id, c.disabled, a.id AS app_row_id, a.app_id, a.revoked_at " +
+          "FROM companies c JOIN apps a ON a.company_id = c.id " +
+          "WHERE c.id = ? AND c.owner_user_id = ?",
+      )
+      .get(companyId, session.user.id) as
+      | { id: string; disabled: number; app_row_id: string; app_id: string; revoked_at: number | null }
+      | undefined;
+    if (row === undefined) {
+      return reply.code(404).send({ ok: false, error: "Company not found", code: "company_not_found" });
+    }
+    if (row.disabled !== 0) {
+      return reply.code(400).send({ ok: false, error: "Company is disabled", code: "company_disabled" });
+    }
+    if (row.revoked_at !== null) {
+      return reply.code(400).send({ ok: false, error: "App is revoked", code: "app_revoked" });
+    }
+
+    const deviceEnrollmentSecret = generateDeviceEnrollmentSecret();
+    app.db
+      .prepare("UPDATE apps SET device_enrollment_secret_hash = ? WHERE id = ?")
+      .run(app.sha256Hex(deviceEnrollmentSecret), row.app_row_id);
+
+    app.log.info({ appId: row.app_id }, "device enrollment secret rotated via customer session");
+    return reply.code(200).send({
+      ok: true,
+      companyId: row.id,
+      appId: row.app_id,
+      deviceEnrollmentSecret,
+      rotatedAt: Math.floor(Date.now() / 1000),
+    });
+  });
+
+  /**
    * STAGE F9 (ISSUE-88): the signed-in user's WALLET balance — what every
    * company app draws from. A user with no wallet row yet reports zeros
    * (fail-closed read, same envelope shape as the app-plane credits route).

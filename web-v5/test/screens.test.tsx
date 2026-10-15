@@ -225,6 +225,67 @@ describe("AppsView (F9 wallet + companies)", () => {
     expect(html).toContain("gateway-apk");
   });
 
+  it("offers self-serve re-pairing: rotate button reveals a fresh QR/payload (ISSUE-113)", () => {
+    // No secret minted yet: the button is there, the shown-once fallback is.
+    const idle = render(
+      <AppsView {...baseProps} companies={COMPANIES} pairingCompanyId="co-1" />,
+    );
+    expect(idle).toContain('data-testid="company-rotate-secret-btn"');
+    expect(idle).toContain("Generate new pairing code / Re-pair phone");
+    expect(idle).toContain('data-testid="pairing-empty"');
+    expect(idle).not.toContain("company-rotated-secret");
+
+    // Rotated: the card immediately shows the QR + copyable enrollment URI.
+    const rotated = render(
+      <AppsView
+        {...baseProps}
+        companies={COMPANIES}
+        pairingCompanyId="co-1"
+        rotatedSecrets={{ "co-1": "fresh-enroll-secret" }}
+      />,
+    );
+    expect(rotated).toContain('data-testid="pairing"');
+    expect(rotated).toContain("dprelay-enroll:v1?server=");
+    expect(rotated).toContain("Copy enrollment payload");
+    expect(rotated).toContain('data-testid="company-rotated-secret"');
+    expect(rotated).toContain("stopped working");
+  });
+
+  it("disables the rotate button while minting and surfaces failures (ISSUE-113)", () => {
+    const busy = render(
+      <AppsView
+        {...baseProps}
+        companies={COMPANIES}
+        pairingCompanyId="co-1"
+        rotatingCompanyId="co-1"
+      />,
+    );
+    expect(busy).toContain('data-testid="company-rotate-secret-btn" disabled');
+    expect(busy).toContain("Generating new code…");
+
+    // Another company's rotation in flight must not disable this one's button.
+    const otherBusy = render(
+      <AppsView
+        {...baseProps}
+        companies={COMPANIES}
+        pairingCompanyId="co-1"
+        rotatingCompanyId="co-2"
+      />,
+    );
+    expect(otherBusy).not.toContain('data-testid="company-rotate-secret-btn" disabled');
+
+    const failed = render(
+      <AppsView
+        {...baseProps}
+        companies={COMPANIES}
+        pairingCompanyId="co-1"
+        rotateError="Company not found (company_not_found)"
+      />,
+    );
+    expect(failed).toContain('role="alert"');
+    expect(failed).toContain("company_not_found");
+  });
+
   it("renders the wallet purchase history when toggled on", () => {
     const history: WalletTransaction[] = [
       {

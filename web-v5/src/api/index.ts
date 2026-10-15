@@ -524,6 +524,35 @@ export async function disableCompany(companyId: string): Promise<void> {
   });
 }
 
+/** Response of the customer self-serve enrollment rotation (ISSUE-113). */
+export interface CompanyDeviceSecretRotated {
+  ok: true;
+  companyId: string;
+  appId: string;
+  /** Shown EXACTLY once — the server keeps only its digest. */
+  deviceEnrollmentSecret: string;
+  rotatedAt: number;
+}
+
+/**
+ * ISSUE-113: POST /v5/auth/companies/:id/rotate-device-secret — mints a NEW
+ * device enrollment secret for a company the caller owns (self-serve
+ * re-pairing of a lost/replacement gateway phone). The previous pairing
+ * payload stops enrolling the moment this succeeds; the raw secret is
+ * returned exactly once, same shown-once contract as company creation.
+ *
+ * @param companyId the company whose gateway phone is being re-paired.
+ * @returns the rotated identifiers plus the one-time enrollment secret.
+ */
+export async function rotateCompanyDeviceSecret(
+  companyId: string,
+): Promise<CompanyDeviceSecretRotated> {
+  return request<CompanyDeviceSecretRotated>(
+    `/v5/auth/companies/${encodeURIComponent(companyId)}/rotate-device-secret`,
+    { method: "POST" },
+  );
+}
+
 /** GET /v5/auth/wallet — the wallet balance every company app draws from. */
 export async function getWallet(): Promise<Wallet> {
   const body = await request<{ ok: true; wallet: Wallet }>("/v5/auth/wallet", { method: "GET" });

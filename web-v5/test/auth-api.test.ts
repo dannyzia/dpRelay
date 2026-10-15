@@ -25,6 +25,7 @@ import {
   requestWalletCredits,
   resendVerification,
   resetPassword,
+  rotateCompanyDeviceSecret,
   submitWalletTrx,
   verifyEmail,
 } from "../src/api";
@@ -222,6 +223,30 @@ describe("tenancy + wallet API (F9)", () => {
     await disableCompany("co-1");
     expect(fetchMock.mock.calls[3][0]).toContain("/v5/auth/companies/co-1/disable");
     expect(fetchMock.mock.calls[3][1].method).toBe("POST");
+  });
+
+  it("rotates a company's device enrollment secret on the SESSION plane (ISSUE-113)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        ok: true,
+        companyId: "co/1",
+        appId: "app_x",
+        deviceEnrollmentSecret: "dev-enroll-new",
+        rotatedAt: 1791500000,
+      }),
+    );
+    const res = await rotateCompanyDeviceSecret("co/1");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    // The id is path-escaped — a crafted id cannot walk out of the route.
+    expect(url).toContain("/v5/auth/companies/co%2F1/rotate-device-secret");
+    expect(init.method).toBe("POST");
+    // Session plane: cookie auth only — no body and no app credentials.
+    expect(init.body).toBeUndefined();
+    expect(JSON.stringify(init.headers ?? {})).not.toContain("X-App-Id");
+    expect(res.deviceEnrollmentSecret).toBe("dev-enroll-new");
+    expect(res.companyId).toBe("co/1");
+    expect(res.rotatedAt).toBe(1791500000);
   });
 
   it("wallet reads and wallet purchases use the SESSION plane (no app headers)", async () => {
