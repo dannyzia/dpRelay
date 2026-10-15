@@ -1,6 +1,7 @@
 package com.digitalpapyrus.authenticator
 
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -358,13 +359,36 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun openBatteryOptimizationSettings() {
+    // ISSUE-118: non-standard ROMs may lack the exact-request activity or
+    // refuse the package-URI intent — never strand the onboarding flow.
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      val intent = Intent().apply {
-        action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-        data = Uri.parse("package:$packageName")
+      try {
+        val intent = Intent().apply {
+          action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+          data = Uri.parse("package:$packageName")
+        }
+        startActivityForResult(intent, REQUEST_BATTERY_OPTIMIZATION)
+      } catch (e: ActivityNotFoundException) {
+        openGenericBatterySettings()
+      } catch (e: SecurityException) {
+        openGenericBatterySettings()
       }
-      startActivityForResult(intent, REQUEST_BATTERY_OPTIMIZATION)
     } else {
+      onBatteryOptimizationComplete()
+    }
+  }
+
+  private fun openGenericBatterySettings() {
+    // Fallback ladder: generic optimization list (reusing the same request
+    // code so the existing onActivityResult rung completes onboarding on
+    // return), then straight through — every rung advances the flow even on
+    // ROMs with no exemption UI at all.
+    try {
+      val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+      startActivityForResult(fallback, REQUEST_BATTERY_OPTIMIZATION)
+    } catch (e: ActivityNotFoundException) {
+      onBatteryOptimizationComplete()
+    } catch (e: SecurityException) {
       onBatteryOptimizationComplete()
     }
   }
