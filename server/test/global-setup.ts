@@ -9,14 +9,17 @@
  * cron-style sweep was explicitly rejected in ISSUE-50 because it would hide
  * the bug while the disk still fills mid-session.
  *
- * Matching covers every prefix the suite creates, including the three that
- * do not start with `dprelay-`.
+ * Matching covers every prefix the suite creates, including the hook and
+ * ops-tool suites whose prefixes do not start with `dprelay-`. A prefix left
+ * out here is a prefix whose leaked directories this guard cannot see, so it
+ * silently stops guarding exactly the suites that added it (ISSUE-107 T2).
  */
 import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 /** Every scratch-dir prefix the server suite creates (see mkdtemp call sites). */
-const TEST_DIR = /^(dprelay-|secret-store-test-|render-key-test-|f8-reader-)/;
+const TEST_DIR =
+  /^(dprelay-|secret-store-test-|render-key-test-|f8-reader-|reader-ai-|keyring-backup-test-|precommit-|prepush-|prepush-nogit-|run-all-checks-hook-|secret-store-cli-test-)/;
 
 let baseline = new Set<string>();
 
