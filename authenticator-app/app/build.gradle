@@ -51,7 +51,8 @@ android {
         minSdk 26
         targetSdk 34
         versionCode 1
-        versionName "5.4.0"
+        // ISSUE-118: matches the live v5 server (server/package.json 5.5.0).
+        versionName "5.5.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         
@@ -68,19 +69,23 @@ android {
         // compile-time toggle: false keeps the legacy Firebase plane as the only
         // active one; flip to true for the cutover build. Base URL is a
         // non-secret (server URL, per 11-ENV-VARS.md public-client rules).
-        buildConfigField "String", "V5_API_BASE_URL", "\"https://dprelay-api-hug8.onrender.com\""
+        // ISSUE-118: production host (was the Render staging URL).
+        buildConfigField "String", "V5_API_BASE_URL", "\"https://api.dprelay.digital-papyrus.com\""
         // V5_SERVER_URL is the explicit, operator-settable v5 endpoint for the
         // parallel-run APK (PLAN §10 Step 2). V5ApiClient prefers this over
         // V5_API_BASE_URL so a deployed build can be re-pointed at a staging
         // server without a recompile; both default to the production host.
-        buildConfigField "String", "V5_SERVER_URL", "\"https://dprelay-api-hug8.onrender.com\""
+        // ISSUE-118: production host (was the Render staging URL).
+        buildConfigField "String", "V5_SERVER_URL", "\"https://api.dprelay.digital-papyrus.com\""
         buildConfigField "boolean", "V5_API_ENABLED", "true"
     }
 
     buildTypes {
         release {
-            minifyEnabled false
-            shrinkResources false
+            // ISSUE-118: R8 code + resource shrinking (keep rules live in
+            // proguard-rules.pro — release is the only minified variant).
+            minifyEnabled true
+            shrinkResources true
             signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             debuggable false
