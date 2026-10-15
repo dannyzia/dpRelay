@@ -43,6 +43,7 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest"
   },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^20.19.43",
     "@vitest/coverage-v8": "^2.1.9",

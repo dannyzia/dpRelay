@@ -10,6 +10,8 @@
  *  - a real `AbortSignal.timeout` proves the timeout path, not a mock of it.
  */
 
+import { readFileSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import {
@@ -726,6 +728,24 @@ describe("transport failures", () => {
     expect(error).toBeInstanceOf(NetworkError);
     expect(error.code).toBe("network_error");
     expect(error.message).toContain("stream reset");
+  });
+});
+
+describe("package contract", () => {
+  it("declares an explicit empty runtime dependency set and dev-only toolchain", () => {
+    // Enforced because `npm install --save-*` rewrites package.json and drops
+    // an empty `dependencies` object — which silently erases the SDK's
+    // headline guarantee (zero runtime dependencies) and with it this
+    // repository's ability to grep for it. The manifest is read from disk so
+    // the check sees exactly what would be published.
+    const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      dependencies?: unknown;
+      devDependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies).toEqual({});
+    expect(Object.keys(manifest.devDependencies ?? {})).toEqual(
+      expect.arrayContaining(["typescript", "vitest", "@types/node"]),
+    );
   });
 });
 
