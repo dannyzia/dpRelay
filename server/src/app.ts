@@ -120,7 +120,7 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   if (allowedOrigins.length > 0) {
     app.register(cors, {
       origin: allowedOrigins,
-      methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-App-Id", "X-App-Secret"],
       // STAGE F3 (ISSUE-81): the dashboard authenticates with an HttpOnly
       // session cookie cross-origin (API + site are both on onrender.com, so
