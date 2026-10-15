@@ -239,7 +239,7 @@ if (home != null) {
 // Home hero pins (rewrite doc): the deterministic hero contract markers and
 // the hero copy that the scroll-driven scene overlays.
 const HERO_PINS = [
-  "One SMS gateway. Two ways to send.",
+  "Send SMS from a number your customers recognize",
   "One message.",
   "Any country your phone can reach.",
   "From your own number.",
