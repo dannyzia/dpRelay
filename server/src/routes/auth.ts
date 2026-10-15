@@ -345,6 +345,25 @@ const authRoutes: FastifyPluginAsync = async (app) => {
    * company cannot farm a second trial. appSecret + deviceEnrollmentSecret
    * are returned EXACTLY once (to the caller); only digests are persisted.
    */
+  /**
+   * ISSUE-119: hard email gate for provisioning. When mail is configured,
+   * creating companies/apps (which mints credentials + trial credit) needs
+   * a verified account address — fail closed with 403. Unconfigured mail
+   * (local dev/test) and verified accounts pass through untouched.
+   */
+  function emailProvisionGate(userId: string): { ok: false; error: string; code: string } | null {
+    if (!isMailConfigured(app.db)) return null;
+    const row = app.db.prepare("SELECT email_verified_at FROM users WHERE id = ?").get(userId) as
+      | { email_verified_at: number | null }
+      | undefined;
+    if (row && row.email_verified_at !== null) return null;
+    return {
+      ok: false,
+      error: "Email verification required before creating apps or credentials",
+      code: "email_verification_required",
+    };
+  }
+
   function provisionCompany(
     userId: string,
     companyName: string | null,
@@ -439,6 +458,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/v5/auth/apps", async (request, reply) => {
     const session = requireSession(request, reply);
     if (session === null) return reply;
+    const gate = emailProvisionGate(session.user.id);
+    if (gate !== null) return reply.code(403).send(gate);
 
     const body = (request.body ?? {}) as NameBody;
     const name =
@@ -470,6 +491,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/v5/auth/companies", async (request, reply) => {
     const session = requireSession(request, reply);
     if (session === null) return reply;
+    const gate = emailProvisionGate(session.user.id);
+    if (gate !== null) return reply.code(403).send(gate);
     const body = (request.body ?? {}) as NameBody;
     const name =
       typeof body.name === "string" && body.name.trim().length > 0

@@ -158,7 +158,16 @@ export function App(): JSX.Element {
       ) : section === "reset" ? (
         <ResetPassword token={route[1] !== undefined ? decodeURIComponent(route[1]) : ""} />
       ) : section === "verify" ? (
-        <VerifyEmail token={route[1] !== undefined ? decodeURIComponent(route[1]) : ""} />
+        <VerifyEmail
+          token={route[1] !== undefined ? decodeURIComponent(route[1]) : ""}
+          onVerified={(): void => {
+            // ISSUE-119: the token just flipped email_verified_at server-side;
+            // re-probe so the session (and every gated screen) reflects it.
+            getCurrentUser()
+              .then((me) => setUser(me))
+              .catch(() => setUser(null));
+          }}
+        />
       ) : section === "login" || user === null ? (
         <Login
           onSignedIn={(): void => {

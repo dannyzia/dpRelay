@@ -117,6 +117,12 @@ export function AppsView(props: {
   } | null;
   /** Soft-verification banner (F3 amendment): shown when unverified AND mail is configured. */
   verifyBanner: "hidden" | "offer" | "sent";
+  /**
+   * ISSUE-119: hard creation gate — true when mail is configured AND the
+   * account is unverified (holds even after a resend, while the banner flips
+   * to "sent"). Optional so existing render tests keep compiling.
+   */
+  creationBlocked?: boolean;
   /** ISSUE-112: id of the company whose pairing panel is open (null/omitted = collapsed). */
   pairingCompanyId?: string | null;
   /** ISSUE-112: toggles the "Link your Android device" panel for one company. */
@@ -341,9 +347,26 @@ export function AppsView(props: {
           }}
         >
           <h2>Create a company</h2>
+          {props.creationBlocked === true ? (
+            <p className="error" role="alert" data-testid="creation-gated">
+              Company creation is paused until your email is verified — confirm
+              the link we sent, then come back here.
+            </p>
+          ) : null}
           <label htmlFor="companyName">Company name</label>
-          <input id="companyName" name="name" placeholder="My shop" maxLength={128} required />
-          <button type="submit" disabled={props.busy}>
+          <input
+            id="companyName"
+            name="name"
+            placeholder="My shop"
+            maxLength={128}
+            required
+            disabled={props.creationBlocked === true}
+          />
+          <button
+            type="submit"
+            disabled={props.busy || props.creationBlocked === true}
+            title={props.creationBlocked === true ? "Verify your email to create a company" : undefined}
+          >
             {props.busy ? "Creating…" : "Create company"}
           </button>
         </form>
@@ -550,6 +573,10 @@ export function Apps({
       : mailConfigured === true && emailVerifiedAt !== undefined && emailVerifiedAt === null
         ? "offer"
         : "hidden";
+  // ISSUE-119: mirrors the banner-offer condition but stays true after a
+  // resend (banner flips to "sent" while the account is still unverified).
+  const creationBlocked =
+    mailConfigured === true && emailVerifiedAt !== undefined && emailVerifiedAt === null;
 
   return (
     <AppsView
@@ -563,6 +590,7 @@ export function Apps({
       busy={busy}
       freshSecret={freshSecret}
       verifyBanner={verifyBanner}
+      creationBlocked={creationBlocked}
       pairingCompanyId={pairingCompanyId}
       onTogglePairing={(companyId: string): void => {
         setPairingCompanyId((current) => (current === companyId ? null : companyId));

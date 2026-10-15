@@ -6,6 +6,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { constantTimeEquals, sha256Hex } from "./services/crypto.js";
+import { isMailConfigured } from "./services/mailer.js";
 
 /** Shape of a verified device, attached to the request by requireDevice. */
 export interface AuthenticatedDevice {
@@ -185,7 +186,7 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
       .prepare(
         "SELECT a.id, a.app_id, a.app_secret_hash, a.name, a.webhook_url, a.webhook_secret_hash, " +
           "a.rate_max_per_phone, a.rate_window_sec, a.revoked_at, a.owner_user_id, " +
-          "u.disabled AS owner_disabled, " +
+          "u.disabled AS owner_disabled, u.email_verified_at AS owner_email_verified_at, " +
           "c.id AS company_id, c.owner_user_id AS company_owner_id, c.disabled AS company_disabled " +
           "FROM apps a LEFT JOIN users u ON u.id = a.owner_user_id " +
           "LEFT JOIN companies c ON c.id = a.company_id WHERE a.app_id = ?",
@@ -203,6 +204,7 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
           revoked_at: number | null;
           owner_user_id: string | null;
           owner_disabled: number | null;
+          owner_email_verified_at: number | null;
           company_id: string | null;
           company_owner_id: string | null;
           company_disabled: number | null;
@@ -247,6 +249,23 @@ const middlewarePlugin: FastifyPluginAsync = async (app) => {
         ok: false,
         error: "This company is disabled. Contact the operator.",
         code: "company_disabled",
+      });
+      return;
+    }
+    // ISSUE-119: an unverified owner freezes their app's live dispatch when
+    // mail is configured — same ordering as the checks above (after the
+    // constant-time secret compare, so app state never leaks to a caller
+    // holding bad credentials). Operator-provisioned apps (owner_user_id
+    // NULL) and unconfigured-mail deployments (local dev/test) pass through.
+    if (
+      row.owner_user_id !== null &&
+      isMailConfigured(app.db) &&
+      row.owner_email_verified_at === null
+    ) {
+      await reply.code(403).send({
+        ok: false,
+        error: "Account email is unverified. Verify your email to send messages.",
+        code: "email_verification_required",
       });
       return;
     }

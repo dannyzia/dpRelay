@@ -321,6 +321,16 @@ describe("AppsView (F9 wallet + companies)", () => {
     const hidden = render(<AppsView {...baseProps} companies={[]} verifyBanner="hidden" />);
     expect(hidden).not.toContain("Confirm your email");
   });
+
+  it("ISSUE-119 gates company creation while the account is unverified", () => {
+    const gated = render(<AppsView {...baseProps} companies={[]} verifyBanner="offer" creationBlocked />);
+    expect(gated).toContain("Company creation is paused until your email is verified");
+    expect(gated).toContain("Verify your email to create a company");
+    expect(gated).toContain("disabled");
+    const open = render(<AppsView {...baseProps} companies={[]} verifyBanner="hidden" />);
+    expect(open).not.toContain("Company creation is paused");
+    expect(open).toContain("Create company");
+  });
 });
 
 describe("LinkAppView (F3 link existing app)", () => {
