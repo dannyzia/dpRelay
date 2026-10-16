@@ -84,8 +84,8 @@ android {
         release {
             // ISSUE-118: R8 code + resource shrinking (keep rules live in
             // proguard-rules.pro — release is the only minified variant).
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled false
+            shrinkResources false
             signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             debuggable false
