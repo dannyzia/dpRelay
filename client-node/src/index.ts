@@ -36,3 +36,19 @@ export type {
 } from "./client.js";
 
 export { isValidE164, isValidOtp, normalizeOtp, normalizePhoneNumber } from "./validation.js";
+
+export {
+  DecryptionError,
+  decryptMessage,
+  deriveE2eeKey,
+  E2EE_IV_BYTES,
+  E2EE_KEY_BYTES,
+  E2EE_PBKDF2_ITERATIONS,
+  E2EE_PBKDF2_SALT,
+  E2EE_PREFIX,
+  E2EE_TAG_BYTES,
+  encryptMessage,
+  isE2eeEnvelope,
+} from "./crypto.js";
+
+export type { E2eeKeyInput } from "./crypto.js";

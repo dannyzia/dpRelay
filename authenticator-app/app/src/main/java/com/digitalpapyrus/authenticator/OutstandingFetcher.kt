@@ -107,6 +107,19 @@ object OutstandingFetcher {
             return
         }
 
+    // ISSUE-120: E2EE bodies decrypt here, before SmsManager ever sees
+    // them. Fail-closed: a missing key or a failed open reports the
+    // message failed (server requeues per its window) without crashing
+    // and without transmitting corrupt ciphertext. Plaintext bodies pass
+    // through untouched; inFlight is untouched on this path because the
+    // entry is only added below once a send is actually queued.
+    // (2-space: ktlint-clean new code in a baselined 4-space file.)
+    val sendBody = if (E2eeDecryptor.isEnvelope(message.message)) {
+      openE2eeBody(context, message) ?: return
+    } else {
+      message.message
+    }
+
         val sentIntent = Intent(ACTION_SMS_SENT).apply { putExtra(EXTRA_MESSAGE_ID, message.id) }
         val deliveredIntent = Intent(ACTION_SMS_DELIVERED).apply { putExtra(EXTRA_MESSAGE_ID, message.id) }
         val sentPendingIntent = PendingIntent.getBroadcast(
@@ -128,7 +141,7 @@ object OutstandingFetcher {
 
         smsRateLimiter.enqueueSms(
             message.to,
-            message.message,
+            sendBody,
             sentPendingIntent,
             deliveredPendingIntent,
         ) {
@@ -136,7 +149,7 @@ object OutstandingFetcher {
                 smsManager?.sendTextMessage(
                     message.to,
                     null,
-                    message.message,
+                    sendBody,
                     sentPendingIntent,
                     deliveredPendingIntent,
                 )
@@ -148,6 +161,28 @@ object OutstandingFetcher {
             }
         }
     }
+
+  /**
+   * Opens an `e2ee:v1:` body with the operator-configured app key.
+   *
+   * @return Plaintext to send, or null when the message was already
+   * terminally reported failed (caller must return without sending).
+   */
+  private fun openE2eeBody(context: Context, message: V5OutstandingMessage): String? {
+    val key = EncryptedPrefsHelper.getAppE2eeKey(context)
+    if (key.isNullOrBlank()) {
+      Log.e(TAG, "v5 E2EE body for ${message.id} but no app E2EE key configured")
+      reportResult(message.id, "failed", "E2EE_NO_KEY")
+      return null
+    }
+    return try {
+      E2eeDecryptor.decryptToString(message.message, key)
+    } catch (e: Exception) {
+      Log.e(TAG, "v5 E2EE open failed for ${message.id}", e)
+      reportResult(message.id, "failed", "E2EE_DECRYPT_FAILED")
+      null
+    }
+  }
 
     /** Reports a terminal result; failures rely on the server requeue window. */
     private fun reportResult(messageId: String, status: String, error: String?) {

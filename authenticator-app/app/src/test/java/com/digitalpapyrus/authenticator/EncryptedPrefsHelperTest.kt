@@ -174,6 +174,21 @@ class EncryptedPrefsHelperTest {
   }
 
   @Test
+  fun `ISSUE-120 — app E2EE key stores, reads back, clears, and dies with a credential reset`() {
+    val e2eeKey = "operator-e2ee-passphrase-for-app"
+    assertNull(EncryptedPrefsHelper.getAppE2eeKey(context))
+    EncryptedPrefsHelper.storeAppE2eeKey(context, e2eeKey)
+    assertEquals(e2eeKey, EncryptedPrefsHelper.getAppE2eeKey(context))
+    // Blank clears (operator removing the key fails E2EE sends closed).
+    EncryptedPrefsHelper.storeAppE2eeKey(context, "  ")
+    assertNull(EncryptedPrefsHelper.getAppE2eeKey(context))
+    // A credential reset wipes it alongside the enrollment secrets.
+    EncryptedPrefsHelper.storeAppE2eeKey(context, e2eeKey)
+    EncryptedPrefsHelper.clearDeviceCredentials(context)
+    assertNull(EncryptedPrefsHelper.getAppE2eeKey(context))
+  }
+
+  @Test
   fun `reset also erases the legacy global secret so background re-enroll cannot fall back to it`() {
     // Only the legacy global secret is stored (pre-F7 device): bearer
     // selection would normally fall back to it…
