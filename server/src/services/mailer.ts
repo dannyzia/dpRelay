@@ -13,6 +13,13 @@
  *
  * Privacy: success/failure is logged WITHOUT recipient addresses or password
  * material (PII + secret policy); only the purpose and outcome are logged.
+ *
+ * STAGE F11 (ISSUE-123) — transport selection: Render blocks all outbound
+ * SMTP (every relay ETIMEDOUTs at CONN from Render while the same connections
+ * succeed elsewhere), so when the configured host is `api.brevo.com` the
+ * mailer sends through Brevo's HTTP API instead. In that mode the stored
+ * password field carries the xkeysib API key (no schema change — ordered).
+ * Every other host keeps the SMTP transport below, unchanged.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
 import nodemailer from "nodemailer";
@@ -23,6 +30,14 @@ const CONFIG_ROW_ID = 1;
 const ENC_PREFIX = "v1:";
 /** Nodemailer defaults are 30s; a dead SMTP host must fail the operator's test button fast. */
 const SMTP_TIMEOUTS_MS = { connectionTimeout: 5000, greetingTimeout: 5000, socketTimeout: 10000 };
+/** STAGE F11: this configured host selects Brevo's HTTP API instead of SMTP. */
+const BREVO_HTTP_HOST = "api.brevo.com";
+/** Brevo transactional-mail endpoint (SMTP-over-HTTP, docs: POST /v3/smtp/email). */
+const BREVO_HTTP_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
+/** HTTP sends must fail as fast as the SMTP connection timeouts above. */
+const BREVO_HTTP_TIMEOUT_MS = 10_000;
+/** Cap on the response body echoed into an error — enough to debug, no payload dumping. */
+const BREVO_ERROR_EXCERPT_CHARS = 300;
 
 export interface MailConfigRow {
   host: string;
@@ -124,7 +139,42 @@ function loadMailConfigForSend(db: Db, serverSecret: string): MailConfigRow | nu
 }
 
 /**
- * Sends one email through the operator-configured SMTP relay.
+ * STAGE F11: one send through Brevo's HTTP API (selected when the configured
+ * host is `api.brevo.com`). The stored password is the xkeysib API key here.
+ *
+ * @param config decrypted mail config (loadMailConfigForSend).
+ * @param to recipient address.
+ * @param subject message subject.
+ * @param text plain-text body (`textContent` — Brevo sends it as text/plain).
+ * @throws Error carrying the HTTP status and a response-body excerpt on a
+ *         non-2xx, so the existing catch/log surface keeps the detail without
+ *         callers needing to know which transport ran.
+ */
+async function sendBrevoHttp(config: MailConfigRow, to: string, subject: string, text: string): Promise<void> {
+  const res = await fetch(BREVO_HTTP_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "api-key": config.password,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      sender: { email: config.fromAddress },
+      to: [{ email: to }],
+      subject,
+      textContent: text,
+    }),
+    signal: AbortSignal.timeout(BREVO_HTTP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    // Body read for the error only — the log keeps it, the caller only maps it.
+    const body = await res.text().catch(() => "");
+    throw new Error(`brevo_http_send_failed: ${res.status} ${res.statusText} ${body.slice(0, BREVO_ERROR_EXCERPT_CHARS)}`);
+  }
+}
+
+/**
+ * Sends one email through the operator-configured transport (SMTP relay, or
+ * Brevo's HTTP API when the host is `api.brevo.com` — STAGE F11).
  * @throws when unconfigured (mail_not_configured) or the transport fails —
  *         callers map both to structured envelopes.
  */
@@ -138,6 +188,12 @@ export async function sendMail(
   const config = loadMailConfigForSend(db, serverSecret);
   if (config === null) {
     throw new Error("mail_not_configured");
+  }
+  // STAGE F11: the configured host selects the transport. `transport.close()`
+  // is meaningless in HTTP mode, so the two paths stay separate.
+  if (config.host === BREVO_HTTP_HOST) {
+    await sendBrevoHttp(config, to, subject, text);
+    return;
   }
   const transport = nodemailer.createTransport({
     host: config.host,
