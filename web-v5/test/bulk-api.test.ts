@@ -53,7 +53,7 @@ describe("bulk preview + two-step create (F5c)", () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/v5/bulk/campaigns/preview");
+    expect(url).toBe("https://api.dprelay.digital-papyrus.com/v5/bulk/campaigns/preview");
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("text/csv");
     expect(headers["X-App-Id"]).toBe("bulk_app");
@@ -99,7 +99,7 @@ describe("bulk preview + two-step create (F5c)", () => {
     expect(result).toMatchObject({ campaignId: "camp-1", totalRecipients: 2, creditsReserved: 2 });
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("/v5/bulk/campaigns");
+    expect(url).toBe("https://api.dprelay.digital-papyrus.com/v5/bulk/campaigns");
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
     expect(JSON.parse(init.body as string)).toEqual({

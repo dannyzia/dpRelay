@@ -115,6 +115,14 @@ const adminUserRoutes: FastifyPluginAsync = async (app) => {
       // Eager revocation (spec): the row deletion IS the logout — waiting for
       // expiry/next resolution would leave a withheld user's cookie valid.
       db.prepare("DELETE FROM user_sessions WHERE user_id = ?").run(userId);
+      // VULN-002 (STAGE F12): refresh tokens are a separate table, and
+      // /v5/auth/refresh never re-reads the session rows — revoking them here
+      // (plus the disabled check in the refresh route) is what stops a withheld
+      // user from walking straight back in with a token issued before the
+      // withhold.
+      db.prepare(
+        "UPDATE refresh_tokens SET revoked_at = unixepoch() WHERE user_id = ? AND revoked_at IS NULL",
+      ).run(userId);
       audit("user.withhold", userId, reason.trim());
     })();
     app.log.info({ userId }, "user withheld (disabled)");

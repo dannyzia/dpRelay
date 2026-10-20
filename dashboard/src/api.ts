@@ -19,9 +19,21 @@
  * rotation is one explicit call away (refreshTokens()).
  */
 
-/** API base: Vite env at build time, defaulting to the production API. */
+/**
+ * API base: Vite env at build time, defaulting to the production API.
+ *
+ * STAGE F12 (ISSUE-121): the default was `https://dprelay-api-hug8.onrender.com`,
+ * which is a DIFFERENT registrable domain from the dashboard — a cross-site
+ * request, so the SameSite=Lax session cookie never travelled and login was
+ * broken for every customer. The API is now addressed on its own subdomain of
+ * the SAME registrable domain (`api.…` vs `app.…`), which keeps the cookie
+ * same-site while still being a distinct origin for CORS.
+ *
+ * ⚠️ FLAG: production origin as a fallback — override per environment with
+ * `VITE_API_BASE_URL` (dashboard/.env.example).
+ */
 export const API_BASE: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "https://dprelay-api-hug8.onrender.com";
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "https://api.dprelay.digital-papyrus.com";
 
 const ACCESS_KEY = "dprelay.accessToken";
 const REFRESH_KEY = "dprelay.refreshToken";

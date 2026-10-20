@@ -15,7 +15,23 @@
  */
 
 /** Build-time base URL; empty = same origin (server contract: relative fetch). */
-export const API_BASE: string = import.meta.env.VITE_API_BASE ?? "";
+/**
+ * API base, baked into the bundle at BUILD time by Vite.
+ *
+ * STAGE F12 (ISSUE-121) default: `https://api.dprelay.digital-papyrus.com`.
+ * The previous default was `""` (same origin), which meant the deployed
+ * dashboard called `app.dprelay.digital-papyrus.com/v5/*` — a host with no
+ * API behind it, so every request 404'd. The API lives on its own SUBDOMAIN
+ * of the same registrable domain, so the session cookie it sets is same-site
+ * with the dashboard (SameSite=Lax flows; third-party-cookie blocking does not
+ * apply).
+ *
+ * ⚠️ FLAG: this is a production origin baked as a fallback. It is overridable
+ * per environment via `VITE_API_BASE` (empty string still means "same origin"
+ * for anyone deliberately running a reverse proxy in front of the SPA).
+ */
+export const API_BASE: string =
+  import.meta.env.VITE_API_BASE ?? "https://api.dprelay.digital-papyrus.com";
 
 const APP_ID_KEY = "webv5.appId";
 const APP_SECRET_KEY = "webv5.appSecret";

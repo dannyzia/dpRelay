@@ -279,13 +279,25 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     // Rotation: the presented token is single-use — revoke it, issue a fresh pair.
     app.revokeRefreshToken(row.id);
 
-    const user = app.db.prepare("SELECT id, email FROM users WHERE id = ?").get(row.user_id) as
-      | { id: string; email: string }
+    const user = app.db.prepare("SELECT id, email, disabled FROM users WHERE id = ?").get(row.user_id) as
+      | { id: string; email: string; disabled: number }
       | undefined;
     if (!user) {
       return reply.code(401).send({
         ok: false,
         error: "User no longer exists",
+        code: "invalid_refresh_token",
+      });
+    }
+    if (user.disabled !== 0) {
+      // VULN-002 (STAGE F12): a withheld account must not be able to keep
+      // minting access tokens from refresh tokens issued before the withhold.
+      // Same envelope as an unknown/expired/revoked token on purpose — a
+      // distinct "account disabled" answer here would be an oracle for
+      // probing which accounts are withheld.
+      return reply.code(401).send({
+        ok: false,
+        error: "Invalid, expired, or revoked refresh token",
         code: "invalid_refresh_token",
       });
     }
@@ -1035,6 +1047,13 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       app.db.prepare("UPDATE user_email_tokens SET used_at = unixepoch() WHERE id = ?").run(row.token_id);
       // Reset implies mailbox control — treat it as proof and clear ALL sessions.
       app.db.prepare("DELETE FROM user_sessions WHERE user_id = ?").run(row.user_id);
+      // VULN-002 (STAGE F12): sessions alone are not enough — the JWT access
+      // token is stateless and refresh tokens live in their own table, so a
+      // reset that left them alive would let anyone holding one keep a working
+      // session after the password changed. Kill every non-revoked row.
+      app.db
+        .prepare("UPDATE refresh_tokens SET revoked_at = unixepoch() WHERE user_id = ? AND revoked_at IS NULL")
+        .run(row.user_id);
     })();
     app.log.info({ userId: row.user_id }, "password reset completed");
     return reply.code(200).send({ ok: true });

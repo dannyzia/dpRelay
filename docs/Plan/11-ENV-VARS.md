@@ -110,7 +110,7 @@ Build-time variables for the `web-v5/` SPA (Vite inlines them into the bundle at
 
 | Variable | Required | Default | Description | How to get it |
 | --- | --- | --- | --- | --- |
-| VITE_API_BASE | no | — (same origin) | Absolute base URL of the dP Relay v5 API used by the dashboard. Empty = requests go to the origin serving the static site. Cross-origin values require this site's origin in the API's `CORS_ALLOWED_ORIGINS`. | Deployed API URL (e.g. Render service) |
+| VITE_API_BASE | no | `https://api.dprelay.digital-papyrus.com` (STAGE F12) | Absolute base URL of the dP Relay v5 API used by the dashboard. The API is a subdomain of the SAME registrable domain as `app.dprelay.digital-papyrus.com`, which is what keeps the `SameSite=Lax` session cookie same-site — never point this at the `onrender.com` origin (different site, PSL entry; the cookie then never travels and login breaks). Empty = requests go to the origin serving the static site — only valid behind a real reverse proxy, which production does not have (`/v5/*` 404s there). Cross-origin values require this site's origin in the API's `CORS_ALLOWED_ORIGINS` (already listed). | Deployed API URL (e.g. Render service) |
 
 ## Firebase Console Configuration
 | Setting | Where | Value |
