@@ -18,11 +18,23 @@
  * SMTP-free FAQ rule, and the AGPL identifier gate (agpl-grep.sh does not
  * walk landing/, so the pattern is mirrored here).
  *
+ * 2026-10-20: STAGE F13 (ISSUE-122) — real-404 gate. landing/404.html must
+ * exist, carry noindex, use the site stylesheet and link all 11 pages; a
+ * throwaway local static server mirrors the publish-dir contract (unmatched
+ * path → 404.html with HTTP 404) and probes the unknown-path 404, the 11 pages
+ * 200 and /sitemap.xml + /robots.txt 200. `--production [base-url]` runs the
+ * same probes against the live origin — opt-in, never in CI, because the live
+ * origin can only pass once this branch merges and deploys. F13 content pins:
+ * the owner-verbatim SIM + download sentences and the PDF-derived keep-awake
+ * sections on /docs/byod/, and the owner legal block confined to /terms/ and
+ * /privacy/ (address nowhere else in landing/).
+ *
  * Exit 0 = all checks pass; exit 1 prints every failure (no early exit, so a
  * single CI run shows the full list).
  */
-import { readFileSync, existsSync, readdirSync } from "node:fs";
-import { dirname, join, resolve, relative, extname } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { createServer } from "node:http";
+import { dirname, join, resolve, relative, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -79,6 +91,30 @@ const PAYMENT_PINS = [
   "Availability depends on country, currency and the current purchase flow.",
 ];
 
+/** STAGE F13 (ISSUE-122): owner-ratified sentences for /docs/byod/ — verbatim,
+ *  never paraphrased (hub amendment, owner inputs 2026-10-20). */
+const BYOD_SIM_SENTENCE =
+  "Messages are sent from the SIM of the gateway phone enrolled for your app — one number per company; you choose which phone by enrolling it.";
+const BYOD_DOWNLOAD_SENTENCE =
+  "After your company is created and approved, your personal download link arrives by email — the app is not publicly distributed.";
+
+/** PDF-derived brand coverage the "Keep your phone awake 24/7" section keeps. */
+const BYOD_BRANDS = [
+  "Samsung — One UI",
+  "Xiaomi — MIUI",
+  "Oppo / Realme / OnePlus",
+  "Vivo / iQOO",
+  "Google Pixel — stock Android",
+  "Any other Android 13 / 14 phone",
+];
+
+/** Owner legal block (F13 amendment): the address appears on /terms/ and
+ *  /privacy/ ONLY — the needle is the address so the long-standing footer line
+ *  "…by Digital Papyrus. © 2026 …" on every other page is not a false hit. */
+const LEGAL_BLOCK = "Digital Papyrus — 7/1-D, R. K. Mission Road, Dhaka 1203, Bangladesh.";
+const LEGAL_ADDRESS_NEEDLE = "7/1-D, R. K. Mission Road";
+const LEGAL_ALLOWED_FILES = ["terms/index.html", "privacy/index.html"];
+
 const VOID_TAGS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
   "link", "meta", "source", "track", "wbr",
@@ -94,6 +130,28 @@ function pass(msg) {
 function fail(msg) {
   failures.push(msg);
 }
+
+/** STAGE F13: parse `--production [base-url]` (adds the live-origin HTTP
+ *  probes); any other argument is a usage error, reported not thrown. @returns
+ *  the production base URL, or null for local-only mode. */
+function parseArgs(args) {
+  let production = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--production") {
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        production = next;
+        i += 1;
+      } else {
+        production = BASE_URL;
+      }
+    } else {
+      fail(`unknown argument "${args[i]}" — usage: node scripts/check-landing.mjs [--production [base-url]]`);
+    }
+  }
+  return production;
+}
+const productionBase = parseArgs(process.argv.slice(2));
 
 /** Case-insensitive tag scanner that validates nesting with a stack. */
 function checkTagBalance(html, pagePath) {
@@ -406,6 +464,197 @@ if (!existsSync(robotsPath)) {
   const robots = readFileSync(robotsPath, "utf8");
   if (robots.includes(`Sitemap: ${BASE_URL}/sitemap.xml`)) pass("robots.txt: sitemap pointer ok");
   else fail(`robots.txt: must contain "Sitemap: ${BASE_URL}/sitemap.xml"`);
+}
+
+// ── STAGE F13 (ISSUE-122): 404 page, owner content, HTTP behaviour ──────────
+
+/** Every text file under landing/ (the extension set the redaction gate
+ *  already scans) as absolute paths — reused by the legal-block placement. */
+function landingTextFiles(dir = SITE) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...landingTextFiles(p));
+    else if (REDACT_SCAN_EXT.has(extname(entry.name))) out.push(p);
+  }
+  return out;
+}
+
+// 404.html: exists, no-index, same stylesheet, exactly one h1, links to every
+// real page. Deliberately NOT in PAGES — it is not a live page, must never be
+// canonicalised, and must stay out of sitemap.xml (the sitemap check pins 11).
+const notFoundFile = join(SITE, "404.html");
+if (!existsSync(notFoundFile)) {
+  fail("404.html: missing — unmatched paths cannot render a branded 404");
+} else {
+  const nf = readFileSync(notFoundFile, "utf8");
+  checkTagBalance(nf, "/404.html");
+  checkLinks(nf, "/404.html", "404.html");
+  if (/<meta name="robots" content="noindex/.test(nf)) pass("404.html: noindex meta present");
+  else fail('404.html: missing <meta name="robots" content="noindex…">');
+  if (nf.includes('rel="stylesheet" href="/styles.css"')) pass("404.html: uses /styles.css");
+  else fail("404.html: must link the site stylesheet /styles.css");
+  const missingLinks = PAGES.filter((p) => !nf.includes(`href="${p.path}"`)).map((p) => p.path);
+  if (missingLinks.length > 0) fail(`404.html: missing link(s) to ${missingLinks.join(", ")}`);
+  else pass(`404.html: links all ${PAGES.length} real pages`);
+  const nfH1 = (nf.match(/<h1[\s>]/g) ?? []).length;
+  if (nfH1 !== 1) fail(`404.html: expected exactly one <h1>, found ${nfH1}`);
+  if (AGPL_PATTERN.test(nf)) fail("404.html: AGPL-derived identifier found");
+}
+
+// /docs/byod/ content pins: owner-verbatim sentences (hub amendment) and the
+// PDF-derived "Keep your phone awake 24/7" build (ruling: the PDF replaces the
+// pending Android-steps placeholder entirely).
+const byod = htmlByPath.get("/docs/byod/");
+if (byod != null) {
+  const pins = [
+    ["ratified SIM sentence", BYOD_SIM_SENTENCE],
+    ["enrollment-gated download sentence", BYOD_DOWNLOAD_SENTENCE],
+    ["keep-awake heading", "<h2>Keep your phone awake 24/7</h2>"],
+    ["every-phone checklist heading", ">Do this on every phone</h3>"],
+    ["reboot-test heading", "How to prove it's working"],
+    ["PDF link target", 'href="/assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf"'],
+    ["PDF link text", "Complete setup guide (PDF)"],
+  ];
+  const missing = pins.filter(([, needle]) => !byod.includes(needle)).map(([label]) => label);
+  if (missing.length > 0) fail(`/docs/byod/: F13 pin(s) missing: ${missing.join(" | ")}`);
+  else pass(`/docs/byod/: all ${pins.length} F13 content pins present`);
+  const missingBrands = BYOD_BRANDS.filter((brand) => !byod.includes(brand));
+  if (missingBrands.length > 0) fail(`/docs/byod/: keep-awake brand section(s) missing: ${missingBrands.join(" | ")}`);
+  else pass(`/docs/byod/: all ${BYOD_BRANDS.length} brand sections present`);
+}
+if (existsSync(join(SITE, "assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf"))) {
+  pass("landing/assets: keep-alive PDF hosted");
+} else {
+  fail("landing/assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf: missing — /docs/byod/ links it");
+}
+
+// Legal block placement: the owner address appears on /terms/ and /privacy/
+// ONLY (owner: buried only in the Terms/Privacy pages), and both pages carry
+// the block verbatim.
+{
+  const offenders = landingTextFiles()
+    .filter((p) => readFileSync(p, "utf8").includes(LEGAL_ADDRESS_NEEDLE))
+    .map((p) => relative(SITE, p))
+    .filter((p) => !LEGAL_ALLOWED_FILES.includes(p));
+  if (offenders.length > 0) {
+    fail(`legal block address outside terms/ + privacy/: ${offenders.join(", ")}`);
+  } else {
+    pass("legal block address confined to terms/ + privacy/");
+  }
+  for (const allowed of LEGAL_ALLOWED_FILES) {
+    if (readFileSync(join(SITE, allowed), "utf8").includes(LEGAL_BLOCK)) {
+      pass(`${allowed}: owner-verbatim legal block present`);
+    } else {
+      fail(`${allowed}: owner-verbatim legal block missing`);
+    }
+  }
+}
+
+// HTTP behaviour of the published tree (Defect 1 acceptance): an unmatched
+// path answers 404 (with our noindex 404.html body), every real page 200,
+// sitemap + robots 200. Local mode mirrors the static host's publish-dir
+// semantics on a throwaway 127.0.0.1 server so CI gates this with zero
+// network; the live origin can only pass after merge + deploy, which is why
+// production probing stays opt-in via --production (owner/orchestrator).
+const HTTP_TARGETS = [
+  { path: "/this-page-does-not-exist/", expect: 404 },
+  ...PAGES.map((p) => ({ path: p.path, expect: 200 })),
+  { path: "/sitemap.xml", expect: 200 },
+  { path: "/robots.txt", expect: 200 },
+];
+
+/** extension → Content-Type for the throwaway local server. */
+const LOCAL_CONTENT_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".xml": "application/xml; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".pdf": "application/pdf",
+};
+
+/** Map a request path to a file under landing/, or null — never escapes SITE.
+ *  Directory-style URLs (/pricing/ → pricing/index.html) match how the static
+ *  host publishes the tree; anything else falls through to the 404. */
+function resolveStatic(pathname) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const candidates = decoded.endsWith("/")
+    ? [join(SITE, decoded, "index.html")]
+    : [join(SITE, decoded), join(SITE, decoded, "index.html")];
+  for (const candidate of candidates) {
+    const abs = resolve(candidate);
+    if (!abs.startsWith(SITE + sep)) continue;
+    if (existsSync(abs) && statSync(abs).isFile()) return abs;
+  }
+  return null;
+}
+
+/** Throwaway HTTP server reproducing the publish-dir 404 contract. */
+function startLocalServer() {
+  const server = createServer((req, res) => {
+    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    const file = resolveStatic(pathname);
+    if (file !== null) {
+      res.writeHead(200, { "content-type": LOCAL_CONTENT_TYPES[extname(file)] ?? "application/octet-stream" });
+      res.end(readFileSync(file));
+      return;
+    }
+    const notFoundPage = join(SITE, "404.html");
+    res.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+    res.end(existsSync(notFoundPage) ? readFileSync(notFoundPage) : "404");
+  });
+  return new Promise((done) => {
+    server.listen(0, "127.0.0.1", () => {
+      done({ server, base: `http://127.0.0.1:${server.address().port}` });
+    });
+  });
+}
+
+/** Assert one path's status against a base URL; an expected 404 must also
+ *  serve the noindex 404.html body, not a bare server error page. */
+async function checkHttpTarget(base, target, label) {
+  let status = 0;
+  let body = "";
+  try {
+    const res = await fetch(new URL(target.path, base), {
+      redirect: "manual",
+      signal: AbortSignal.timeout(15000),
+    });
+    status = res.status;
+    if (target.expect === 404) body = await res.text();
+  } catch (err) {
+    fail(`${label}: ${target.path} — request failed (${err instanceof Error ? err.message : String(err)})`);
+    return;
+  }
+  if (status !== target.expect) {
+    fail(`${label}: ${target.path} returned HTTP ${status}, expected ${target.expect}`);
+    return;
+  }
+  pass(`${label}: ${target.path} → HTTP ${status}`);
+  if (target.expect === 404 && !body.includes('name="robots"')) {
+    fail(`${label}: ${target.path} answered 404 without the noindex 404.html body`);
+  }
+}
+
+const localServer = await startLocalServer();
+for (const target of HTTP_TARGETS) {
+  await checkHttpTarget(localServer.base, target, "landing-checks local");
+}
+localServer.server.closeAllConnections();
+localServer.server.close();
+
+if (productionBase !== null) {
+  for (const target of HTTP_TARGETS) {
+    await checkHttpTarget(productionBase, target, `production(${productionBase})`);
+  }
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
