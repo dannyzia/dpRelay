@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Connect your Android phone — dP Relay</title>
-  <meta name="description" content="Set up an Android phone as your SMS gateway, enrol your device, send a test message and troubleshoot common connection issues.">
+  <meta name="description" content="Set up an Android phone as your SMS gateway, enrol your device, keep the phone awake 24/7 with per-brand battery settings, and troubleshoot common issues.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/docs/byod/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -30,6 +30,10 @@
     <section>
       <h1>Turn your Android phone into an SMS gateway</h1>
       <p>Connect a compatible Android phone and an active SMS-capable SIM to dP Relay. Once enrolled, the phone can send messages through its mobile connection to destinations supported by the SIM and carrier.</p>
+      <div class="card">
+        <p><strong>Your SIM, your number.</strong> Messages are sent from the SIM of the gateway phone enrolled for your app — one number per company; you choose which phone by enrolling it.</p>
+        <p><strong>Getting the app.</strong> After your company is created and approved, your personal download link arrives by email — the app is not publicly distributed.</p>
+      </div>
     </section>
 
     <section id="what-you-need">
@@ -45,9 +49,7 @@
     <section id="set-up">
       <h2>Set up your phone</h2>
       <ol class="steps">
-        <li><strong>Install the gateway app.</strong> Download it using the official link supplied by dP Relay.
-          <div class="owner-note"><p>[app download link or store listing]</p></div>
-        </li>
+        <li><strong>Install the gateway app.</strong> After your company is created and approved, your personal download link arrives by email — the app is not publicly distributed.</li>
         <li><strong>Create or select an app.</strong> Open the Apps screen in your dashboard.</li>
         <li><strong>Enrol your device.</strong> Choose the enrolment action, give the phone a label, and copy the enrolment secret shown by the dashboard.</li>
         <li><strong>Pair the phone.</strong> Enter the enrolment secret in the gateway app and follow the app's on-screen instructions.</li>
@@ -57,26 +59,91 @@
       <p>The enrolment secret pairs the phone with your account. Keep it private and do not confuse it with your account password or app secret.</p>
     </section>
 
-    <section id="keep-available">
-      <h2>Keep the gateway available</h2>
-      <p>An Android phone that the operating system puts to sleep stops sending. Before you rely on the gateway, walk through this battery and permissions checklist on the enrolled phone:</p>
+    <section id="keep-awake">
+      <h2>Keep your phone awake 24/7</h2>
+      <p>Android quietly stops background apps to save battery, and a gateway is exactly the kind of app it stops first — the message never goes out and nobody notices for hours. Every setting below exists to switch that off for this one app. The steps are condensed from the complete field manual, which gives the exact tap-by-tap paths for Samsung, Xiaomi, Oppo/Realme, Vivo, Google Pixel and any other Android 13/14 handset: <a href="/assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf">Complete setup guide (PDF)</a>.</p>
+
+      <h3 id="every-phone">Do this on every phone</h3>
       <ul class="guide-steps">
-        <li><strong>Disable battery optimisation</strong> for the gateway app (Settings → Apps → the gateway app → Battery → Unrestricted). The exact labels vary by Android version and manufacturer.</li>
-        <li><strong>Allow background activity</strong> so the app keeps its connection while the screen is off.</li>
-        <li><strong>Allow autostart</strong> where your manufacturer offers it, so the gateway reconnects after a reboot.</li>
-        <li><strong>Keep unrestricted data usage</strong> for the app, including on Wi-Fi-only or data-saver modes.</li>
-        <li><strong>Remove the app from sleeping-apps or power-saving lists</strong> (Samsung, Xiaomi and similar vendors maintain their own lists outside Android settings).</li>
-        <li><strong>Grant the SMS permission</strong> the app requests when it asks — pairing cannot send without it.</li>
+        <li><strong>Keep the phone plugged into a charger.</strong> Android's main sleep mode does not engage while the device is charging — on a dedicated gateway phone this alone removes the largest cause of overnight delays.</li>
+        <li><strong>Set the gateway as the default messaging app.</strong> <span class="muted">Settings → Apps → Default apps → SMS app (on Samsung: Choose default apps)</span>. Android then treats the app as essential and never revokes the permissions granted by that role.</li>
+        <li><strong>Turn off "Pause app activity if unused".</strong> On the app's info screen, under <span class="muted">Unused app settings</span> (Samsung may word it <span class="muted">Remove permissions if app is unused</span>). Left on, Android hibernates the app after a few months of never opening it — it is force-stopped, its permissions are reset and its notifications stop. This is the "it worked for four months and then it just stopped" failure.</li>
+        <li><strong>If you installed the app from an APK, unlock restricted settings.</strong> Tap the greyed-out SMS permission first so Android shows its "Restricted setting" refusal, then app info → <span class="muted">⋮ (top right)</span> → <span class="muted">Allow restricted settings</span> and confirm with your PIN. On Android 15 and 16 SMS itself is on the restricted list, and without this the permission switch never turns on.</li>
+        <li><strong>Switch off the interrupting modes.</strong> Do Not Disturb, Bedtime, Driving and Focus mode all mute or pause the app — turn them off, cancel any night-time schedule, and set the app's notifications to <span class="muted">Override Do Not Disturb</span>. Turn on every notification category individually.</li>
+        <li><strong>Grant every permission.</strong> SMS (or Send SMS / Receive SMS / Read SMS), Phone, Contacts and Notifications, all set to Allow.</li>
+        <li><strong>Open the app about once a month, and never one-tap "clear all".</strong> Opening it resets the "unused" clock; lock the app's card in the recent-apps view (swipe down on it until a padlock appears) and skip any "optimise" or "speed up" button on the phone.</li>
       </ul>
-      <ul>
-        <li>Keep the phone powered and connected to mobile service.</li>
-        <li>Keep internet access available so the gateway app can communicate with dP Relay.</li>
-        <li>Allow the gateway app to send SMS and run in the background according to the instructions for your Android version and phone manufacturer.
-          <div class="owner-note"><p>[add the exact Android permission and battery-setting steps]</p></div>
-        </li>
-        <li>Check your mobile plan's SMS allowance, fair-use rules, destination restrictions and charges before sending at scale.</li>
-        <li>If the phone goes offline or cannot send, messages through that device may fail until it is available again.</li>
-      </ul>
+
+      <h3 id="brand-steps">Steps for your phone's brand</h3>
+      <p class="muted">Menu names differ between models, regions and software versions. Use the Settings search bar with the bold word from a step; if a screen genuinely is not there, your version does not have that feature — skip it.</p>
+
+      <h4>Samsung — One UI 5–8 (Galaxy, Android 13–16)</h4>
+      <ol class="steps">
+        <li><strong>Battery → Unrestricted.</strong> <span class="muted">Settings → Apps → See all apps → your app → Battery → Unrestricted</span>. Restricted — the first of the three choices — stops background running entirely.</li>
+        <li><strong>Turn off "Put unused apps to sleep".</strong> One UI 7/8: <span class="muted">Settings → Battery → Background usage limits</span>. One UI 5/6: <span class="muted">Settings → Battery and device care → Battery → Background usage limits</span>. Master switch off, or Samsung puts the app back on the sleeping list about three days later.</li>
+        <li><strong>Fix the two lists.</strong> On the same screen, remove the app from <span class="muted">Sleeping apps</span> and <span class="muted">Deep sleeping apps</span>, then add it to <span class="muted">Never sleeping apps</span> (+ button). If the app is not offered for the list, Unrestricted already took it out of sleep management — that is correct.</li>
+        <li><strong>Kill the nightly automation.</strong> <span class="muted">Settings → Battery and device care → ⋮ → Automation</span> → turn off <span class="muted">Auto-optimise daily</span> and <span class="muted">Adaptive battery</span>; also turn off <span class="muted">Power saving mode</span> and set its trigger to never.</li>
+      </ol>
+      <p class="muted"><strong>Traps on this brand:</strong> Samsung has no "autostart" switch — the default messaging app role plus the sleep-list exemption are what bring the app back after a reboot. The two sleeping lists repopulate themselves at night while Auto-optimise runs, a large One UI update restores them to default, and Device care → Memory can clear the app unless it is excluded.</p>
+
+      <h4>Xiaomi — MIUI 12–14 / HyperOS (Redmi, POCO)</h4>
+      <ol class="steps">
+        <li><strong>Battery saver → No restrictions.</strong> MIUI 12–14: <span class="muted">Settings → Apps → Manage apps → your app → Battery saver → No restrictions</span>. HyperOS: <span class="muted">Settings → Apps → your app → Battery → No restrictions</span>. The route that works on every Xiaomi: <span class="muted">Security app → Battery → App battery saver</span>.</li>
+        <li><strong>Turn on autostart — the setting that decides everything.</strong> HyperOS 2–3: <span class="muted">Settings → Apps → Permissions → Background autostart</span>. MIUI 14: <span class="muted">Settings → Apps → Manage apps → Background autostart</span>. MIUI 12–13: <span class="muted">Security app → Permissions → Autostart</span>. Enable <span class="muted">Secondary launch</span> and <span class="muted">Start in background</span> too if the app shows them.</li>
+        <li><strong>Protect it from the cleaners.</strong> Lock the app's card in recent apps (swipe down until a padlock appears), then <span class="muted">Security app → Boost speed → Settings → Lock apps</span> → tick the app. On HyperOS also add it under <span class="muted">Settings → Additional settings → Battery manager → Protected apps</span> when that screen exists.</li>
+        <li><strong>Grant every permission</strong> on <span class="muted">Settings → Apps → Manage apps → your app → App permissions</span>: SMS, Phone, Contacts, Notifications.</li>
+      </ol>
+      <p class="muted"><strong>Traps on this brand:</strong> HyperOS is the most aggressive background-killer of them all, and "No restrictions" plus "Autostart" are two separate switches with separate jobs — with only the first, the app keeps working until MIUI frees its memory and then stays dead until someone taps it. Autostart is off by default (the number-one cause of "the gateway stopped after a restart" here), the Security app's Boost speed button kills background apps, and system updates have been known to switch autostart back off — re-check both steps monthly.</p>
+
+      <h4>Oppo / Realme / OnePlus — ColorOS 11–16</h4>
+      <ol class="steps">
+        <li><strong>Allow background activity and auto launch.</strong> ColorOS 13–16: <span class="muted">Settings → Apps → App management → your app → Battery usage</span>. All versions: <span class="muted">Settings → Battery → App battery management → your app</span>. Turn on every switch shown — <span class="muted">Allow background activity</span>, <span class="muted">Allow auto launch</span> and (if present) <span class="muted">Allow foreground activity</span>.</li>
+        <li><strong>Auto launch list.</strong> <span class="muted">Settings → Apps → Auto launch</span> → your app ON (ColorOS 13–14 may be <span class="muted">Settings → Apps → App management → Auto launch</span>). Turn on <span class="muted">Associated launch</span> / <span class="muted">Secondary launch</span> if offered, then lock the app's card in recent apps.</li>
+        <li><strong>Don't optimise.</strong> <span class="muted">Settings → Battery → More settings → Optimise battery use → your app → Don't optimise</span>. This is a different screen from step 1 — both must be set.</li>
+        <li><strong>Turn off Sleep standby optimization.</strong> <span class="muted">Settings → Battery → Power saving → Sleep standby optimization</span> → OFF, and turn off phone-wide <span class="muted">Power saving mode</span> and <span class="muted">Super Power Saving</span> as well.</li>
+      </ol>
+      <p class="muted"><strong>Traps on this brand:</strong> Sleep standby optimization is on by default and drops the whole phone into an overnight deep sleep — the classic "stops every night, works in the daytime" failure. The Auto launch list holds only a handful of apps (about five); if it is full, remove apps you do not need. "Optimise" and "Don't optimise" live on two different screens, and ColorOS kills recent apps aggressively unless the card is locked — never use a one-tap "clear all" here.</p>
+
+      <h4>Vivo / iQOO — Funtouch OS 9–15</h4>
+      <ol class="steps">
+        <li><strong>Battery → Unrestricted</strong> on the app's own page: <span class="muted">Settings → Apps → your app → Battery → Unrestricted</span> (Android 13+ builds).</li>
+        <li><strong>High background power consumption.</strong> <span class="muted">Settings → Battery → High background power consumption</span> → your app ON (Android 13+ builds may read <span class="muted">Background power consumption management → High background power usage</span>). Then turn OFF <span class="muted">Smart Power Saving</span> for the app.</li>
+        <li><strong>Autostart + whitelist.</strong> <span class="muted">Settings → More settings → Applications → Autostart</span> → your app ON, then <span class="muted">i Manager → Settings icon → Speedup whitelist</span> → your app ON, and lock the card in recent apps.</li>
+        <li><strong>Permissions and data saving.</strong> Grant SMS, Phone, Contacts, Notifications. If the phone uses data saving: <span class="muted">Settings → Mobile network → Data-saving mode</span> → whitelist the app.</li>
+      </ol>
+      <p class="muted"><strong>Traps on this brand:</strong> Vivo closes apps it judges to be draining background power whatever you set elsewhere, so the high-background-power list is mandatory. The one-tap <span class="muted">Speed up</span> button closes everything not on the Speedup whitelist, autostart can be reset by a system update, Smart Power Saving can override the whitelist on some builds, and data-saving throttling makes a working gateway look like it stopped.</p>
+
+      <h4>Google Pixel — stock Android 13 / 14</h4>
+      <ol class="steps">
+        <li><strong>Allow background usage → Unrestricted.</strong> <span class="muted">Settings → Apps → See all apps → your app → App battery usage → Allow background usage → Unrestricted</span>. On Android 13 the menu is simply called <span class="muted">Battery</span>; some builds need the switch turned on first, then tapped again for the choice.</li>
+        <li><strong>Phone-wide optimisation list too.</strong> <span class="muted">Settings → Battery → ⋮ (top right) → Battery optimization → Not optimized → All apps → your app → Don't optimize → Done</span> (alternate route: <span class="muted">Settings → Apps → ⋮ → Special app access → Battery optimization</span>). This separate screen can override the per-app one.</li>
+        <li><strong>Turn off Adaptive Battery</strong> — it is on by default on every Pixel. Android 14+: <span class="muted">Settings → Battery → Adaptive Battery</span> → off. Android 13: <span class="muted">Settings → Battery → Battery Saver → Adaptive Battery → Expand more</span> → off. Also switch off Battery Saver and its automatic trigger.</li>
+        <li><strong>Take it out of the unused-app lists.</strong> <span class="muted">Settings → Apps → See all apps → your app → Unused app settings → Pause app activity if unused</span> → OFF, and check <span class="muted">Settings → Apps → Unused apps</span> does not list it. Then set <span class="muted">Settings → Apps → Default apps → SMS app</span> to the gateway — a Pixel has no autostart switch, and the default-app role plus Unrestricted replace it.</li>
+      </ol>
+      <p class="muted"><strong>Traps on this brand:</strong> Adaptive Battery pushes apps you never open into a "Rare" bucket where they get almost no background work — exactly backwards for a gateway you never open. Hibernation arrives months later, force-stopping the app and resetting its permissions. A notification permission declined at install time never re-prompts, the master notification switch can be on while the one category you need is off, and Data Saver (<span class="muted">Settings → Network & internet</span>) should be off on a dedicated gateway phone.</p>
+
+      <h4>Any other Android 13 / 14 phone</h4>
+      <p class="muted">Motorola, Nokia, Honor, Asus, Nothing, Sony, OnePlus on OxygenOS and every other handset — the standard Android paths, lightly reworded by most brands. If your phone has a brand section above, use that instead.</p>
+      <ol class="steps">
+        <li><strong>Unrestricted</strong> on the app page: <span class="muted">Settings → Apps → See all apps → your app → App battery usage → Allow background usage → Unrestricted</span> (the menu is called <span class="muted">Battery</span> on Android 13).</li>
+        <li><strong>Phone-wide list:</strong> <span class="muted">Settings → Battery → ⋮ (three dots) → Battery optimization → All apps → your app → Don't optimize → Done</span>.</li>
+        <li><strong>Default SMS app + developer options.</strong> <span class="muted">Settings → Apps → Default apps → SMS app</span> → your app. Then enable developer options (<span class="muted">Settings → About phone → Build number</span>, tap seven times) and set <span class="muted">Settings → Developer options → Background process limit → No limit</span>, with <span class="muted">Don't keep activities</span> OFF. Lock the card in recent apps.</li>
+        <li><strong>Unused apps and savers:</strong> <span class="muted">Pause app activity if unused</span> OFF, and turn off <span class="muted">Settings → Battery → Battery Saver</span> and <span class="muted">Settings → Network & internet → Data Saver</span> — both sit above the per-app settings and override them.</li>
+      </ol>
+      <p class="muted"><strong>Traps on this brand:</strong> some vendors hide their sleep controls under unexpected names — search Settings for <em>sleep</em>, <em>background</em> and <em>autostart</em> and check every result. Honor and Huawei use their own <span class="muted">App launch</span> / <span class="muted">App power management</span> screens (treat them like the Xiaomi steps); Asus and Nothing ship an aggressive limiter of their own (<span class="muted">App battery management</span>); OnePlus on OxygenOS behaves like ColorOS. And every brand's separate Phone Manager / Device Care / Security app has a one-tap "optimise" button — stop using it on this phone, or add the gateway to its protected list.</p>
+
+      <h3 id="reboot-test">How to prove it's working — the reboot test</h3>
+      <p>Five minutes, do it today. It catches the two most common failures in one go: the app not starting by itself, and the app starting but not being allowed to work in the background. Settings drift afterwards — brands re-apply their defaults — so re-run it after any large system update.</p>
+      <ol class="steps">
+        <li>Send one test message through the gateway and note the exact time it arrived.</li>
+        <li>Reboot the phone. Do not open the gateway app afterwards.</li>
+        <li>Wait about ten minutes, then send a second test message from the dashboard.</li>
+        <li><strong>Arrived within a few seconds?</strong> The phone is correctly configured.</li>
+        <li><strong>Never arrived?</strong> The app did not start by itself — go back to the autostart step for your brand.</li>
+        <li><strong>Arrived late — say twenty minutes?</strong> The app started but was throttled — re-check battery optimisation and the sleep-list step for your brand, and confirm the phone is on the charger.</li>
+      </ol>
+      <p>Then keep it working: brands quietly undo these settings more often than anyone admits, so make the monthly five-minute check a habit — open the gateway app once (that alone resets the "unused" clock), confirm the battery setting is still unrestricted and autostart is still on, and after any major system update re-run your brand section and the reboot test.</p>
+      <p>Whatever the phone: keep it powered and connected to mobile service and the internet so the gateway app can reach dP Relay, check your mobile plan's SMS allowance, fair-use rules, destination restrictions and charges before sending at scale, and remember that if the phone goes offline or cannot send, messages through that device fail until it is available again.</p>
     </section>
 
     <section id="troubleshooting">
@@ -87,7 +154,7 @@
       </details>
       <details class="card">
         <summary><strong>The phone keeps going offline</strong></summary>
-        <p>Check internet access, background permissions and battery restrictions for the gateway app. Work through the battery and permissions checklist above, then follow the tested instructions for your Android version and manufacturer.</p>
+        <p>Check internet access, background permissions and battery restrictions for the gateway app. Work through the checklist and your brand's steps in <a href="#keep-awake">Keep your phone awake 24/7</a> above, then prove it with the reboot test.</p>
       </details>
       <details class="card">
         <summary><strong>I lost the enrolment secret</strong></summary>
