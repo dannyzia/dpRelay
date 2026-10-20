@@ -103,7 +103,7 @@ describe("appFetch (app plane)", () => {
     const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
     expect(headers["X-App-Id"]).toBe("demo-app");
     expect(headers["X-App-Secret"]).toBe("demo-secret");
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/billing/packages");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/billing/packages");
   });
 
   it("fails fast without stored credentials and never hits the network", async () => {

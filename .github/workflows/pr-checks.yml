@@ -161,8 +161,9 @@ jobs:
   # of a third-party filter action. pr-checks only runs on pull_request events,
   # where checkout lands on the merge commit (refs/pull/N/merge): HEAD^ = the
   # base tip, so HEAD^..HEAD is exactly the PR's changed files — no extra refs
-  # to fetch. The two CI workflow files are included so CI edits are always
-  # smoke-validated.
+  # to fetch. This workflow file itself is included so CI edits are always
+  # smoke-validated. (STAGE F12: dashboard-pages-deploy.yml is gone — dashboard/
+  # was retired from production, so there is no second workflow to pin.)
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -177,7 +178,7 @@ jobs:
       - name: Detect dashboard changes
         id: filter
         run: |
-          if git diff --name-only "HEAD^" "HEAD" | grep -qE '^(dashboard/|\.github/workflows/(pr-checks|dashboard-pages-deploy)\.yml)'; then
+          if git diff --name-only "HEAD^" "HEAD" | grep -qE '^(dashboard/|\.github/workflows/pr-checks\.yml)'; then
             echo "dashboard=true" >> "$GITHUB_OUTPUT"
           else
             echo "dashboard=false" >> "$GITHUB_OUTPUT"
@@ -205,8 +206,10 @@ jobs:
           fi
 
   # PR-time gate for the dashboard SPA: typecheck + build when dashboard/ is
-  # touched. (Master pushes get the full build+deploy via
-  # dashboard-pages-deploy.yml.) npm ci pins the lockfile committed since #29.
+  # touched. (STAGE F12 retired dashboard/pages-deploy.yml, so this build gate
+  # is now the ONLY CI surface for dashboard/ — it stays because the bundle
+  # assertion below still guards against a cross-site onrender.com fallback
+  # creeping back in.) npm ci pins the lockfile committed since #29.
   dashboard-build:
     needs: changes
     if: needs.changes.outputs.dashboard == 'true'
@@ -227,6 +230,20 @@ jobs:
         run: npm run lint
       - name: Build
         run: npm run build
+      - name: Bundle origin gate (STAGE F12)
+        # VULN-003 (ISSUE-121): the built bundle must pin the same-site API
+        # subdomain and must never carry the cross-site onrender.com origin —
+        # that fallback is what broke SameSite=Lax logins in production.
+        run: |
+          if ! grep -rqF 'https://api.dprelay.digital-papyrus.com' dist; then
+            echo "::error::dashboard bundle is missing https://api.dprelay.digital-papyrus.com"
+            exit 1
+          fi
+          if grep -rqF 'onrender.com' dist; then
+            echo "::error::dashboard bundle contains onrender.com (cross-site API origin)"
+            exit 1
+          fi
+          echo "dashboard bundle origin OK"
 
   # PR-time gate for the web-v5 SPA (QUEUE AMENDMENT #2): typecheck + vitest +
   # build when web-v5/ (or this workflow) is touched. `npm ci` pins the
@@ -253,6 +270,21 @@ jobs:
         run: npm test
       - name: Build
         run: npx vite build
+      - name: Bundle origin gate (STAGE F12)
+        # VULN-003 (ISSUE-121): this is the bundle served at the customer
+        # origin app.dprelay.digital-papyrus.com — it must pin the same-site
+        # API subdomain and must never contain onrender.com (a different
+        # registrable domain, which makes the Lax session cookie stop flowing).
+        run: |
+          if ! grep -rqF 'https://api.dprelay.digital-papyrus.com' dist; then
+            echo "::error::web-v5 bundle is missing https://api.dprelay.digital-papyrus.com"
+            exit 1
+          fi
+          if grep -rqF 'onrender.com' dist; then
+            echo "::error::web-v5 bundle contains onrender.com (cross-site API origin)"
+            exit 1
+          fi
+          echo "web-v5 bundle origin OK"
 
   # PR-time gate for the client-node SDK (ISSUE-117): typecheck + vitest
   # (100% coverage thresholds are part of `npm test`) + build when

@@ -62,7 +62,7 @@ describe("operatorFetch", () => {
     await operatorFetch("/v5/admin/metrics");
     const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
     expect(headers["Authorization"]).toBe("Bearer op-secret");
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/metrics");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/metrics");
   });
 
   it("fails fast with operator_not_configured when nothing is stored", async () => {
@@ -224,13 +224,13 @@ describe("F5 admin endpoints", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await listPayments({ status: "rejected", from: 100, to: 200 });
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/payments?status=rejected&from=100&to=200");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/payments?status=rejected&from=100&to=200");
     expect(res.config).toMatchObject({ windowMin: 30, windowSec: 1800, toleranceBdt: 0 });
     expect(res.payments[0]).toMatchObject({ txnId: "TRXAAA1111", status: "rejected", reason: "wrong sender" });
 
     // No filters → bare path (no dangling query string).
     await listPayments();
-    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/payments");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/payments");
   });
 
   it("getAdminConfig GETs and putAdminConfig PUTs { value } on the whitelisted key path", async () => {
@@ -241,11 +241,11 @@ describe("F5 admin endpoints", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const cfg = await getAdminConfig("payment_match_window_min");
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/config/payment_match_window_min");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/config/payment_match_window_min");
     expect(cfg).toMatchObject({ key: "payment_match_window_min", value: 45, updatedAt: 7 });
 
     const saved = await putAdminConfig("payment_match_window_min", 45);
-    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/config/payment_match_window_min");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/config/payment_match_window_min");
     const init = fetchMock.mock.calls[1][1] as RequestInit;
     expect(init.method).toBe("PUT");
     expect(JSON.parse(init.body as string)).toEqual({ value: 45 });
@@ -260,7 +260,7 @@ describe("F5 admin endpoints", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const approved = await approvePayment("payment-1");
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/payments/payment-1/approve");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/payments/payment-1/approve");
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
     expect(approved.newOtpBalance).toBe(200);
 
@@ -269,7 +269,7 @@ describe("F5 admin endpoints", () => {
     );
     vi.stubGlobal("fetch", fetchMock2);
     const rejected = await rejectPayment("payment-1", "duplicate");
-    expect(fetchMock2.mock.calls[0][0]).toBe("/v5/admin/payments/payment-1/reject");
+    expect(fetchMock2.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/payments/payment-1/reject");
     const init = fetchMock2.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ reason: "duplicate" });
@@ -284,7 +284,7 @@ describe("F5 admin endpoints", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await attachPayment("payment-1", "txn-1");
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/payments/payment-1/attach");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/payments/payment-1/attach");
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({ transactionId: "txn-1" });
@@ -297,16 +297,16 @@ describe("F5 admin endpoints", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await listAdminPackages();
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/billing/packages");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/billing/packages");
 
     await patchAdminPackage("otp100", { priceBdt: 250 });
     const patchInit = fetchMock.mock.calls[1][1] as RequestInit;
     expect(patchInit.method).toBe("PATCH");
-    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/billing/packages/otp100");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/billing/packages/otp100");
     expect(JSON.parse(patchInit.body as string)).toEqual({ priceBdt: 250 });
 
     await retireAdminPackage("otp100");
-    expect(fetchMock.mock.calls[2][0]).toBe("/v5/admin/billing/packages/otp100/retire");
+    expect(fetchMock.mock.calls[2][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/billing/packages/otp100/retire");
     expect((fetchMock.mock.calls[2][1] as RequestInit).method).toBe("POST");
   });
 
@@ -319,13 +319,13 @@ describe("F5 admin endpoints", () => {
     expect(users).toEqual([]);
 
     await setAdminUserDisabled("user-1", true, "chargeback investigation");
-    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/users/user-1/disable");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/users/user-1/disable");
     const disableInit = fetchMock.mock.calls[1][1] as RequestInit;
     expect(disableInit.method).toBe("POST");
     expect(JSON.parse(disableInit.body as string)).toEqual({ reason: "chargeback investigation" });
 
     await setAdminUserDisabled("user-1", false);
-    expect(fetchMock.mock.calls[2][0]).toBe("/v5/admin/users/user-1/enable");
+    expect(fetchMock.mock.calls[2][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/users/user-1/enable");
     expect((fetchMock.mock.calls[2][1] as RequestInit).body).toBeUndefined();
   });
 
@@ -354,13 +354,13 @@ describe("F5 admin endpoints", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await getPackageReport({ from: 100, to: 200 });
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/reports/packages?from=100&to=200");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/reports/packages?from=100&to=200");
     expect(res.rows[0]).toMatchObject({ packageCode: "usd-pack", currency: "USD", totalAmount: 20 });
     expect(res.totalsByCurrency).toEqual([{ currency: "USD", countSold: 1, totalAmount: 20 }]);
 
     // No window → bare path (server applies its default 30-day window).
     await getPackageReport();
-    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/reports/packages");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/reports/packages");
   });
 
   it("getSendLog hits the spec /sends path with filters and parses rows + cursor", async () => {
@@ -373,10 +373,10 @@ describe("F5 admin endpoints", () => {
     const res = await getSendLog({ from: 100, to: 200, appId: "app_x" });
     expect(res.rows).toEqual([]);
     expect(res.nextCursor).toBe("1791400000:m1");
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/reports/sends?appId=app_x&from=100&to=200");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/reports/sends?appId=app_x&from=100&to=200");
 
     await getSendLog({ cursor: "1791400000:m1" });
-    expect(fetchMock.mock.calls[1][0]).toBe("/v5/admin/reports/sends?cursor=1791400000%3Am1");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/reports/sends?cursor=1791400000%3Am1");
   });
 
   it("getLedgerReport forwards appId/window/cursor and parses the new report shape", async () => {
@@ -408,7 +408,7 @@ describe("F5 admin endpoints", () => {
 
     const res = await getLedgerReport({ appId: "app_owned", from: 1, to: 2, cursor: "c:1" });
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/v5/admin/reports/ledger?appId=app_owned&from=1&to=2&cursor=c%3A1",
+      "https://api.dprelay.digital-papyrus.com/v5/admin/reports/ledger?appId=app_owned&from=1&to=2&cursor=c%3A1",
     );
     expect(res.rows[0]).toMatchObject({ kind: "purchase", qty: 100, amountBdt: 200 });
     expect(res.nextCursor).toBe("1791400000:row-1");
@@ -440,7 +440,7 @@ describe("F5 admin endpoints", () => {
 
     try {
       await downloadOperatorCsv("/v5/admin/reports/send-log?format=csv", "send-log.csv");
-      expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/reports/send-log?format=csv");
+      expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/reports/send-log?format=csv");
       const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
       expect(headers["Authorization"]).toBe("Bearer op-secret");
       expect(createObjectURL).toHaveBeenCalledTimes(1);
@@ -497,7 +497,7 @@ describe("device identity API (STAGE F7)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const list = await listAdminDevices();
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/devices");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/devices");
     const headers = (fetchMock.mock.calls[0][1] as RequestInit | undefined)?.headers as
       | Record<string, string>
       | undefined;
@@ -516,7 +516,7 @@ describe("device identity API (STAGE F7)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await bindAdminDevice("dev-1", "app_money");
-    expect(fetchMock.mock.calls[0][0]).toBe("/v5/admin/devices/dev-1/bind");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.dprelay.digital-papyrus.com/v5/admin/devices/dev-1/bind");
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ appId: "app_money" });

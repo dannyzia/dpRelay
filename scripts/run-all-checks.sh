@@ -225,11 +225,22 @@ if [ "$NODE_MAJOR_OK" = "1" ]; then
   echo -n "  build (tsc strict + vite)... "
   (cd dashboard && npm ci --silent > /dev/null 2>&1 && npm run build > /dev/null 2>&1) \
     && pass "dashboard build" || fail "dashboard build"
+  # STAGE F12 (ISSUE-121, VULN-003): same bundle assertion CI runs, locally.
+  # The built bundle must pin the same-site API subdomain and must never carry
+  # the cross-site onrender.com origin (it breaks SameSite=Lax logins).
+  echo -n "  bundle origin gate... "
+  if grep -rqF 'https://api.dprelay.digital-papyrus.com' dashboard/dist \
+    && ! grep -rqF 'onrender.com' dashboard/dist; then
+    pass "dashboard bundle origin gate"
+  else
+    fail "dashboard bundle origin gate"
+  fi
 fi
 
 # Client SDK + v5 SPA (ISSUE-117): local parity with the pr-checks gates —
 # typecheck + test + build for each tree, pinned to the committed lockfile.
-# (ISSUE-116's "16 passed" count predates these two checks; expect 18.)
+# (ISSUE-116's "16 passed" count predates ISSUE-117's two checks = 18; STAGE
+# F12's two bundle origin gates (ISSUE-121) bring the expected total to 20.)
 echo ""
 echo "--- Client SDK + Web v5 ---"
 if [ "$NODE_MAJOR_OK" = "1" ]; then
@@ -237,6 +248,17 @@ if [ "$NODE_MAJOR_OK" = "1" ]; then
   (cd client-node && npm ci --silent > /dev/null 2>&1 && npm run typecheck > /dev/null 2>&1 && npm test > /dev/null 2>&1 && npm run build > /dev/null 2>&1) && pass "client-node (typecheck + test + build)" || fail "client-node (typecheck + test + build)"
   echo -n "  web-v5 (typecheck + test + build)... "
   (cd web-v5 && npm ci --silent > /dev/null 2>&1 && npm run typecheck > /dev/null 2>&1 && npm test > /dev/null 2>&1 && npm run build > /dev/null 2>&1) && pass "web-v5 (typecheck + test + build)" || fail "web-v5 (typecheck + test + build)"
+  # STAGE F12 (ISSUE-121, VULN-003): this is the bundle served at the customer
+  # origin — must pin the same-site API subdomain, never onrender.com. Same
+  # assertion as the pr-checks.yml web-v5-build job, so a local green run
+  # means the CI gate would also pass.
+  echo -n "  web-v5 bundle origin gate... "
+  if grep -rqF 'https://api.dprelay.digital-papyrus.com' web-v5/dist \
+    && ! grep -rqF 'onrender.com' web-v5/dist; then
+    pass "web-v5 bundle origin gate"
+  else
+    fail "web-v5 bundle origin gate"
+  fi
 fi
 
 # Security

@@ -64,7 +64,19 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
   const dbPath = opts.dbPath ?? config.dbPath;
   const db: Db = openDb(dbPath);
 
-  const app = Fastify({ logger: { level: config.logLevel } });
+  const app = Fastify({
+    logger: { level: config.logLevel },
+    // STAGE F12 (topology fix): the dashboard and the API are different
+    // origins, and browsers only send the session cookie on same-site requests.
+    // Topology: dashboard `app.dprelay.digital-papyrus.com`, API
+    // `api.dprelay.digital-papyrus.com` — same registrable domain → same-site,
+    // so the SameSite=Lax session cookie still flows. Render terminates TLS and
+    // forwards to this process over one internal hop, so trust exactly one
+    // X-Forwarded-For / X-Forwarded-Proto entry (the rightmost one). `true`
+    // would trust the whole caller-supplied chain and let any client forge its
+    // own rate-limit identity, so it is not used here.
+    trustProxy: 1,
+  });
   // Expose for route handlers and tests without module-level singletons
   app.decorate("db", db);
   app.decorate("config", config);
@@ -122,11 +134,15 @@ export function buildApp(opts: AppOptions = {}): FastifyInstance {
       origin: allowedOrigins,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-App-Id", "X-App-Secret"],
-      // STAGE F3 (ISSUE-81): the dashboard authenticates with an HttpOnly
-      // session cookie cross-origin (API + site are both on onrender.com, so
-      // SameSite=Lax still sends it). Browsers refuse credentialed responses
-      // unless ACAO is an exact origin AND Allow-Credentials is true — the
-      // allowlist is exact origins, never `*`, so this cannot widen exposure.
+      // STAGE F12: cookie topology. Dashboard
+      // `app.dprelay.digital-papyrus.com`, API
+      // `api.dprelay.digital-papyrus.com` — same registrable domain → same-site,
+      // so the SameSite=Lax session cookie is valid and third-party cookie
+      // blocking does not apply. onrender.com is a PSL entry and must not be
+      // used as the dashboard origin (a different registrable domain would make
+      // Lax cookies stop flowing). Browsers still refuse credentialed responses
+      // unless ACAO is an exact origin AND Allow-Credentials is true, so the
+      // allow-list must stay exact origins, never `*`.
       credentials: true,
       maxAge: 86400,
     });
