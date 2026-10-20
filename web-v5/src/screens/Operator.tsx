@@ -578,13 +578,14 @@ export function MailSettingsView(props: {
           }}
         >
           <label htmlFor="mailHost">SMTP host</label>
-          <input id="mailHost" name="host" defaultValue={props.config?.host ?? ""} required spellCheck={false} />
+          <input id="mailHost" name="host" defaultValue={props.config?.host ?? ""} placeholder="api.brevo.com = Brevo HTTP mode" required spellCheck={false} />
           <label htmlFor="mailPort">Port</label>
           <input id="mailPort" name="port" type="number" min={1} max={65535} defaultValue={props.config?.port ?? 465} required />
           <label htmlFor="mailUsername">Username</label>
           <input id="mailUsername" name="username" required spellCheck={false} autoComplete="off" />
           <label htmlFor="mailPassword">
-            Password {props.config?.passwordMasked !== null && props.config?.passwordMasked !== undefined ? `(${props.config.passwordMasked} — leave blank to keep)` : ""}
+            {/* STAGE F11 (ISSUE-123): host api.brevo.com makes this field the xkeysib API key. */}
+            SMTP password / Brevo API key {props.config?.passwordMasked !== null && props.config?.passwordMasked !== undefined ? `(${props.config.passwordMasked} — leave blank to keep)` : ""}
           </label>
           <input id="mailPassword" name="password" type="password" spellCheck={false} autoComplete="new-password" />
           <label htmlFor="mailFrom">From address</label>

@@ -465,6 +465,22 @@ describe("F3 amendment screens (email + payment + FAQ)", () => {
     expect(unconfigured).toContain("Not configured yet");
     expect(unconfigured).toContain("disabled");
   });
+
+  it("MailSettingsView names the Brevo HTTP mode (STAGE F11)", () => {
+    const html = render(
+      <MailSettingsView
+        config={{ configured: true, host: "api.brevo.com", port: 587, fromAddress: "admin@dprelay.test", passwordMasked: "••••", updatedAt: 1 }}
+        error={null}
+        note={null}
+        busy={false}
+        onSave={(): void => undefined}
+        onTest={(): void => undefined}
+      />,
+    );
+    // With host api.brevo.com the stored password IS the xkeysib API key.
+    expect(html).toContain("SMTP password / Brevo API key");
+    expect(html).toContain('placeholder="api.brevo.com = Brevo HTTP mode"');
+  });
 });
 
 describe("CreditsView", () => {

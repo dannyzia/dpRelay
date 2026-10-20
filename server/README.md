@@ -31,7 +31,7 @@ npm start       # scripts/start-server.mjs → litestream restore → litestream
 - `GET /v5/auth/mail-status` — public `{ configured }` (SMTP set up in the operator panel)
 - `POST /v5/auth/verify-email` / `POST /v5/auth/verify-email/resend` — emailed token; SOFT verification (never gates login)
 - `POST /v5/auth/password/forgot` / `POST /v5/auth/password/reset` — self-service reset via emailed link; reset revokes every session
-- `GET/PUT /v5/admin/mail-config` + `POST /v5/admin/mail-config/test` — operator-configured SMTP (password write-only, encrypted at rest; `••••` on GET)
+- `GET/PUT /v5/admin/mail-config` + `POST /v5/admin/mail-config/test` — operator-configured transport (password write-only, encrypted at rest; `••••` on GET). Host `api.brevo.com` selects Brevo's HTTP API instead of SMTP (STAGE F11 — Render blocks outbound SMTP), and the password field then holds the xkeysib API key
 - `POST /v5/device/heartbeat` — `Authorization: Bearer <device API key>` → updates `last_seen_at`
 
 Device API keys: 32 random bytes, **returned once** at registration, stored as SHA-256 hash only.
