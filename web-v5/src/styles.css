@@ -661,3 +661,98 @@ pre {
   background: var(--accent);
   transition: width 240ms ease;
 }
+
+/* STAGE F15 (ISSUE-125): signed-out header CTAs (Sign in + Get started →
+   pricing) — the only account affordances a signed-out visitor gets. */
+.nav-ctas {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.nav-link.cta {
+  color: var(--on-accent);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* STAGE F15: the three-column app footer (Product / Support / Legal). */
+.site-footer {
+  border-top: 1px solid var(--line);
+  background: var(--bg-inset);
+  padding: 26px 22px 30px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.footer-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 20px 28px;
+  width: min(960px, 100%);
+  margin: 0 auto 14px;
+}
+
+.footer-col ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.footer-col a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.footer-col a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.footer-heading {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.footer-line {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+
+.footer-status {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.footer-status:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  margin-right: 4px;
+}
+
+/* STAGE F15: condensed remittance list on the checkout step — one line per
+   service, never the full guides (those live on #/payment and /help/payments/). */
+.remittance-list {
+  margin: 4px 0 12px;
+  padding-left: 18px;
+}

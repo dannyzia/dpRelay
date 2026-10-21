@@ -5,7 +5,16 @@
  * QUESTION). This is owner copy labelled "verbatim": paste exactly, never
  * paraphrase or editorialise. Structure (headings/lists) is presentational
  * only — every sentence below is the owner's own text.
+ *
+ * STAGE F15 (ISSUE-125): this screen stays the CANONICAL in-app guide; the
+ * checkout embeds only a condensed one-line-per-service list and links here
+ * (and at the marketing site's full guides) instead of copying the copy.
  */
+import { LANDING_BASE } from "../lib/routes";
+
+/** Canonical full payment guides — the marketing site page every payment
+ *  surface links to instead of duplicating the five guides (F15 amendment). */
+export const PAYMENT_GUIDES_URL = `${LANDING_BASE}/help/payments/`;
 const BKASH_NUMBER = "01613249520";
 const BKASH_NUMBER_E164 = "+8801613249520";
 
@@ -90,6 +99,10 @@ const GUIDES: Guide[] = [
     ],
   },
 ];
+
+/** STAGE F15: the five remittance services, one entry per service — the
+ *  condensed list the checkout embeds (names only, no guide duplication). */
+export const REMITTANCE_SERVICES: string[] = GUIDES.map((guide) => guide.name);
 
 /** Pure view — exported for render tests. */
 export function PaymentView(): JSX.Element {

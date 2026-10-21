@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { getConnectedApp, getOperatorSecret, setAppDisconnectedHandler, setOperatorRejectedHandler, setUnauthorizedHandler } from "./api.js";
 import { isAuthenticated, signOut, subscribe } from "./auth.js";
+// STAGE F15 (ISSUE-125): the shared three-column site footer below the main app frame.
+import { SiteFooter } from "./components/Footer.js";
 import { LoginScreen, RegisterScreen } from "./screens/AuthScreens.js";
 import { CampaignsScreen } from "./screens/CampaignsScreen.js";
 import { ConnectAppScreen } from "./screens/ConnectAppScreen.js";
@@ -145,6 +147,7 @@ export function App() {
           <CampaignsScreen />
         )}
       </main>
+      <SiteFooter />
     </div>
   );
 }

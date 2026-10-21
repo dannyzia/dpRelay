@@ -12,7 +12,7 @@ import indexHtml from "../index.html?raw";
 import type { BulkCreateResult, BulkPreview, Company, SessionUser, Wallet } from "../src/api";
 import { Shell, credentialsJump } from "../src/components/Shell";
 import { hrefFor, parseHash } from "../src/lib/router";
-import { CUSTOMER_TABS, NAV, PUBLIC_SECTIONS, isKnownSection, navHref } from "../src/lib/routes";
+import { CUSTOMER_TABS, NAV, PUBLIC_SECTIONS, isKnownSection, navHref, navVisible } from "../src/lib/routes";
 import { AppsView } from "../src/screens/Apps";
 import { BulkView, type BulkViewProps } from "../src/screens/Bulk";
 import { CheckoutView, PackageListView } from "../src/screens/BuyCredits";
@@ -282,7 +282,9 @@ describe("a11y: semantic landmarks and lang", () => {
     );
     expect(html).toContain("Docs");
     expect(html).toContain("FAQ");
-    expect(html).toContain("Operator");
+    // STAGE F15: the Operator entry is gone from the public nav — the panel
+    // stays reachable at #/operator by direct URL only.
+    expect(html).not.toContain("Operator");
     expect(html).not.toContain("Balance");
     expect(html).not.toContain("Companies");
     expect(html).not.toContain("Sign out");
@@ -342,18 +344,30 @@ describe("connected: nav ↔ route-table parity", () => {
         <p>screen</p>
       </Shell>,
     );
-    const hrefs = Array.from(html.matchAll(/<a[^>]*\bhref="([^"]+)"/g), (m) => m[1]);
-    expect(hrefs).toEqual(NAV.map((item) => navHref(item)));
+    // STAGE F15: the shell also renders the footer + (signed-out) header CTAs,
+    // so the parity assertion is scoped to the <nav> landmark itself.
+    const nav = /<nav class="nav">[\s\S]*?<\/nav>/.exec(html)?.[0] ?? "";
+    const hrefs = Array.from(nav.matchAll(/<a[^>]*\bhref="([^"]+)"/g), (m) => m[1]);
+    expect(hrefs).toEqual(NAV.filter((item) => navVisible(item, { hasUser: true, connected: true })).map((item) => navHref(item)));
   });
 
-  it("every nav href round-trips through the parser (deep-linkable)", () => {
+  it("every in-app nav href round-trips through the parser (deep-linkable)", () => {
     for (const item of NAV) {
+      if (item.external !== undefined) continue;
       expect(parseHash(navHref(item)), item.id).toEqual(item.segments);
     }
   });
 
-  it("every nav target is a section the shell can render (zero dead links)", () => {
+  it("marketing nav entries point at the landing site over https", () => {
     for (const item of NAV) {
+      if (item.external === undefined) continue;
+      expect(item.external, `nav item ${item.id}`).toMatch(/^https:\/\//);
+    }
+  });
+
+  it("every in-app nav target is a section the shell can render (zero dead links)", () => {
+    for (const item of NAV) {
+      if (item.external !== undefined) continue;
       expect(isKnownSection(item.segments[0] ?? ""), `nav item ${item.id}`).toBe(true);
     }
   });
@@ -379,10 +393,9 @@ describe("connected: nav ↔ route-table parity", () => {
 
   it("customer tabs are exactly the connected nav subset", () => {
     expect(CUSTOMER_TABS.every((tab) => NAV.some((item) => item.id === tab.id))).toBe(true);
-    // ISSUE-96 added the "plan" tab (unlimited BYOD plan + device slots).
+    // STAGE F15: the "plan" tab left the nav (direct URL #/plan only).
     expect(CUSTOMER_TABS.map((tab) => tab.id)).toEqual([
       "credits",
-      "plan",
       "buy",
       "bulk",
       "history",
