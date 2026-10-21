@@ -551,6 +551,113 @@ if (existsSync(join(SITE, "assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf"))) {
   }
 }
 
+// ── STAGE F15 (ISSUE-125): public nav + footer spec ───────────────────────
+
+/** Owner's fixed public nav: Pricing · Docs · FAQ · Help, then the two
+ *  signed-out CTAs (Sign in + Get started → pricing). No Operator. */
+const NAV_LINKS = [
+  ["/pricing/", "Pricing"],
+  ["/docs/", "Docs"],
+  ["/faq/", "FAQ"],
+  ["/help/", "Help"],
+];
+
+/** Owner's three-column footer link sets — exact order, exact labels. */
+const FOOTER_COLUMNS = [
+  ["Product", [["/pricing/", "Pricing"], ["/docs/", "Docs"], ["/docs/byod/", "BYOD guide"]]],
+  ["Support", [["/help/", "Help"], ["/help/payments/", "Payments help"], ["/faq/", "FAQ"], ["/contact/", "Contact"]]],
+  ["Legal", [["/terms/", "Terms"], ["/privacy/", "Privacy"], ["/acceptable-use/", "Acceptable use"]]],
+];
+
+/** F15 nav + footer pins for one page's HTML. */
+function checkNavAndFooter(html, label) {
+  // Public nav order, then the two CTAs. aria-current moves with the page but
+  // never changes the ORDER, so strip the attribute before comparing.
+  const navMatch = html.match(/<nav aria-label="Main">[\s\S]*?<\/nav>/);
+  if (navMatch === null) {
+    fail(`${label}: missing <nav aria-label="Main">`);
+  } else {
+    const nav = navMatch[0].replace(/\s+aria-current="page"/g, "");
+    const links = [...nav.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]);
+    const expected = [
+      ...NAV_LINKS,
+      ["https://app.dprelay.digital-papyrus.com/#/signin", "Sign in"],
+      ["/pricing/", "Get started"],
+    ];
+    if (JSON.stringify(links) !== JSON.stringify(expected)) {
+      fail(`${label}: public nav is ${JSON.stringify(links)}, expected ${JSON.stringify(expected)}`);
+    } else {
+      pass(`${label}: public nav is Pricing · Docs · FAQ · Help + Sign in / Get started`);
+    }
+    if (nav.includes("operator")) fail(`${label}: Operator must not appear in the public nav`);
+  }
+
+  const footerMatch = html.match(/<footer class="site-footer">[\s\S]*?<\/footer>/);
+  if (footerMatch === null) {
+    fail(`${label}: missing <footer class="site-footer">`);
+    return;
+  }
+  const footer = footerMatch[0];
+  const headings = [...footer.matchAll(/<p class="footer-heading">([^<]+)<\/p>/g)].map((m) => m[1]);
+  if (headings.join("|") !== "Product|Support|Legal") {
+    fail(`${label}: footer headings are ${headings.join("|")}, expected Product|Support|Legal`);
+  } else {
+    pass(`${label}: footer carries the three Product/Support/Legal columns`);
+  }
+  for (const [heading, links] of FOOTER_COLUMNS) {
+    const col = footer.match(
+      new RegExp(`<p class="footer-heading">${heading}<\\/p>[\\s\\S]*?<ul>([\\s\\S]*?)<\\/ul>`),
+    );
+    const found = col === null
+      ? null
+      : [...col[1].matchAll(/<a href="([^"]+)">([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]);
+    if (JSON.stringify(found) !== JSON.stringify(links)) {
+      fail(`${label}: footer ${heading} column is ${JSON.stringify(found)}, expected ${JSON.stringify(links)}`);
+    }
+  }
+  if (!footer.includes("dP Relay — OTP &amp; bulk SMS API · © Digital Papyrus")) {
+    fail(`${label}: footer brand line missing (dP Relay — OTP & bulk SMS API · © Digital Papyrus)`);
+  }
+  if (!footer.includes('class="footer-status"') || !footer.includes("All systems operational")) {
+    fail(`${label}: footer status indicator (All systems operational → /health) missing`);
+  }
+  if (footer.includes("owner-note")) {
+    fail(`${label}: footer must not carry an owner-note placeholder (nothing else in the footer)`);
+  }
+  if (footer.includes("#/operator")) {
+    fail(`${label}: footer must not link the operator panel`);
+  }
+}
+
+for (const page of PAGES) {
+  const html = htmlByPath.get(page.path);
+  if (html !== null) checkNavAndFooter(html, page.path);
+}
+{
+  const nf = readFileSync(join(SITE, "404.html"), "utf8");
+  checkNavAndFooter(nf, "/404.html");
+}
+
+// No payment surface may link the operator panel anywhere on the site.
+{
+  const offenders = landingTextFiles()
+    .filter((p) => readFileSync(p, "utf8").includes("#/operator"))
+    .map((p) => relative(SITE, p));
+  if (offenders.length > 0) fail(`#/operator referenced on the landing site: ${offenders.join(", ")}`);
+  else pass("landing: no #/operator link anywhere");
+}
+
+// F15 amendment: /pricing/ carries a "How to pay" link next to each price
+// table, pointing at the canonical /help/payments/ guides.
+{
+  const pricing = htmlByPath.get("/pricing/");
+  if (pricing != null) {
+    const howToPay = (pricing.match(/<a href="\/help\/payments\/">How to pay<\/a>/g) ?? []).length;
+    if (howToPay < 1) fail("/pricing/: missing the 'How to pay' link to /help/payments/");
+    else pass(`/pricing/: ${howToPay} 'How to pay' link(s) → /help/payments/`);
+  }
+}
+
 // HTTP behaviour of the published tree (Defect 1 acceptance): an unmatched
 // path answers 404 (with our noindex 404.html body), every real page 200,
 // sitemap + robots 200. Local mode mirrors the static host's publish-dir

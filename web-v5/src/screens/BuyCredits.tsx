@@ -9,6 +9,7 @@ import {
 } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { formatPrice } from "../lib/format";
+import { PAYMENT_GUIDES_URL, REMITTANCE_SERVICES } from "./Payment";
 
 /** Pure package list — exported for render tests. */
 export function PackageListView(props: {
@@ -26,7 +27,8 @@ export function PackageListView(props: {
       </p>
       <p className="muted">
         Sending money from abroad? See the <a href="#/payment">payment guide</a> (TapTap Send,
-        Remitly, Wise, Western Union, WorldRemit).
+        Remitly, Wise, Western Union, WorldRemit) or the{" "}
+        <a href={PAYMENT_GUIDES_URL}>full payment guides</a> on the website.
       </p>
       {props.packages.length === 0 ? (
         <p className="muted">No active packages — ask the operator to publish one.</p>
@@ -77,6 +79,20 @@ export function CheckoutView(props: {
       <p className="muted">
         Transaction <code>{props.request.transactionId}</code> stays pending until the operator
         approves your TrxID.
+      </p>
+      {/* STAGE F15 amendment (ISSUE-125): no payment surface may show only an
+          amount — the checkout carries the how-to-pay context: the five
+          remittance services one line each, the canonical full guides, and the
+          in-app payment help. */}
+      <p className="muted">Paying from abroad? These five remittance services send to bKash:</p>
+      <ul className="remittance-list" data-testid="remittance-list">
+        {REMITTANCE_SERVICES.map((service) => (
+          <li key={service}>{service}</li>
+        ))}
+      </ul>
+      <p>
+        <a href={PAYMENT_GUIDES_URL}>Read the full payment guides</a> — or open the{" "}
+        <a href="#/payment">in-app payment help</a>.
       </p>
       {props.note !== null && <p className="ok-note">{props.note}</p>}
       {props.error !== null && <ErrorBanner message={props.error} />}

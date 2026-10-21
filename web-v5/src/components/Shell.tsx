@@ -8,7 +8,8 @@
 import type { ReactNode } from "react";
 import { type SessionUser, type Wallet } from "../api";
 import { hrefFor } from "../lib/router";
-import { NAV, navHref, navVisible } from "../lib/routes";
+import { LANDING_BASE, NAV, navHref, navVisible } from "../lib/routes";
+import { SiteFooter } from "./Footer";
 
 /**
  * Hash target for the topbar "API credentials" jump: the credentials screen
@@ -38,6 +39,12 @@ export function credentialsJump(connected: boolean): string {
  * @param props.signOut clears the session and navigates to `#/login`.
  * @param props.wallet last loaded wallet balance — `undefined` when there is
  * no signed-in user to load it for, `null` while it is still loading.
+ * STAGE F15 (ISSUE-125): the header also carries the signed-out CTAs
+ * (Sign in + Get started → pricing) rendered OUTSIDE the `<nav>` so the
+ * nav ↔ route-table parity test keeps asserting that the only links inside
+ * the nav are the central NAV table's; the three-column site footer sits
+ * below `<main>` on the owner's spec.
+ *
  * @param props.children the screen, rendered inside `<main>`.
  */
 export function Shell(props: {
@@ -105,9 +112,20 @@ export function Shell(props: {
             </button>
           )}
         </nav>
+        {!hasUser && (
+          <div className="nav-ctas" data-testid="nav-ctas">
+            <a className="nav-link" href={hrefFor(["login"])}>
+              Sign in
+            </a>
+            <a className="nav-link cta" href={`${LANDING_BASE}/pricing/`}>
+              Get started
+            </a>
+          </div>
+        )}
       </header>
 
       <main className="content">{props.children}</main>
+      <SiteFooter />
     </div>
   );
 }
