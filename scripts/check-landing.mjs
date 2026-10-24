@@ -95,6 +95,20 @@ const PAYMENT_PINS = [
  *  never paraphrased (hub amendment, owner inputs 2026-10-20). */
 const BYOD_SIM_SENTENCE =
   "Messages are sent from the SIM of the gateway phone enrolled for your app — one number per company; you choose which phone by enrolling it.";
+/** STAGE F16: the public payments page ships the full method guides —
+ *  number-free (the bKash wallet number stays retired from the public site;
+ *  the number is only ever shown in the authenticated Buy credits screen). */
+const PAYMENT_METHODS = ["TapTap Send", "Remitly", "Wise", "Western Union", "WorldRemit"];
+const PAYMENT_SAFE_PHRASE = "the destination number displayed in Buy credits";
+
+/** STAGE F16: site-wide SEO pins — OG/social tags, JSON-LD, sitemap lastmod. */
+const SEO_GOLDEN = [
+  { path: "/", pins: ['property="og:title"', 'property="og:image"', 'application/ld+json', '"@type": "Organization"', '"@type": "WebSite"'] },
+  { path: "/faq/", pins: ['application/ld+json', '"@type": "FAQPage"'] },
+  { path: "/help/payments/", pins: ['property="og:title"', 'property="og:image"'] },
+];
+const BYOD_APPROVAL_STATES = ["Requested", "Approved", "Email link", "Install"];
+
 const BYOD_DOWNLOAD_SENTENCE =
   "After your company is created and approved, your personal download link arrives by email — the app is not publicly distributed.";
 
@@ -356,9 +370,26 @@ if (faq != null) {
 // /docs/payments/ → /help/payments/ — the pin PATH was retargeted, never the text.
 const payments = htmlByPath.get("/help/payments/");
 if (payments != null) {
+  for (const target of SEO_GOLDEN) {
+    const pageHtml = htmlByPath.get(target.path) ?? "";
+    const seoMissing = target.pins.filter((pin) => !pageHtml.includes(pin));
+    if (seoMissing.length > 0) fail(`${target.path}: SEO pin(s) missing: ${seoMissing.join(" | ")}`);
+    else pass(`${target.path}: all ${target.pins.length} SEO pins present`);
+  }
+
   const missing = PAYMENT_PINS.filter((pin) => !payments.includes(pin));
   if (missing.length > 0) fail(`/help/payments/: verbatim guide pin(s) missing: ${missing.join(" | ")}`);
   else pass(`/help/payments/: all ${PAYMENT_PINS.length} verbatim pins present`);
+  if (!payments.includes(PAYMENT_SAFE_PHRASE)) {
+    fail(`/help/payments/: the number-free destination phrase is missing — the bKash wallet number stays retired from the public site`);
+  } else pass(`/help/payments/: number-free destination phrase present`);
+  const methodMissing = PAYMENT_METHODS.filter((m) => !payments.includes(m));
+  if (methodMissing.length > 0) fail(`/help/payments/: method guide(s) missing: ${methodMissing.join(" | ")}`);
+  else pass(`/help/payments/: all ${PAYMENT_METHODS.length} method guides present`);
+  const bdNumbers = (payments.match(/(?<![\d.])(?:\+?880|0)1[3-9]\d{8}\b/g) ?? []).length;
+  if (bdNumbers > 0) fail(`/help/payments/: ${bdNumbers} raw BD mobile number(s) found — the wallet number stays retired from the public site`);
+  else pass(`/help/payments/: no raw BD mobile numbers`);
+
 }
 
 // Redaction gate: the bKash wallet number is retired from the public site.
@@ -519,11 +550,17 @@ if (byod != null) {
   const missing = pins.filter(([, needle]) => !byod.includes(needle)).map(([label]) => label);
   if (missing.length > 0) fail(`/docs/byod/: F13 pin(s) missing: ${missing.join(" | ")}`);
   else pass(`/docs/byod/: all ${pins.length} F13 content pins present`);
+  const approvalStates = BYOD_APPROVAL_STATES.filter((st) => !byod.includes(st));
+  if (approvalStates.length > 0) fail(`/docs/byod/: approval-state(s) missing: ${approvalStates.join(" | ")}`);
+  else pass(`/docs/byod/: all ${BYOD_APPROVAL_STATES.length} approval states present`);
   const missingBrands = BYOD_BRANDS.filter((brand) => !byod.includes(brand));
   if (missingBrands.length > 0) fail(`/docs/byod/: keep-awake brand section(s) missing: ${missingBrands.join(" | ")}`);
   else pass(`/docs/byod/: all ${BYOD_BRANDS.length} brand sections present`);
 }
-if (existsSync(join(SITE, "assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf"))) {
+const smFile = readFileSync(join(SITE, "sitemap.xml"), "utf8");
+  if (!smFile.includes("<lastmod>")) fail("/sitemap.xml: lastmod missing");
+  else pass("/sitemap.xml: lastmod present");
+  if (existsSync(join(SITE, "assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf"))) {
   pass("landing/assets: keep-alive PDF hosted");
 } else {
   fail("landing/assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf: missing — /docs/byod/ links it");
@@ -763,6 +800,13 @@ if (productionBase !== null) {
     await checkHttpTarget(productionBase, target, `production(${productionBase})`);
   }
 }
+
+  if (productionBase !== null) {
+    const prodSm = await (await fetch(productionBase + "/sitemap.xml")).text();
+    if (!prodSm.includes("<lastmod>")) fail(`production: /sitemap.xml lastmod missing`);
+    else pass("production: /sitemap.xml lastmod present");
+  }
+
 
 // ── Report ──────────────────────────────────────────────────────────────────
 
