@@ -91,10 +91,11 @@ const PAYMENT_PINS = [
   "Availability depends on country, currency and the current purchase flow.",
 ];
 
-/** STAGE F13 (ISSUE-122): owner-ratified sentences for /docs/byod/ — verbatim,
- *  never paraphrased (hub amendment, owner inputs 2026-10-20). */
+/** STAGE F13 (ISSUE-122): owner-ratified sentence for /docs/byod/ — verbatim,
+ *  never paraphrased. F13 SIM sentence retired by ISSUE-64 owner ratify;
+ *  replaced by the plan-based dual-SIM sentence (2026-10-20 hub amendment + owner ratify). */
 const BYOD_SIM_SENTENCE =
-  "Messages are sent from the SIM of the gateway phone enrolled for your app — one number per company; you choose which phone by enrolling it.";
+  "Messages are sent from a gateway phone bound to your app. Your plan determines how many phone numbers you can run — start with one and add more as you grow.";
 /** STAGE F16: the public payments page ships the full method guides —
  *  number-free (the bKash wallet number stays retired from the public site;
  *  the number is only ever shown in the authenticated Buy credits screen). */
@@ -128,6 +129,57 @@ const BYOD_BRANDS = [
 const LEGAL_BLOCK = "Digital Papyrus — 7/1-D, R. K. Mission Road, Dhaka 1203, Bangladesh.";
 const LEGAL_ADDRESS_NEEDLE = "7/1-D, R. K. Mission Road";
 const LEGAL_ALLOWED_FILES = ["terms/index.html", "privacy/index.html"];
+
+/** STAGE F16: draft legal pages must carry the "draft for review" owner-note
+ *  banner and every owner-note must end with the lawyer-to-finalise marker so
+ *  a reader can tell which open facts still need counsel. Pins are
+ *  pattern-based (substring + marker), never invented values. */
+const LEGAL_DRAFT_BANNER = "A lawyer should review";
+const LEGAL_DRAFT_MARKER = "draft for review, lawyer to finalise";
+const LEGAL_DRAFT_BANNER_PHRASES = ["A lawyer should review these", "a lawyer should review these terms", "a lawyer should review these privacy terms", "a lawyer should review these acceptable use rules", "A lawyer should review these acceptable use rules"];
+const LEGAL_DRAFT_FILES = ["terms/index.html", "privacy/index.html", "acceptable-use/index.html"];
+const LEGAL_EMPTY_NEEDLE = "Privacy contact email — draft for review, lawyer to finalise";
+
+/** STAGE F16: the two draft legal pages (terms + privacy) must carry the new
+ *  privacy-contact footer link so the route is visible on both pages and the
+ *  marker stays on the counsel-only /privacy/ note. Pattern-based, never
+ *  invented values. */
+const PRIVACY_CONTACT_FOOTER = "Privacy contact: <a href=\"mailto:admin@dprelay.digital-papyrus.com\">admin@dprelay.digital-papyrus.com</a>.";
+
+/** STAGE F16: owner decisions are pinned so a future edit cannot silently drop
+ *  them. The owner asked us not to invent anything, so the pins assert the
+ *  exact owner wording only — no invented numbers, no invented legal text. */
+const TERMS_OWNER_PINS = [
+  "Unused credits and expired credits are non-refundable",
+  "refunds are processed to the original method within 7 days",
+  "One free trial per account and per person",
+  "Prices are fixed per purchased package. Changes are announced at least 14 days ahead",
+  "14 days' notice",
+  "any remaining credits are forfeited",
+];
+const PRIVACY_OWNER_PINS = [
+  "Message bodies are stored as delivery records for the life of your account",
+  "stored as a per-session salted hash, not as plaintext",
+  "The service runs on Render (Singapore region), with a SQLite database and continuous Litestream backups to Cloudflare R2",
+  "there is no automatic purge today",
+  "contact us through the route on <a href=\"/contact/\">contact</a>",
+];
+
+/** STAGE F16: /contact/ pins the owner-supplied support email + response
+ *  commitment so they cannot go silent. The WhatsApp channel is already pinned
+ *  by the redaction exemption for +8801713249520. The support email is exact
+ *  (owner-applied). The response commitment is a regex whose only capture group
+ *  is the owner phrase, so the pin can be retired together with the retired
+ *  contact draft owner-notes without rewriting later pins around case or
+ *  punctuation changes in the support card sentence. */
+const CONTACT_SUPPORT_EMAIL = "admin@dprelay.digital-papyrus.com";
+const CONTACT_RESPONSE_COMMITMENT_RE = /within\s+(one\s+business\s+day)/i;
+
+/** @deprecated keep for one more release — the placeholder form was retired
+ *  with the owner answers on ISSUE-64, but old gates that still read the old
+ *  needle must not break. Remove together with the old contact draft needles. */
+const CONTACT_SUPPORT_EMAIL_PLACEHOLDER = "Support email: [ADD VERIFIED SUPPORT EMAIL BEFORE PUBLICATION]";
+const CONTACT_HOURS_PLACEHOLDER = "Response time and hours: [ADD ONLY IF THE TEAM CAN CONSISTENTLY MEET THEM]";
 
 const VOID_TAGS = new Set([
   "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -593,6 +645,101 @@ for (const [path, html] of htmlByPath) {
       fail(`${allowed}: owner-verbatim legal block missing`);
     }
   }
+}
+
+// ── STAGE F16: draft legal pages carry the counselor-review banner and the
+// draft-for-lawyer marker on every open fact, so the reader always sees which
+// items still need a lawyer. Pins are pattern-based (substring + marker).
+{
+  if (!LEGAL_DRAFT_BANNER) {
+    // defensive: the banner needle is defined above; reached only if someone
+    // edits the constant into the empty string.
+    fail("check-landing.mjs: LEGAL_DRAFT_BANNER is empty — pins cannot run");
+  }
+  for (const f of LEGAL_DRAFT_FILES) {
+    const html = readFileSync(join(SITE, f), "utf8");
+    if (!LEGAL_DRAFT_BANNER_PHRASES.some((p) => html.includes(p))) {
+      fail(`${f}: draft legal banner missing — legal pages must state that a lawyer should review them (expected one of: ${LEGAL_DRAFT_BANNER_PHRASES.join(" / ")})`);
+    } else pass(`${f}: draft legal banner present`);
+    if (!html.includes(LEGAL_DRAFT_MARKER)) {
+      fail(`${f}: draft-for-lawyer marker missing — every open fact on a draft legal page must end with the lawyer-to-finalise marker`);
+    } else pass(`${f}: draft-for-lawyer marker present on all open facts`);
+  }
+  // The /privacy/ "contact" item is the one owner-note left entirely to counsel
+  // (no owner answer exists for a privacy contact email yet), so it keeps the
+  // same marker but the checkbox stays open in the footnote, never silently
+  // filled.
+  if (!readFileSync(join(SITE, "privacy/index.html"), "utf8").includes(LEGAL_EMPTY_NEEDLE)) {
+    fail(`privacy/index.html: the counsel-only privacy-contact owner-note must keep the lawyer-to-finalise marker`);
+  } else pass("privacy/index.html: counsel-only privacy-contact note keeps its marker");
+}
+
+// STAGE F16: the two /contact/ draft placeholders were retired with their
+// owner answers (ISSUE-64). Keep the old pin block shape so a later lane that
+// still reads the retired needles does not break; the corresponding page
+// needles are also retired (see the contact/ owner-note edits), so both
+// branches now expect the placeholders gone.
+{
+  const contact = readFileSync(join(SITE, "contact/index.html"), "utf8");
+  if (!contact.includes(CONTACT_SUPPORT_EMAIL_PLACEHOLDER)) {
+    pass("contact/index.html: retired support-email draft placeholder is gone — owner answer wired in separately");
+  } else {
+    fail(`contact/index.html: retired support-email draft placeholder still present — owner answer should drop it (needle: "Support email: [ADD VERIFIED SUPPORT EMAIL BEFORE PUBLICATION])")`);
+  }
+  if (!contact.includes(CONTACT_HOURS_PLACEHOLDER)) {
+    pass("contact/index.html: retired response-time/hours draft placeholder is gone — owner answer wired in separately");
+  } else {
+    fail(`contact/index.html: retired response-time/hours draft placeholder still present — owner answer should drop it (needle: "Response time and hours: [ADD ONLY IF THE TEAM CAN CONSISTENTLY MEET THEM])")`);
+  }
+}
+
+
+// STAGE F16: the owner-supplied support email and response commitment must remain
+// on /contact/ so a future edit cannot silently drop them. Pattern-based.
+{
+  const contact = readFileSync(join(SITE, "contact/index.html"), "utf8");
+  if (!contact.includes(CONTACT_SUPPORT_EMAIL)) {
+    fail(`contact/index.html: support email removed — the verified support address must stay on the page`);
+  } else pass(`contact/index.html: support email ${CONTACT_SUPPORT_EMAIL} present`);
+  if (!CONTACT_RESPONSE_COMMITMENT_RE.test(contact)) {
+    fail(`contact/index.html: response commitment removed — the 'within one business day' wording must stay on the page`);
+  } else pass(`contact/index.html: response commitment 'within one business day' present`);
+}
+
+// STAGE F16: owner decisions on /terms/ and /privacy/ are pinned so a future
+// edit cannot silently drop them. Pins assert owner wording only — no invented
+// legal text and no invented numbers beyond what the owner supplied.
+{
+  const terms = readFileSync(join(SITE, "terms/index.html"), "utf8");
+  const termsMissing = TERMS_OWNER_PINS.filter((pin) => !terms.includes(pin));
+  if (termsMissing.length > 0) {
+    fail(`terms/index.html: owner decision pin(s) missing: ${termsMissing.join(" | ")}`);
+  } else pass(`terms/index.html: all ${TERMS_OWNER_PINS.length} owner decision pins present`);
+  const privacy = readFileSync(join(SITE, "privacy/index.html"), "utf8");
+  const privacyMissing = PRIVACY_OWNER_PINS.filter((pin) => !privacy.includes(pin));
+  if (privacyMissing.length > 0) {
+    fail(`privacy/index.html: owner decision pin(s) missing: ${privacyMissing.join(" | ")}`);
+  } else pass(`privacy/index.html: all ${PRIVACY_OWNER_PINS.length} owner decision pins present`);
+}
+
+// STAGE F16: both draft legal pages must carry the new privacy-contact footer
+// link so the route is visible on terms and privacy alike; the counsel-only
+// /privacy/ note still keeps its lawyer-to-finalise marker. Pattern-based.
+{
+  for (const f of ["terms/index.html", "privacy/index.html"]) {
+    const html = readFileSync(join(SITE, f), "utf8");
+    if (!html.includes(PRIVACY_CONTACT_FOOTER)) {
+      fail(`${f}: privacy-contact footer link removed — both draft legal pages must show the privacy contact route`);
+    } else pass(`${f}: privacy-contact footer link present`);
+  }
+  const privacy = readFileSync(join(SITE, "privacy/index.html"), "utf8");
+  // The /privacy/ "contact" owner-note is the one item still left entirely to
+  // counsel (no owner answer exists for a privacy contact email besides the
+  // shared admin address used as a footer route), so its marker stays even though
+  // the footer now points a reader at the privacy contact route.
+  if (!privacy.includes(LEGAL_DRAFT_MARKER)) {
+    fail("privacy/index.html: draft-for-lawyer marker must remain on the counsel-only privacy-contact note");
+  } else pass("privacy/index.html: counsel-only privacy-contact note keeps its marker");
 }
 
 // ── STAGE F15 (ISSUE-125): public nav + footer spec ───────────────────────
