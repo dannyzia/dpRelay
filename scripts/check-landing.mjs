@@ -557,7 +557,14 @@ if (byod != null) {
   if (missingBrands.length > 0) fail(`/docs/byod/: keep-awake brand section(s) missing: ${missingBrands.join(" | ")}`);
   else pass(`/docs/byod/: all ${BYOD_BRANDS.length} brand sections present`);
 }
-const smFile = readFileSync(join(SITE, "sitemap.xml"), "utf8");
+for (const [path, html] of htmlByPath) {
+    if (!path.endsWith("/")) continue;
+    const canonicals = html.match(/<link rel="canonical"[^>]*>/g) ?? [];
+    if (canonicals.length !== 1) fail(`${path}: expected exactly one closed canonical link, found ${canonicals.length}`);
+    if (html.includes('">>')) fail(`${path}: stray double ">" in head (OG-injection corruption)`);
+  }
+  pass("every page: canonical tag closed, no stray >> corruption");
+  const smFile = readFileSync(join(SITE, "sitemap.xml"), "utf8");
   if (!smFile.includes("<lastmod>")) fail("/sitemap.xml: lastmod missing");
   else pass("/sitemap.xml: lastmod present");
   if (existsSync(join(SITE, "assets/SMS-Gateway-Phone-Keep-Alive-Guide.pdf"))) {
