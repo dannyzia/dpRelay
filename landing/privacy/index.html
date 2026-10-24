@@ -40,33 +40,33 @@
   <main class="wrap">
     <section>
       <h1>Privacy policy</h1>
-      <div class="owner-note"><p>Draft for review: a lawyer should review this policy before it goes live.</p></div>
+      <p>Draft for review: a lawyer should review these privacy terms before they go live. Where a section still needs a lawyer, it is marked as draft for review, lawyer to finalise.</p>
     </section>
 
     <section aria-labelledby="privacy-outline">
       <h2 id="privacy-outline">Sections</h2>
       <ol class="legal-list">
-        <li><strong>What we collect.</strong> Your account email, app details, the recipient numbers you send to, message delivery records, enrolled device details, and payment TrxIDs.
-          <div class="owner-note"><p>Whether message text is stored, and for how long.</p></div>
+        <li><strong>What we collect.</strong> Your account email, app details, the recipient numbers you send to, message delivery records, enrolled device details, and payment TrxIDs. Message bodies are stored as delivery records for the life of your account.
+          <div class="owner-note"><p>Whether message text is stored, and for how long — draft for review, lawyer to finalise.</p></div>
         </li>
         <li><strong>How we use it.</strong> To deliver messages, bill credits, prevent abuse and support you.</li>
-        <li><strong>OTP codes.</strong>
-          <div class="owner-note"><p>Say exactly how long codes are kept and whether they are stored hashed.</p></div>
+        <li><strong>OTP codes.</strong> OTP codes are stored as a per-session salted hash, not as plaintext — the raw code is unrecoverable after creation. Codes expire after 5 minutes; the session record (status and timestamps) remains as a delivery record.
+          <div class="owner-note"><p>Say exactly how long codes are kept and whether they are stored hashed — draft for review, lawyer to finalise.</p></div>
         </li>
-        <li><strong>Where it is stored.</strong>
-          <div class="owner-note"><p>Hosting provider and region, backup arrangements.</p></div>
+        <li><strong>Where it is stored.</strong> The service runs on Render (Singapore region), with a SQLite database and continuous Litestream backups to Cloudflare R2.
+          <div class="owner-note"><p>Hosting provider and region, backup arrangements — draft for review, lawyer to finalise.</p></div>
         </li>
         <li><strong>Who we share it with.</strong> Carriers and gateway devices needed to deliver a message, and infrastructure providers that run the service. We don't sell personal data.
-          <div class="owner-note"><p>Add any others.</p></div>
+          <div class="owner-note"><p>Add any others — draft for review, lawyer to finalise.</p></div>
         </li>
-        <li><strong>Retention.</strong>
-          <div class="owner-note"><p>Retention period for delivery records and for closed accounts.</p></div>
+        <li><strong>Retention.</strong> Delivery records are retained until the operator purges them after an account is closed — there is no automatic purge today.
+          <div class="owner-note"><p>Retention period for delivery records and for closed accounts — draft for review, lawyer to finalise.</p></div>
         </li>
-        <li><strong>Your choices.</strong>
-          <div class="owner-note"><p>How to request access, correction or deletion.</p></div>
+        <li><strong>Your choices.</strong> To request access, correction or deletion of your data, contact us through the route on <a href="/contact/">contact</a>.
+          <div class="owner-note"><p>How to request access, correction or deletion — draft for review, lawyer to finalise.</p></div>
         </li>
         <li><strong>Contact.</strong>
-          <div class="owner-note"><p>Privacy contact email</p></div>
+          <div class="owner-note"><p>Privacy contact email — draft for review, lawyer to finalise.</p></div>
         </li>
       </ol>
     </section>
@@ -103,6 +103,7 @@
       </div>
       <p class="footer-line">dP Relay — OTP &amp; bulk SMS API · © Digital Papyrus <a class="footer-status" href="https://api.dprelay.digital-papyrus.com/health"><span class="status-dot" aria-hidden="true"></span> All systems operational</a></p>
       <p class="footer-line">Digital Papyrus — 7/1-D, R. K. Mission Road, Dhaka 1203, Bangladesh.</p>
+      <p class="footer-note">Privacy contact: <a href="mailto:admin@dprelay.digital-papyrus.com">admin@dprelay.digital-papyrus.com</a>.</p>
     </div>
   </footer>
 </body>
