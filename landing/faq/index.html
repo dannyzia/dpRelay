@@ -5,12 +5,190 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Frequently Asked Questions — dP Relay</title>
   <meta name="description" content="Frequently asked questions about dP Relay setup, pricing, delivery and account security.">
-  <link rel="canonical" href="https://dprelay.digital-papyrus.com/faq/">
+  <link rel="canonical" href="https://dprelay.digital-papyrus.com/faq/"
+  <meta property="og:title" content="Frequently Asked Questions — dP Relay">
+  <meta property="og:description" content="Frequently asked questions about dP Relay setup, pricing, delivery and account security.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://dprelay.digital-papyrus.com/faq/">
+  <meta property="og:site_name" content="dP Relay">
+  <meta property="og:image" content="https://dprelay.digital-papyrus.com/assets/og-cover.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Frequently Asked Questions — dP Relay">
+  <meta name="twitter:description" content="Frequently asked questions about dP Relay setup, pricing, delivery and account security.">
+  <meta name="twitter:image" content="https://dprelay.digital-papyrus.com/assets/og-cover.png">>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/styles.css">
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is dP Relay?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "dP Relay is an SMS gateway for OTP and business messaging. You can send through your own Android phone and SIM, or use managed delivery where available. OTP sending and verification are documented in the API; bulk campaigns are currently managed through the dashboard."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Which delivery option should I choose?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Use your own phone when you want to send through a SIM you control to destinations it can reach. Choose managed Bangladesh delivery if your destination and message type are supported and you do not want to operate an Android gateway."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I get API credentials?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Sign in, create an app in the dashboard and store its credentials securely. Keep the app secret on your server; never put it in browser code or a mobile app."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I send bulk SMS through the API?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Bulk campaigns are currently launched from the dashboard. Check the Docs for the endpoints currently available; do not assume that a dashboard feature also has a public API endpoint."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What does a message cost?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The own-phone gateway is published at $0.0015 per message, or you can choose a monthly own-phone gateway plan. That price covers the gateway service; your mobile operator may charge separately for each SMS. Managed Bangladesh delivery is published at \u09f30.20 per message, with sending included for supported routes."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is included in an unlimited plan?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "An own-phone monthly plan covers the dP Relay gateway service for the plan's phone allowance under its fair-use rules. It does not remove carrier charges, carrier restrictions or device/network dependencies. The managed Bangladesh route is priced separately."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does the free trial work with every route?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "New apps currently receive 20 free messages valid for 30 days. Check the routes and eligibility displayed in your account before relying on the trial for a particular destination or message type."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I pay for credits?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Open Buy credits, select an available package and follow the recipient, amount and payment instructions shown there. Payment methods vary by country. See the payment guides for the supported steps."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "When will my credits appear?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Credits are added after the purchase is matched and approved. Check your transaction list for the latest status."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Do credits expire?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Package validity is shown before purchase. Check the package details in the dashboard to see whether credits expire and when the validity period ends."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why was my payment reference rejected?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "It may already be attached to another pending purchase or may not match the selected transaction. Check the purchase and reference, then contact support if the issue persists."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does my phone need to stay online?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The Android gateway needs power, mobile service and an internet connection to communicate with dP Relay. If it becomes unavailable, sending through that device may stop until it reconnects."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does using my own number guarantee that messages will arrive?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Sender presentation and delivery depend on the carrier, destination network, phone, SIM, signal and message content. dP Relay does not guarantee delivery or bypass filtering rules."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between sent, delivered and verified?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "An accepted send request means the API accepted the request according to its response contract. Delivery means a destination system has reported that the message was delivered, when that information is available. Verified means the user entered the correct OTP and the verification endpoint confirmed it. These are separate outcomes."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why did I receive a `429` error?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A rate_limited response means a sending limit was reached. A resend_cooldown response means another code was requested too soon. Respect the response and wait for the documented retry period rather than repeatedly resending."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What happens after too many incorrect OTP attempts?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The API may return otp_locked when the verification attempt limit is reached. Follow the retry information returned by the API and the documented verification policy."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I send promotional messages?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Only send bulk or promotional messages to recipients who have given the required consent, and follow applicable opt-out, carrier and legal requirements. Do not use the service for spam, phishing, impersonation or unsolicited messages."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I protect my app secret?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Keep it on your server, out of browser code and mobile apps. Do not commit it to source control or send it to support. Follow the documented credential recovery or rotation procedure if it is exposed."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I reset my password?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Use the password-recovery option on the sign-in page if it is available for your account. If the recovery email does not arrive, contact support using the published support details."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What if I lose my device-enrolment secret?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Follow the supported re-enrolment or recovery process in the dashboard. Do not share device secrets in public or unsecured support channels."
+      }
+    }
+  ]
+}
+  </script>
 </head>
 <body>
   <header class="site-header">
