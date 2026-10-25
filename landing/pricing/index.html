@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>dP Relay Pricing — SMS gateway plans and rates</title>
-  <meta name="description" content="Compare pay-as-you-go gateway pricing, monthly phone plans and managed Bangladesh delivery rates.">
+  <meta name="description" content="Compare BYOD&amp;S pay-as-you-go and Unlimited plans from $5/month, plus Turn Key managed Bangladesh delivery at ৳0.25 per message.">
   <link rel="canonical" href="https://dprelay.digital-papyrus.com/pricing/">
   <meta property="og:title" content="dP Relay Pricing — SMS gateway plans and rates">
-  <meta property="og:description" content="Compare pay-as-you-go gateway pricing, monthly phone plans and managed Bangladesh delivery rates.">
+  <meta property="og:description" content="Compare BYOD&amp;S pay-as-you-go and Unlimited plans from $5/month, plus Turn Key managed Bangladesh delivery at ৳0.25 per message.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://dprelay.digital-papyrus.com/pricing/">
   <meta property="og:site_name" content="dP Relay">
   <meta property="og:image" content="https://dprelay.digital-papyrus.com/assets/og-cover.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="dP Relay Pricing — SMS gateway plans and rates">
-  <meta name="twitter:description" content="Compare pay-as-you-go gateway pricing, monthly phone plans and managed Bangladesh delivery rates.">
+  <meta name="twitter:description" content="Compare BYOD&amp;S pay-as-you-go and Unlimited plans from $5/month, plus Turn Key managed Bangladesh delivery at ৳0.25 per message.">
   <meta name="twitter:image" content="https://dprelay.digital-papyrus.com/assets/og-cover.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -41,77 +41,68 @@
     <section>
       <h1>Pricing for the way you send</h1>
       <p class="lede"><strong>20 free messages for 30 days. No card required.</strong></p>
-      <p>Choose pay-as-you-go gateway usage or a monthly own-phone gateway plan. For supported Bangladesh destinations, managed delivery is priced separately and includes sending.</p>
+      <p>Two ways to send with dP Relay: <strong>BYOD&amp;S</strong> — bring your own device and SIM — or <strong>Turn Key</strong>, managed delivery for supported Bangladesh destinations. Both are paid from your dP Relay Wallet.</p>
 
-      <h2 id="managed">Delivery rates</h2>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr><th>Delivery option</th><th>Coverage</th><th>What sends the SMS</th><th>Published price</th><th>What is included</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Own-phone gateway</td>
-              <td>Destinations your SIM and carrier can reach</td>
-              <td>Your enrolled Android phone and SIM</td>
-              <td>$0.0015 per message</td>
-              <td>dP Relay gateway fee only; mobile-carrier SMS charges are separate</td>
-            </tr>
-            <tr>
-              <td>Managed Bangladesh delivery</td>
-              <td>Supported Bangladesh destinations</td>
-              <td>dP Relay or delivery-partner sending numbers, depending on route</td>
-              <td>৳0.20 per message</td>
-              <td>Gateway and sending for supported routes</td>
-            </tr>
-          </tbody>
-        </table>
+      <p><span class="badge byod">BYOD&amp;S</span></p>
+      <h2 id="byod">Bring your own device and SIM</h2>
+      <p>Send from an Android phone and SIM you control. Pay as you go at <strong>$0.0015 per message</strong> from your Wallet, or choose an Unlimited plan for predictable pricing. Your mobile operator's SMS charges are separate and always yours.</p>
+
+      <div class="card">
+        <h3>Pay as you go</h3>
+        <p><strong>$0.0015 per message</strong>, spent from your Wallet. No monthly commitment — top up your Wallet and send.</p>
+        <p><a href="/help/payments/">How to pay</a> — bKash and remittance payment guides.</p>
       </div>
+
+      <h3>Unlimited plans</h3>
+      <div class="billing-toggle" role="group" aria-label="Billing period">
+        <button type="button" data-period="monthly" aria-pressed="true">Monthly</button>
+        <button type="button" data-period="yearly" aria-pressed="false">Yearly</button>
+      </div>
+      <div class="plan-grid">
+        <div class="card plan-card">
+          <span class="badge byod">Unlimited 1</span>
+          <p class="plan-price"><span class="plan-amount" data-monthly="$5" data-yearly="$50">$5</span></p>
+          <p class="plan-period">per month</p>
+        </div>
+        <div class="card plan-card">
+          <span class="badge byod">Unlimited 2</span>
+          <p class="plan-price"><span class="plan-amount" data-monthly="$10" data-yearly="$100">$10</span></p>
+          <p class="plan-period">per month</p>
+        </div>
+        <div class="card plan-card">
+          <span class="badge byod">Unlimited 3</span>
+          <p class="plan-price"><span class="plan-amount" data-monthly="$15" data-yearly="$150">$15</span></p>
+          <p class="plan-period">per month</p>
+        </div>
+      </div>
+      <p class="table-note"><strong>What “unlimited” means:</strong> An Unlimited plan does not charge a dP Relay per-message gateway fee for eligible normal business use under the plan's fair-use rules. It does not remove mobile-carrier charges, carrier rate limits, device constraints or applicable messaging rules.</p>
+      <p>Unlimited plans apply to the BYOD&amp;S gateway service; the Turn Key managed route is billed separately at its published per-message rate.</p>
+
+      <p><span class="badge bd">Turn Key</span></p>
+      <h2 id="managed">Managed Bangladesh delivery</h2>
+      <p>Need to send to supported Bangladesh destinations without operating your own phone? Turn Key is managed delivery — dP Relay or delivery-partner sending numbers, depending on route — with sending included for supported routes.</p>
+      <div class="card">
+        <h3><label for="turnkey-country">Country</label></h3>
+        <select id="turnkey-country" class="country-select">
+          <option value="" disabled>Select country</option>
+          <option value="BD" selected data-rate="৳0.25 per SMS">Bangladesh</option>
+        </select>
+        <p>Pay as you go: <strong id="turnkey-rate">৳0.25 per SMS</strong>, spent from your Wallet.</p>
+      </div>
+      <p class="table-note">Coverage, sender details and availability depend on the managed route enabled for your account. Check the current coverage information before relying on a particular operator or sender.</p>
       <p><a href="/help/payments/">How to pay</a> — bKash and remittance payment guides.</p>
-      <p>OTP and bulk pricing follows the applicable route's published rate. The own-phone monthly plans apply to the gateway service and do not include the managed Bangladesh route.</p>
 
       <h2>Start free</h2>
       <p>Every eligible new app currently receives <strong>20 free messages valid for 30 days</strong>. No card is required.</p>
-      <p>Use the trial to test your integration and understand the workflow before purchasing credits or selecting a monthly gateway plan. The available trial routes and any eligibility limits are shown in your account.</p>
+      <p>Use the trial to test your integration and understand the workflow before topping up your Wallet or selecting an Unlimited plan. The available trial routes and any eligibility limits are shown in your account.</p>
       <div class="actions">
         <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Create an account</a>
       </div>
-
-      <h2>Monthly own-phone gateway plans</h2>
-      <p>These plans cover dP Relay's gateway service for the number of enrolled phones shown. Your mobile operator's SMS charges, plan limits and fair-use terms remain separate.</p>
-      <div class="table-scroll">
-        <table>
-          <thead>
-            <tr><th>Plan</th><th>Included phones</th><th>Monthly gateway price</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Unlimited 1</td><td>1 phone</td><td>$16/month</td></tr>
-            <tr><td>Unlimited 5</td><td>Up to 5 phones</td><td>$49/month</td></tr>
-            <tr><td>Unlimited 20</td><td>Up to 20 phones</td><td>$129/month</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p><a href="/help/payments/">How to pay</a> — bKash and remittance payment guides.</p>
-      <p><strong>What “unlimited” means:</strong> The plan does not charge a dP Relay per-message gateway fee for eligible normal business use under the plan's fair-use rules. It does not remove mobile-carrier charges, carrier rate limits, device constraints or applicable messaging rules.</p>
-      <p>Managed Bangladesh delivery is billed separately at its published per-message rate; it is not included in these own-phone plans.</p>
-      <div class="actions">
-        <a class="button secondary" href="https://app.dprelay.digital-papyrus.com/#/signin">Choose a plan in your dashboard</a>
-      </div>
-
-      <h2>Message credits</h2>
-      <p>If you use pay-as-you-go or a route that requires credits, your account shows the packages currently available to you. Review the following before purchasing:</p>
-      <ul>
-        <li><strong>Route or credit type:</strong> Which sending route and message types the package supports.</li>
-        <li><strong>Message allowance:</strong> how many billable messages the package adds.</li>
-        <li><strong>Validity:</strong> When the credits expire, if an expiry applies.</li>
-        <li><strong>Currency and total:</strong> The exact currency and amount to pay.</li>
-        <li><strong>Approval:</strong> Whether a manual payment review is required before credits are added.</li>
-      </ul>
-      <p>Use the live package list in the dashboard for current quantities, bonuses and validity.</p>
     </section>
 
     <section>
       <h2>How payment works</h2>
+      <p>Your Wallet balance funds pay-as-you-go sending and Unlimited plan purchases. <strong>Buy credits</strong> in the dashboard is the top-up flow.</p>
       <ol class="steps">
         <li>Sign in and open <strong>Buy credits</strong>.</li>
         <li>Choose the available package, route and currency.</li>
@@ -131,10 +122,10 @@
             <tr><th>If you need…</th><th>Consider…</th><th>Keep in mind…</th></tr>
           </thead>
           <tbody>
-            <tr><td>To send through a SIM and phone you control</td><td>Own-phone gateway</td><td>Carrier charges, destination support and phone availability are your responsibility</td></tr>
-            <tr><td>To send steady volume every month from your own phones</td><td>Monthly gateway plan (Unlimited 1, 5 or 20)</td><td>Match the phone allowance — 1, up to 5 or up to 20 enrolled phones — to the hardware you actually run</td></tr>
-            <tr><td>A predictable monthly gateway fee for regular own-phone use</td><td>Monthly gateway plan</td><td>Fair-use rules and mobile-carrier charges still apply</td></tr>
-            <tr><td>To send to supported Bangladesh destinations without operating your own phone</td><td>Managed Bangladesh delivery</td><td>Coverage and sender details depend on the available managed route</td></tr>
+            <tr><td>To send through a SIM and phone you control</td><td>BYOD&amp;S Pay as you go ($0.0015 per message)</td><td>Carrier charges, destination support and phone availability are your responsibility</td></tr>
+            <tr><td>To send steady volume every month from your own phones</td><td>BYOD&amp;S Unlimited plan (Unlimited 1, 2 or 3)</td><td>Fair-use rules and mobile-carrier charges still apply</td></tr>
+            <tr><td>A predictable monthly gateway fee for regular own-phone use</td><td>BYOD&amp;S Unlimited plan, billed monthly or yearly</td><td>Yearly billing is billed once per year at the published yearly price</td></tr>
+            <tr><td>To send to supported Bangladesh destinations without operating your own phone</td><td>Turn Key managed delivery (৳0.25 per message)</td><td>Coverage and sender details depend on the available managed route</td></tr>
             <tr><td>To send through a public cloud messaging provider with its own carrier connections</td><td>A traditional cloud SMS API</td><td>Destination pricing, sender rules, minimums and account requirements vary by provider</td></tr>
           </tbody>
         </table>
@@ -151,6 +142,7 @@
       <p>Compare the sending options, check the live package details and start with the route that fits your product.</p>
       <div class="actions">
         <a class="button" href="https://app.dprelay.digital-papyrus.com/#/signup">Create an account</a>
+        <a class="button secondary" href="https://app.dprelay.digital-papyrus.com/#/signin">Choose a plan in your dashboard</a>
         <a class="button secondary" href="/docs/">Read the docs</a>
       </div>
     </section>
@@ -188,5 +180,42 @@
       <p class="footer-line">dP Relay — OTP &amp; bulk SMS API · © Digital Papyrus <a class="footer-status" href="https://api.dprelay.digital-papyrus.com/health"><span class="status-dot" aria-hidden="true"></span> All systems operational</a></p>
     </div>
   </footer>
+
+  <script>
+    (function () {
+      var toggle = document.querySelector('.billing-toggle');
+      var buttons = toggle ? toggle.querySelectorAll('button[data-period]') : [];
+      var cards = document.querySelectorAll('.plan-card');
+      function setPeriod(period) {
+        buttons.forEach(function (button) {
+          var active = button.getAttribute('data-period') === period;
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        cards.forEach(function (card) {
+          var amount = card.querySelector('.plan-amount');
+          var periodLabel = card.querySelector('.plan-period');
+          if (amount) {
+            amount.textContent = period === 'yearly' ? amount.getAttribute('data-yearly') : amount.getAttribute('data-monthly');
+          }
+          if (periodLabel) {
+            periodLabel.textContent = period === 'yearly' ? 'per year' : 'per month';
+          }
+        });
+      }
+      buttons.forEach(function (button) {
+        button.addEventListener('click', function () {
+          setPeriod(button.getAttribute('data-period'));
+        });
+      });
+      var country = document.getElementById('turnkey-country');
+      var rate = document.getElementById('turnkey-rate');
+      if (country && rate) {
+        country.addEventListener('change', function () {
+          var selected = country.options[country.selectedIndex];
+          rate.textContent = selected && selected.value ? selected.getAttribute('data-rate') : '';
+        });
+      }
+    })();
+  </script>
 </body>
 </html>
